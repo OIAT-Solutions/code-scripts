@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Akponora (Company A) COGS / inventory cutover:** follow [`AGENTS.md`](AGENTS.md) before any QBO write, inventory change, or Company A pipeline change.
+
 ## What This Repo Is
 
 An EPOS → QuickBooks Online automation pipeline with a Django monitoring dashboard (the "OIAT Portal"). The pipeline downloads daily sales CSVs from EPOS Now, transforms them, uploads them to QuickBooks Online via REST API, and archives all artifacts. The Django portal provides run triggering, scheduling, company management, and dashboard views over the pipeline.

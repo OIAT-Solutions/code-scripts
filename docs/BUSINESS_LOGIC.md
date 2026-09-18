@@ -5,6 +5,40 @@ repo, with emphasis on EPOS to QuickBooks Online product and inventory behavior.
 
 ## Product and Inventory Item Handling
 
+### Approval-driven conversion mode is fail-closed
+
+Company configuration can enable `transform.product_conversion`. When enabled:
+
+- The transform loads only Product Conversion rows marked `Approved`.
+- Approved rows require a target QBO name and SKU, explicit sale multiplier,
+  effective date, and approver. Target type may be **Inventory**, Non-inventory,
+  or Service. Optional `Target QBO Item Id` is required for Oct Inventory sales.
+- Resolution uses EPOS Product ID first, EPOS SKU second, and—only when
+  configured—an approved unique exact EPOS name if the transaction feed has no
+  stable identifier.
+- Barcodes and trailing `*N` text are not conversion keys.
+- The explicit sale multiplier is applied once; legacy trailing-name expansion
+  is bypassed.
+- Unmapped products route to the configured catch-all Non-inventory item **only
+  for TxnDate before `fail_closed_from`** (Company A: 2026-10-01). From that
+  date, unmapped products fail closed: no catch-all, no auto-create. Invalid
+  quantity still blocks the whole transform.
+- The QBO uploader disables Inventory item creation and patching on the sales
+  path. It accepts existing `NonInventory`/`Service` (pre-Oct history) or
+  `Inventory` whose Id is in the approved new-Id list. Legacy Inventory name
+  collisions fail closed. It does not create mapped catalogue items implicitly.
+
+Company A conversion is **on**, with catch-all retained for January–September
+history and fail-closed from 1 Oct 2026. The October end-state is a new
+Inventory catalogue, not Non-inventory.
+
+Evidence:
+
+- `code_scripts/product_conversion.py`
+- `code_scripts/transform.py`
+- `code_scripts/qbo_upload.py`
+- `code_scripts/companies/company_a.json`
+
 ### Product CSV import creates Inventory items
 
 The `qbo_inv_manager import-products` path treats every non-Category CSV row as
