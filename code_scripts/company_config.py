@@ -9,8 +9,8 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
-from datetime import datetime
+from typing import Dict, Any, Optional, Set
+from datetime import date, datetime
 
 from code_scripts.paths import OPS_COMPANIES_DIR, REPO_CODE_SCRIPTS_DIR
 
@@ -185,6 +185,78 @@ class CompanyConfig:
         Default ``False`` — opt-in per company via ``transform.aggregate_products``.
         """
         return self._data.get("transform", {}).get("aggregate_products", False)
+
+    @property
+    def product_conversion_enabled(self) -> bool:
+        """Whether the strict, approval-driven Product Conversion List is active."""
+        env_key = f"{self.company_key.upper().replace('-', '_')}_PRODUCT_CONVERSION_ENABLED"
+        env_value = os.environ.get(env_key)
+        if env_value is not None:
+            return str(env_value).strip().lower() in {"1", "true", "yes", "on"}
+        return bool(self._data.get("transform", {}).get("product_conversion", {}).get("enabled", False))
+
+    @property
+    def product_conversion_file(self) -> Optional[Path]:
+        """Approved conversion CSV; relative paths resolve from the repository root."""
+        env_key = f"{self.company_key.upper().replace('-', '_')}_PRODUCT_CONVERSION_FILE"
+        raw = os.environ.get(env_key) or self._data.get("transform", {}).get("product_conversion", {}).get("file")
+        if raw is None or not str(raw).strip():
+            return None
+        path = Path(str(raw).strip()).expanduser()
+        return path if path.is_absolute() else (REPO_CODE_SCRIPTS_DIR.parent / path).resolve()
+
+    @property
+    def product_conversion_allow_name_fallback(self) -> bool:
+        """Permit an approved exact EPOS-name match when the sales feed has no ID/SKU."""
+        return bool(
+            self._data.get("transform", {})
+            .get("product_conversion", {})
+            .get("allow_name_fallback", False)
+        )
+
+    @property
+    def product_conversion_catch_all_name(self) -> str:
+        """Existing Non-inventory QBO item used for unresolved EPOS products.
+
+        Used only for TxnDate before ``product_conversion_fail_closed_from``.
+        From that date, unmapped products fail closed (no catch-all).
+        """
+        env_key = f"{self.company_key.upper().replace('-', '_')}_PRODUCT_CONVERSION_CATCH_ALL_NAME"
+        return str(
+            os.environ.get(env_key)
+            or self._data.get("transform", {}).get("product_conversion", {}).get("catch_all_qbo_name", "")
+        ).strip()
+
+    @property
+    def product_conversion_fail_closed_from(self) -> Optional[date]:
+        """TxnDate on/after this day must not use catch-all; unmapped lines fail the batch."""
+        raw = (
+            os.environ.get(f"{self.company_key.upper().replace('-', '_')}_PRODUCT_CONVERSION_FAIL_CLOSED_FROM")
+            or self._data.get("transform", {}).get("product_conversion", {}).get("fail_closed_from", "")
+        )
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
+
+    @property
+    def product_conversion_approved_item_ids(self) -> Set[str]:
+        """QBO Item Ids listed on approved conversion rows (filled after catalogue create)."""
+        path = self.product_conversion_file
+        if path is None or not path.exists():
+            return set()
+        import csv
+
+        ids: Set[str] = set()
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                status = str(row.get("Review Status") or "").strip().casefold()
+                if status != "approved":
+                    continue
+                item_id = str(row.get("Target QBO Item Id") or "").strip()
+                if item_id:
+                    ids.add(item_id)
+        return ids
 
     @property
     def location_mapping(self) -> Dict[str, str]:

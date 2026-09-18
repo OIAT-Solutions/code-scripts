@@ -1254,8 +1254,18 @@ def create_inventory_item(
 
     Raises:
         ValueError: If category missing or accounts not found
-        RuntimeError: If QBO API call fails
+        RuntimeError: If QBO API call fails, or product conversion is enabled
     """
+    if bool(getattr(config, "product_conversion_enabled", False)):
+        raise RuntimeError(
+            "Cannot create QBO Inventory items while product conversion is enabled. "
+            "Oct catalogue creates are a separate approved batch job; the sales uploader will not auto-create."
+        )
+    if str(getattr(config, "company_key", "") or "") == "company_a":
+        raise RuntimeError(
+            "Company A Inventory item create is disabled on the sales path. "
+            "Use the approved Oct 1 catalogue batch after chat yes; do not recreate January-style opening quantities."
+        )
     # Build account references
     account_refs = build_account_refs_for_category(
         category, mapping_cache, account_cache, token_mgr, realm_id, config
@@ -1449,7 +1459,6 @@ def create_inventory_item_from_existing(
     Copies Name, Type, accounts, pricing, ParentRef/SubItem; sets InvStartDate to new_inv_start_date.
     Returns the new item Id.
     """
-    # Fields to omit when building create payload (read-only or create-specific)
     omit = {"Id", "SyncToken", "MetaData", "FullyQualifiedName", "Active"}
     payload = {k: v for k, v in existing_item.items() if k not in omit and v is not None}
     payload["InvStartDate"] = new_inv_start_date[:10]
@@ -1502,6 +1511,7 @@ def get_or_create_item_id(
     default_item_id = config.get_qbo_config().get("default_item_id", "1")
     default_income_account_id = config.get_qbo_config().get("default_income_account_id", "1")
     auto_create_items = True  # Can be made configurable later
+    conversion_mode = bool(getattr(config, "product_conversion_enabled", False))
     created_type = "existing"
     fallback_reason: Optional[str] = None
 
@@ -1510,6 +1520,10 @@ def get_or_create_item_id(
     name = re.sub(r"\s+", " ", name) if name else ""
 
     if not name:
+        if conversion_mode:
+            raise RuntimeError(
+                "Blank item name is not allowed in product conversion mode."
+            )
         print(f"[WARN] Blank item name → using DEFAULT_ITEM_ID")
         return (default_item_id, False, "Default", "blank_name")
 
@@ -1536,6 +1550,28 @@ def get_or_create_item_id(
             first = items[0]
             item_id = first.get("Id")
             item_type = first.get("Type") or ""
+            if conversion_mode:
+                approved_ids = {
+                    str(item).strip()
+                    for item in (getattr(config, "product_conversion_approved_item_ids", None) or set())
+                    if str(item).strip()
+                }
+                if item_type == "Inventory":
+                    if str(item_id) in approved_ids:
+                        cache[name] = item_id
+                        return (item_id, False, "existing_inventory", None)
+                    raise RuntimeError(
+                        f"Approved mapped item {name!r} collides with legacy QBO Type='Inventory' "
+                        f"Id={item_id}. Oct sales must use new Inventory Ids only; "
+                        "do not reuse, rename, merge or inactivate automatically."
+                    )
+                if item_type not in {"NonInventory", "Service"}:
+                    raise RuntimeError(
+                        f"Approved mapped item {name!r} collides with QBO Type={item_type!r}. "
+                        "Do not reuse, rename, merge or inactivate it automatically."
+                    )
+                cache[name] = item_id
+                return (item_id, False, "existing_non_inventory", None)
             if item_type == "Inventory":
                 created_type = "existing_inventory"
                 # PATCH existing Inventory: category (ParentRef/SubItem) and/or pricing/tax (UnitPrice, PurchaseCost, tax flags)
@@ -1671,6 +1707,12 @@ def get_or_create_item_id(
                 cache[name] = item_id
                 return (item_id, False, created_type, None)
 
+    if not item_id and conversion_mode:
+        raise RuntimeError(
+            f"Approved mapped QBO item {name!r} does not exist. "
+            "Catalogue creation is a separate dry-run/approval step; the sales uploader will not create it implicitly."
+        )
+
     if not item_id and auto_create_items:
         # Create item: Inventory if mapping_cache provided, Service if inventory disabled
         if mapping_cache is None:
@@ -1740,6 +1782,57 @@ def get_or_create_item_id(
 
     cache[name] = item_id
     return (item_id, was_created, created_type, fallback_reason)
+
+
+def resolve_conversion_items(
+    unique_names: List[str],
+    config,
+    token_mgr: TokenManager,
+    realm_id: str,
+    item_result_by_name: Dict[str, Dict[str, Any]],
+) -> Dict[str, int]:
+    """Resolve approved conversion targets without creating or patching QBO items."""
+    cache: Dict[str, str] = {}
+    resolved = 0
+    for raw_name in unique_names:
+        name = re.sub(r"\s+", " ", str(raw_name or "").strip())
+        if not name:
+            raise RuntimeError("Product conversion produced a blank QBO item name")
+        item_id, created, type_label, fallback_reason = get_or_create_item_id(
+            name,
+            token_mgr,
+            realm_id,
+            config,
+            cache,
+        )
+        if created:
+            raise RuntimeError(
+                f"Conversion target {name!r} was created by the sales uploader; that path is forbidden"
+            )
+        if type_label == "existing_inventory":
+            approved_ids = {
+                str(item).strip()
+                for item in (getattr(config, "product_conversion_approved_item_ids", None) or set())
+                if str(item).strip()
+            }
+            if item_id not in approved_ids:
+                raise RuntimeError(
+                    f"Conversion target {name!r} resolved to Inventory Id={item_id} "
+                    "which is not in the approved new-Id list (legacy name collision)"
+                )
+        elif type_label not in {"existing_non_inventory"}:
+            raise RuntimeError(
+                f"Conversion target {name!r} did not resolve to an approved Inventory Id "
+                "or an existing NonInventory/Service item"
+            )
+        item_result_by_name[name] = {
+            "item_id": item_id,
+            "created": False,
+            "type_label": type_label,
+            "fallback_reason": fallback_reason,
+        }
+        resolved += 1
+    return {"resolved": resolved}
 
 
 def resolve_all_unique_items(
@@ -2101,6 +2194,10 @@ def build_sales_receipt_payload(
         elif item_result_by_name is not None:
             r = item_result_by_name.get(item_name)
             if r is None:
+                if bool(getattr(config, "product_conversion_enabled", False)):
+                    raise RuntimeError(
+                        f"Converted item {item_name!r} was not resolved during preflight; refusing default-item fallback"
+                    )
                 print(f"[WARN] Item name {item_name!r} not in item_result_by_name; using default item")
                 item_ref_id = default_item_id
                 item_was_created = False
@@ -3041,7 +3138,18 @@ def main():
     print(f"INVENTORY SYNC MODE: {effective_inventory_sync_mode}")
     print("=" * 60)
 
-    inventory_enabled = bool(getattr(config, "inventory_enabled", False))
+    conversion_mode = bool(getattr(config, "product_conversion_enabled", False))
+    inventory_enabled = bool(getattr(config, "inventory_enabled", False)) and not conversion_mode
+    if config.company_key == "company_a" and not conversion_mode:
+        print(
+            "[ERROR] Company A sales upload is blocked until product conversion is enabled. "
+            "Posting to legacy Inventory items recreates FIFO COGS."
+        )
+        sys.exit(1)
+    if conversion_mode:
+        print("[INFO] Approved product-conversion mode: sales-path Inventory create/patch and auto-fix are disabled.")
+        print("[INFO] Oct path maps to approved new Inventory Ids only; legacy Inventory names fail closed.")
+        print("[INFO] Catch-all is history-only; TxnDate on/after fail_closed_from does not use it.")
     if args.bypass_inventory_startdate and not inventory_enabled:
         print("Error: --bypass-inventory-startdate requires inventory items to be enabled for this company.")
         sys.exit(1)
@@ -3061,6 +3169,32 @@ def main():
 
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df)} rows")
+
+    if conversion_mode:
+        fail_from = getattr(config, "product_conversion_fail_closed_from", None)
+        catch_all = str(getattr(config, "product_conversion_catch_all_name", "") or "").strip()
+        if fail_from and catch_all:
+            run_date = None
+            if resolved_target_date:
+                try:
+                    run_date = datetime.strptime(str(resolved_target_date)[:10], "%Y-%m-%d").date()
+                except ValueError:
+                    run_date = None
+            item_col = "Item(Product/Service)"
+            date_col = "*SalesReceiptDate" if "*SalesReceiptDate" in df.columns else None
+            blocked = False
+            if run_date is not None and run_date >= fail_from and item_col in df.columns:
+                blocked = bool((df[item_col].astype(str).str.strip() == catch_all).any())
+            elif date_col and item_col in df.columns:
+                parsed = pd.to_datetime(df[date_col], errors="coerce")
+                catch_mask = df[item_col].astype(str).str.strip() == catch_all
+                blocked = bool(((parsed.dt.date >= fail_from) & catch_mask).any())
+            if blocked:
+                print(
+                    f"[ERROR] Catch-all {catch_all!r} is not allowed for TxnDate on/after "
+                    f"{fail_from.isoformat()}. Oct sales must map to approved new Inventory Ids."
+                )
+                sys.exit(1)
 
     grouped = df.groupby(GROUP_COL)
     print(f"Found {len(grouped)} distinct SalesReceiptNo groups")
@@ -3167,8 +3301,10 @@ def main():
         except Exception as e:
             print(f"[ERROR] Failed to load category mapping: {e}")
             raise
+    elif conversion_mode:
+        print("[INFO] Product conversion mode active; resolving approved Inventory Ids (or NonInventory for pre-Oct history).")
     else:
-        print("[INFO] Inventory items disabled for this company; using default item for all lines.")
+        print("[INFO] Inventory items disabled for this company; missing items use the legacy Service-item path.")
 
     # Pre-fetch tax code for Company B (tax_inclusive_composite mode) to validate it exists
     if config.tax_mode == "tax_inclusive_composite" and config.tax_code_name:
@@ -3257,6 +3393,25 @@ def main():
         )
         stats["items_patched_count"] = resolve_stats["items_patched"]
         stats["existing_inventory_patch_skipped"] = resolve_stats["existing_inventory_patch_skipped"]
+    elif conversion_mode:
+        resolution_started_at = time.perf_counter()
+        conversion_stats = resolve_conversion_items(
+            unique_names,
+            config,
+            token_mgr,
+            config.realm_id,
+            item_result_by_name,
+        )
+        stats["item_resolution_duration_seconds"] = round(
+            time.perf_counter() - resolution_started_at, 3
+        )
+        stats["items_patched_count"] = 0
+        stats["existing_inventory_patch_skipped"] = 0
+        print(
+            f"[INFO] Product conversion preflight: resolved "
+            f"{conversion_stats['resolved']} existing NonInventory/Service target(s); "
+            "created=0 patched=0."
+        )
     else:
         default_item_id = config.get_qbo_config().get("default_item_id", "1")
         for name in unique_names:
