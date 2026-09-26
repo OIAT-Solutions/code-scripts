@@ -157,7 +157,7 @@ class ProductConversionRegistry:
         self.known_names = set(self.known_name_counts)
         self.by_product_id = self._unique_index("EPOS Product ID", self.rules, lambda r: canonical_product_id(r.epos_product_id))
         self.by_sku = self._unique_index("EPOS SKU", self.rules, lambda r: r.epos_sku)
-        self.by_name = self._unique_index("EPOS Name", self.rules, lambda r: r.epos_name)
+        self.by_name = self._name_index(self.rules)
         self.approved_target_item_ids = {
             clean(rule.target_qbo_item_id) for rule in self.rules if clean(rule.target_qbo_item_id)
         }
@@ -197,6 +197,27 @@ class ProductConversionRegistry:
                 f"Approved mapping has duplicate {label} '{sample_key}' on rows {row_ids}"
             )
         return {key: rows[0] for key, rows in grouped.items()}
+
+    @staticmethod
+    def _name_index(rules: list[ProductConversionRule]) -> dict[str, ProductConversionRule]:
+        """Index by EPOS name. A name shared by several rows is allowed only when every
+        one of those rows carries an EPOS Product ID; the name is then left out of the
+        index so those products resolve by ID only, never by an ambiguous name."""
+        grouped: dict[str, list[ProductConversionRule]] = {}
+        for rule in rules:
+            key = normalize(rule.epos_name)
+            if key:
+                grouped.setdefault(key, []).append(rule)
+        index = {}
+        for key, rows in grouped.items():
+            if len(rows) == 1:
+                index[key] = rows[0]
+            elif not all(canonical_product_id(row.epos_product_id) for row in rows):
+                row_ids = ", ".join(row.row_id or "?" for row in rows)
+                raise MappingValidationError(
+                    f"Approved mapping has duplicate EPOS Name '{key}' on rows {row_ids}"
+                )
+        return index
 
     @staticmethod
     def _validate_target_pairs(rules: list[ProductConversionRule]) -> None:

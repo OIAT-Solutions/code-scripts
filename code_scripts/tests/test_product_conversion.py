@@ -212,11 +212,13 @@ class ProductConversionTests(unittest.TestCase):
 
         self.assertIn("INVALID_QUANTITY", str(context.exception))
 
-    def test_duplicate_approved_name_fails_validation(self):
+    def test_duplicate_approved_name_without_product_id_fails_validation(self):
+        # Duplicate EPOS names are allowed only when every row has a Product ID
+        # (see test_duplicate_epos_names); one row without an ID must still fail.
         with tempfile.TemporaryDirectory() as tmp:
             rows = [
                 approved_row(**{"EPOS Product ID": "1", "EPOS Existing SKU": "ONE"}),
-                approved_row(**{"Row ID": "2", "EPOS Product ID": "2", "EPOS Existing SKU": "TWO"}),
+                approved_row(**{"Row ID": "2", "EPOS Product ID": "", "EPOS Existing SKU": "TWO"}),
             ]
             path = write_mapping(Path(tmp), rows)
             with self.assertRaises(MappingValidationError):
