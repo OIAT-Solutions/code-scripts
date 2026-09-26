@@ -3281,7 +3281,7 @@ def main():
         sys.exit(1)
     if conversion_mode:
         print("[INFO] Approved product-conversion mode: sales-path Inventory create/patch and auto-fix are disabled.")
-        print("[INFO] Oct path maps to approved new Inventory Ids only; legacy Inventory names fail closed.")
+        print("[INFO] Oct path maps to approved new Inventory (AKP-) or non-stock NonInventory (AKP-NS-) Ids only; legacy names fail closed.")
         print("[INFO] Catch-all is history-only; TxnDate on/after fail_closed_from does not use it.")
     if args.bypass_inventory_startdate and not inventory_enabled:
         print("Error: --bypass-inventory-startdate requires inventory items to be enabled for this company.")

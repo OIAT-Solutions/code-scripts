@@ -1,4 +1,5 @@
-"""Pure proposal builders: canonical Inventory opening and item-based purchases.
+"""Pure proposal builders: canonical Inventory opening, non-stock NonInventory
+items and item-based purchases.
 
 No HTTP, no credentials, no production posting. Inputs must be staff-reviewed
 unit decisions and verified source evidence. Flags stay visible in the output.
@@ -7,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 from code_scripts.operations_controls import purchase_units
 from code_scripts.conversion_contract import finite,validate_live_item
+from code_scripts.product_conversion import OCTOBER_NONSTOCK_SKU_PREFIX,canonical_product_id
 
 
 def validate_family(family):
@@ -60,6 +62,62 @@ def catalogue_drafts(families,counts,*,cutoff_date):
     if set(indexed)-{f['stock_owner_id'] for f in families}:
         raise ValueError('Count contains unmapped stock owners; resolve before complete valuation')
     return {'drafts':drafts,'proposed_value':str(total),'production_approved':False}
+
+
+# Income / purchases (200xxx) accounts by EPOS category band, as used for the
+# October Inventory catalogue. Unknown categories fail closed.
+NONSTOCK_ACCOUNTS={
+    'grocery':{'income_id':'1150040024','expense_id':'74'},              # 400100 / 200100
+    'alcoholic':{'income_id':'1150040032','expense_id':'1150040033'},    # 400201 / 200201
+    'non_alcoholic':{'income_id':'1150040031','expense_id':'1150040034'},# 400202 / 200202
+    'non_food':{'income_id':'1150040025','expense_id':'1150040020'},     # 400300 / 200300
+}
+NONSTOCK_CATEGORY_BAND={
+    'ALCOHOLS & SPIRITS':'alcoholic','DRINKS & BEVERAGES':'non_alcoholic',
+    'COSMETICS AND TOILETRIES':'non_food','HOUSEHOLD GOODS & PACKAGING MATERIALS':'non_food',
+    'STATIONARY AND BOOKSHOP SUPPLIES':'non_food','PROVISIONS AND CEREALS':'grocery',
+    'CANNED GOOD, COOK OIL, SWALLOW & BAKING':'grocery','COOKING SPICES & SEASONINGS':'grocery',
+    'FROZEN FOODS':'grocery',
+}
+
+
+def nonstock_sku(epos_product_id):
+    pid=canonical_product_id(epos_product_id)
+    if not pid.isdigit():raise ValueError('Non-stock item needs a numeric EPOS Product ID')
+    return OCTOBER_NONSTOCK_SKU_PREFIX+pid
+
+
+def noninventory_drafts(products):
+    """Create proposals for EPOS products with no stock master (one item per product).
+
+    Payload: Name, Sku AKP-NS-{EPOS ProductID}, Type NonInventory, income and
+    purchases (200xxx) accounts by category. No asset, quantity or start date.
+    """
+    drafts=[];seen={'name':set(),'sku':set()}
+    for product in products:
+        if any(not str(product.get(k,'')).strip() for k in ('epos_product_id','name','category','approved_by','approval_ref')):
+            raise ValueError('Non-stock product is missing EPOS id/name/category/approval evidence')
+        name=' '.join(str(product['name']).split())
+        if len(name)>100:raise ValueError('QBO name too long: '+name)
+        if str(product.get('stock_tracked','')).strip().lower() in {'true','yes','1'}:
+            raise ValueError('Stock-tracked EPOS product must map to Inventory, not NonInventory: '+name)
+        band=NONSTOCK_CATEGORY_BAND.get(' '.join(str(product['category']).split()).upper())
+        if band is None:raise ValueError('Unknown EPOS category for account mapping: '+str(product['category']))
+        sku=nonstock_sku(product['epos_product_id'])
+        for key,value in (('name',name.casefold()),('sku',sku)):
+            if value in seen[key]:raise ValueError('Duplicate non-stock '+key+': '+value)
+            seen[key].add(value)
+        accounts=NONSTOCK_ACCOUNTS[band]
+        payload={'Name':name,'Sku':sku,'Type':'NonInventory',
+                 'IncomeAccountRef':{'value':accounts['income_id']},
+                 'ExpenseAccountRef':{'value':accounts['expense_id']}}
+        if str(product.get('tax_code_id','')).strip():
+            payload.update(SalesTaxCodeRef={'value':str(product['tax_code_id'])},
+                           PurchaseTaxCodeRef={'value':str(product['tax_code_id'])},
+                           SalesTaxIncluded=True,PurchaseTaxIncluded=True,Taxable=True)
+        drafts.append({'payload':payload,'epos_product_id':canonical_product_id(product['epos_product_id']),
+                       'category_band':band,'approval_ref':product['approval_ref'],'production_approved':False})
+    return {'drafts':drafts,'production_approved':False}
 
 
 def bill_draft(family,live_item,*,vendor_id,invoice_no,invoice_date,packs,cost_per_pack,invoice_ref,goods_received_ref):

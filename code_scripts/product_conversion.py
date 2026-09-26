@@ -97,6 +97,33 @@ def canonical_target_type(value: Any) -> str:
     return ALLOWED_TARGET_TYPES.get(normalized, "")
 
 
+# October (cutover) target rule. Stock-tracked products map to new Inventory items
+# with an ``AKP-`` SKU; EPOS products with no stock master (loose/weighed goods)
+# map to dedicated NonInventory items with an ``AKP-NS-{EPOS ProductID}`` SKU.
+# Everything else - Service, legacy SKUs, the pre-October catch-all - fails closed.
+OCTOBER_INVENTORY_SKU_PREFIX = "AKP-"
+OCTOBER_NONSTOCK_SKU_PREFIX = "AKP-NS-"
+FORBIDDEN_OCTOBER_TARGET_IDS = frozenset({"15030"})
+FORBIDDEN_OCTOBER_TARGET_NAMES = frozenset({"akp-unmapped-epos-sales"})
+
+
+def october_target_error(target_type: Any, sku: Any, item_id: Any = "", name: Any = "") -> str:
+    """Return why a target is not a valid October mapping ("" when valid)."""
+    target_type, sku, item_id = clean(target_type), clean(sku), clean(item_id)
+    if item_id in FORBIDDEN_OCTOBER_TARGET_IDS or normalize(name) in FORBIDDEN_OCTOBER_TARGET_NAMES \
+            or normalize(sku) in FORBIDDEN_OCTOBER_TARGET_NAMES:
+        return "The catch-all item is restricted to pre-October history"
+    if target_type == "Inventory":
+        if not sku.startswith(OCTOBER_INVENTORY_SKU_PREFIX) or sku.startswith(OCTOBER_NONSTOCK_SKU_PREFIX):
+            return "October Inventory requires an AKP- SKU (not AKP-NS-)"
+        return ""
+    if target_type == "NonInventory":
+        if not sku.startswith(OCTOBER_NONSTOCK_SKU_PREFIX) or len(sku) <= len(OCTOBER_NONSTOCK_SKU_PREFIX):
+            return "October NonInventory requires an AKP-NS- SKU"
+        return ""
+    return "October requires Inventory (AKP- SKU) or NonInventory (AKP-NS- SKU)"
+
+
 @dataclass(frozen=True)
 class ProductConversionRule:
     row_id: str
@@ -416,8 +443,12 @@ def apply_product_conversion_to_sales(
                 transaction_date=txn_date,
             )
             if fail_closed_from and txn_date >= fail_closed_from:
-                if rule.target_qbo_type != "Inventory" or not rule.target_qbo_item_id or not rule.target_qbo_sku.startswith("AKP-"):
-                    raise ProductResolutionError("INVALID_OCTOBER_TARGET", rule.epos_name, "October requires an exact new Inventory Id and AKP- SKU")
+                reason = october_target_error(rule.target_qbo_type, rule.target_qbo_sku,
+                                              rule.target_qbo_item_id, rule.target_qbo_name)
+                if not rule.target_qbo_item_id:
+                    reason = reason or "October requires an exact approved QBO Item Id"
+                if reason:
+                    raise ProductResolutionError("INVALID_OCTOBER_TARGET", rule.epos_name, reason)
             proof["row_id"] = rule.row_id
             target_names.append(rule.target_qbo_name)
             target_quantities.append(float(quantity * rule.sale_multiplier))

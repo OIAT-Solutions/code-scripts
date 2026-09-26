@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from code_scripts.product_conversion import ProductConversionRegistry
+from code_scripts.product_conversion import ProductConversionRegistry, october_target_error
 
 
 def install(source, destination, expected_sha256, approval_ref):
@@ -29,9 +29,13 @@ def install(source, destination, expected_sha256, approval_ref):
     try:
         registry = ProductConversionRegistry.from_csv(pending)
         for rule in registry.rules:
-            if (rule.target_qbo_type != 'Inventory' or not rule.target_qbo_item_id.isdigit()
-                    or not rule.target_qbo_sku.startswith('AKP-') or rule.effective_date.isoformat() != '2026-10-01'):
-                raise ValueError('Installed October map requires exact new Inventory Ids, AKP- SKUs and October 1 effective date')
+            reason = october_target_error(rule.target_qbo_type, rule.target_qbo_sku,
+                                          rule.target_qbo_item_id, rule.target_qbo_name)
+            if (reason or not rule.target_qbo_item_id.isdigit()
+                    or rule.effective_date.isoformat() != '2026-10-01'):
+                raise ValueError('Installed October map requires exact new Ids (Inventory with AKP- SKU or '
+                                 'NonInventory with AKP-NS- SKU) and October 1 effective date'
+                                 + (f': row {rule.row_id}: {reason}' if reason else f': row {rule.row_id}'))
         versions = destination.parent / 'versions'
         versions.mkdir(exist_ok=True)
         if destination.exists():

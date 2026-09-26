@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 import json
 
-from code_scripts.product_conversion import ProductConversionRegistry, clean, normalize
+from code_scripts.product_conversion import ProductConversionRegistry, clean, normalize, october_target_error
 
 CUTOVER = date(2026, 10, 1)
 HISTORY_ID = '15030'
@@ -70,8 +70,11 @@ def validate_upload_frame(frame, config, registry=None):
                     raise ValueError('Exact mapped target mismatch')
                 if not rule.target_qbo_item_id:
                     raise ValueError('Mapped QBO Item Id is required at upload')
-                if txn_date >= CUTOVER and (rule.target_qbo_type != 'Inventory' or not rule.target_qbo_sku.startswith('AKP-')):
-                    raise ValueError('October requires Inventory with an AKP- SKU')
+                if txn_date >= CUTOVER:
+                    reason = october_target_error(rule.target_qbo_type, rule.target_qbo_sku,
+                                                  rule.target_qbo_item_id, rule.target_qbo_name)
+                    if reason:
+                        raise ValueError(reason)
                 target = {'Id': rule.target_qbo_item_id, 'Name': rule.target_qbo_name,
                           'Sku': rule.target_qbo_sku, 'Type': rule.target_qbo_type}
                 if rule.target_qbo_type == 'Inventory':
@@ -107,12 +110,20 @@ def _validate_legacy_history_frame(frame):
 
 
 def validate_live_item(item, expected):
-    for field in ('Id', 'Name', 'Type', 'Sku', 'InvStartDate'):
+    """Verify a live QBO item matches the exact approved target identity.
+
+    Inventory: Id/Name/Type/Sku/InvStartDate, Active, TrackQtyOnHand, asset 77.
+    NonInventory (and pre-October Service): Id/Name/Type/Sku, Active; no
+    quantity/asset/start-date checks.
+    """
+    expected_type = expected['Type']
+    fields = ('Id', 'Name', 'Type', 'Sku', 'InvStartDate') if expected_type == 'Inventory' else ('Id', 'Name', 'Type', 'Sku')
+    for field in fields:
         if field in expected and clean(item.get(field)) != expected[field]:
             raise ValueError(f'QBO {field} mismatch for {expected["Name"]}: expected {expected[field]}')
     if item.get('Active') is not True:
         raise ValueError('Mapped QBO item is inactive or Active is missing')
-    if expected['Type'] == 'Inventory':
+    if expected_type == 'Inventory':
         if item.get('TrackQtyOnHand') is not True:
             raise ValueError('Mapped Inventory must track quantity')
         if str((item.get('AssetAccountRef') or {}).get('value', '')) != '77':
