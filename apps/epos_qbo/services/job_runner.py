@@ -69,6 +69,13 @@ def build_command(cleaned: dict) -> list[str]:
         cmd.extend(["--stagger-seconds", str(int(cleaned.get("stagger_seconds") or portal_settings.get_default_stagger_seconds()))])
         if cleaned.get("continue_on_failure"):
             cmd.append("--continue-on-failure")
+        excluded_companies = cleaned.get("exclude_companies") or []
+        if isinstance(excluded_companies, str):
+            excluded_companies = [excluded_companies]
+        for company_key in excluded_companies:
+            company_key = str(company_key or "").strip()
+            if company_key:
+                cmd.extend(["--exclude-company", company_key])
 
     if date_mode == "target_date" and cleaned.get("target_date"):
         cmd.extend(["--target-date", cleaned["target_date"].strftime("%Y-%m-%d")])
@@ -310,6 +317,7 @@ def build_command_for_job(job: RunJob) -> list[str]:
         "stagger_seconds": job.stagger_seconds,
         "continue_on_failure": job.continue_on_failure,
         "inventory_options": job.inventory_options_json or {},
+        "exclude_companies": (job.inventory_options_json or {}).get("exclude_companies", []),
     }
     return build_command(cleaned)
 

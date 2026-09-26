@@ -81,6 +81,24 @@ class BuildCommandTests(SimpleTestCase):
         self.assertIn("--skip-download", command)
         self.assertIn("--continue-on-failure", command)
 
+    def test_build_command_all_companies_can_exclude_company(self):
+        command = build_command(
+            {
+                "scope": RunJob.SCOPE_ALL,
+                "company_key": "",
+                "date_mode": "yesterday",
+                "target_date": None,
+                "from_date": None,
+                "to_date": None,
+                "skip_download": False,
+                "parallel": 1,
+                "stagger_seconds": 1,
+                "exclude_companies": ["company_a"],
+            }
+        )
+        self.assertIn("--exclude-company", command)
+        self.assertEqual(command[command.index("--exclude-company") + 1], "company_a")
+
     @patch.dict("os.environ", {"OIAT_VENV_PATH": "/tmp/custom-venv"}, clear=False)
     @patch("apps.epos_qbo.services.job_runner.Path.exists", return_value=True)
     def test_build_command_uses_configured_venv_python(self, _exists):

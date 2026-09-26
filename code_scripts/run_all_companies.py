@@ -34,6 +34,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional subset of companies to run (space-separated). Defaults to all configured companies.",
     )
     parser.add_argument(
+        "--exclude-company",
+        action="append",
+        default=[],
+        help="Company key to omit from this run; may be supplied more than once.",
+    )
+    parser.add_argument(
         "--continue-on-failure",
         action="store_true",
         help="Continue running remaining companies even if one fails. Default is to stop on first failure.",
@@ -72,6 +78,9 @@ def _run_companies(args: argparse.Namespace) -> int:
             print(f"[WARN] Ignoring unknown companies: {', '.join(missing)}")
     else:
         companies = all_companies
+
+    excluded = {str(company).strip() for company in (args.exclude_company or []) if str(company).strip()}
+    companies = [company for company in companies if company not in excluded]
 
     if not companies:
         print("No runnable companies selected. Exiting.")

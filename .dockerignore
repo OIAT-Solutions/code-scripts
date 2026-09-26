@@ -25,3 +25,14 @@ code_scripts/reports
 code_scripts/outputs
 
 StockReport_*.csv
+
+# Recovery evidence and approvals never belong in a deploy image
+outputs
+downloads
+exports
+reports
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
+**/*.xlsx
+**/*.xls

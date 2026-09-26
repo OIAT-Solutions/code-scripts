@@ -127,3 +127,6 @@ runtime/
 
 # Exported local Caddy root cert from older tls-internal testing
 caddy-root.crt
+
+# Header-only conversion template (no live products or stock)
+!templates/product_conversion_empty.csv

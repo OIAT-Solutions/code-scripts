@@ -847,7 +847,7 @@ def cmd_import_products(args: argparse.Namespace, token_mgr: TokenManager, realm
                 qty = default_qty
             qty = max(0, qty)
             try:
-                category_id = get_or_create_item_category_id(token_mgr, realm_id, category, cache=category_cache)
+                category_id = None if dry_run else get_or_create_item_category_id(token_mgr, realm_id, category, cache=category_cache)
             except (ValueError, RuntimeError) as e:
                 report.append({"Name": name, "Type": itype, "Status": "failed", "NewId": "", "Error": str(e)})
                 failed += 1

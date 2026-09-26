@@ -22,6 +22,7 @@ from code_scripts import qbo_upload
 
 
 FIELDS = [
+    "Canonical Family Key", "Canonical Unit", "Staff Approved Purchase Multiplier",
     "Row ID",
     "EPOS Product ID",
     "EPOS Existing SKU",
@@ -40,6 +41,7 @@ FIELDS = [
 
 def approved_row(**overrides):
     row = {
+        "Canonical Family Key": "BACKWOODS-DARK", "Canonical Unit": "cigar", "Staff Approved Purchase Multiplier": "200",
         "Row ID": "1",
         "EPOS Product ID": "1651777",
         "EPOS Existing SKU": "EPOS-BW-OUTER",

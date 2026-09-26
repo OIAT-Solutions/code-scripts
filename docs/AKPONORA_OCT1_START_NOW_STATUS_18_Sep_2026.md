@@ -1,5 +1,7 @@
 # Akponora Oct 1 Inventory go-live — start-now status (18 Sep 2026)
 
+> Historical Cursor snapshot. Canonical review supersedes the 5,664-create claim and W4 readiness: see [current runbook](AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md). Preserve these counts as evidence only; do not post the old dry-run catalogue.
+
 Executed the plan’s **start now** slice. No live QBO creates, renames, inactivations, journals, or pipeline start.
 
 ## Files produced

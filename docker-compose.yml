@@ -61,6 +61,8 @@ services:
       OIAT_COMPANIES_DIR: /data/code_scripts/companies
       OIAT_SCHEDULER_POLL_SECONDS: ${OIAT_SCHEDULER_POLL_SECONDS:-15}
       OIAT_SCHEDULER_ENABLE_ENV_FALLBACK: ${OIAT_SCHEDULER_ENABLE_ENV_FALLBACK:-1}
+      # Company A remains excluded from the system fallback until W9 approval.
+      OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED: ${OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED:-0}
       SCHEDULE_CRON: ${SCHEDULE_CRON:-0 18 * * *}
       SCHEDULE_TZ: ${SCHEDULE_TZ:-Africa/Lagos}
 

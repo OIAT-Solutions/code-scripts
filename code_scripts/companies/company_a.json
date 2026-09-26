@@ -19,14 +19,17 @@
     "password_env_key": "EPOS_PASSWORD_A"
   },
   "transform": {
-    "group_by": ["date", "tender"],
+    "group_by": [
+      "date",
+      "tender"
+    ],
     "date_format": "%Y-%m-%d",
     "receipt_prefix": "SR",
     "receipt_number_format": "date_tender_sequence",
     "aggregate_products": true,
     "product_conversion": {
       "enabled": true,
-      "file": "outputs/akponora_from_2026-08-22/akponora_product_conversion_approved_empty.csv",
+      "file": "state:mappings/company_a/approved.csv",
       "allow_name_fallback": true,
       "catch_all_qbo_name": "AKP-UNMAPPED-EPOS-SALES",
       "fail_closed_from": "2026-10-01"

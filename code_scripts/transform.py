@@ -23,6 +23,7 @@ import re
 from code_scripts.company_config import load_company_config, get_available_companies
 from code_scripts.product_conversion import (
     ProductConversionRegistry,
+    ProductResolutionError,
     apply_product_conversion_to_sales,
 )
 
@@ -109,6 +110,9 @@ def aggregate_product_rows(out: pd.DataFrame, *, preserve_descriptions: bool = F
         agg_spec[c] = "sum"
     for c in first_cols:
         agg_spec[c] = "first"
+
+    if "_Conversion Proof" in out.columns:
+        agg_spec["_Conversion Proof"] = lambda values: json.dumps([p for value in values for p in json.loads(value)], sort_keys=True)
 
     aggregated = out.groupby(group_key, sort=False, as_index=False).agg(agg_spec)
 
@@ -375,6 +379,17 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
 
     conversion_enabled = bool(getattr(config, "product_conversion_enabled", False))
     if conversion_enabled:
+        if config.trading_day_enabled and target_date:
+            wanted = datetime.strptime(target_date, "%Y-%m-%d").date()
+            offset = timedelta(hours=int(getattr(config, "trading_day_start_hour", 5)),
+                               minutes=int(getattr(config, "trading_day_start_minute", 0)))
+            for raw_date in df["Date/Time"]:
+                source_date = parse_date(raw_date)
+                if source_date is None:
+                    raise ProductResolutionError("MISSING_TRANSACTION_DATE", "", "Invalid source date")
+                local = source_date.replace(tzinfo=WAT_TZ) if source_date.tzinfo is None else source_date.astimezone(WAT_TZ)
+                if (local - offset).date() != wanted:
+                    raise ProductResolutionError("SOURCE_DATE_OUTSIDE_BUSINESS_DAY", "", "Do not relabel a source day; split the raw export first")
         mapping_path = getattr(config, "product_conversion_file", None)
         if mapping_path is None:
             raise ValueError(
@@ -399,6 +414,8 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
             registry,
             catch_all_name=catch_all_name,
             fail_closed_from=fail_closed_from,
+            transaction_date_override=(datetime.strptime(target_date, "%Y-%m-%d").date()
+                                       if config.trading_day_enabled and target_date else None),
         )
         fallback_count = int(df["_Product Conversion Fallback"].sum())
         if fallback_count:
@@ -423,6 +440,8 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
     
     # Build output columns
     out = pd.DataFrame()
+    if conversion_enabled:
+        out["_Conversion Proof"] = df["_Conversion Proof"]
     out["_parsed_date"] = dates
     out["_date_str"] = [d.strftime(config.date_format) for d in dates]
     out["Customer"] = df.get("Customer Full Name").fillna("")
@@ -616,6 +635,8 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
         "ItemTaxAmount",
         "Service Date",
     ]
+    if conversion_enabled:
+        columns.append("_Conversion Proof")
     return out[columns]
 
 

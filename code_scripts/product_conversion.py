@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import io
+import json
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -40,12 +43,18 @@ def clean(value: Any) -> str:
     return SPACE_RE.sub(" ", str(value or "").strip())
 
 
+def canonical_product_id(value: Any) -> str:
+    # pandas may promote an integer ID column with blanks to float. This is an
+    # identifier representation repair, never a product-name/barcode heuristic.
+    return re.sub(r"\.0+$", "", clean(value)) if re.fullmatch(r"[0-9]+\.0+", clean(value)) else clean(value)
+
+
 def parse_positive_decimal(value: Any, field: str, row_number: int) -> Decimal:
     try:
         result = Decimal(clean(value).replace(",", ""))
     except InvalidOperation as exc:
         raise MappingValidationError(f"Row {row_number}: {field} must be a number") from exc
-    if result <= 0:
+    if not result.is_finite() or result <= 0:
         raise MappingValidationError(f"Row {row_number}: {field} must be greater than zero")
     return result
 
@@ -55,7 +64,7 @@ def parse_effective_date(value: Any, row_number: int) -> date:
     if not raw:
         raise MappingValidationError(f"Row {row_number}: Effective Date is required")
     try:
-        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+        return date.fromisoformat(raw)
     except ValueError as exc:
         raise MappingValidationError(
             f"Row {row_number}: Effective Date must use YYYY-MM-DD"
@@ -101,6 +110,9 @@ class ProductConversionRule:
     sale_multiplier: Decimal
     effective_date: date
     approved_by: str
+    family_key: str = ""
+    canonical_unit: str = ""
+    purchase_multiplier: Decimal = Decimal("1")
 
 
 class ProductConversionRegistry:
@@ -114,14 +126,34 @@ class ProductConversionRegistry:
     ) -> None:
         self.rules = list(rules)
         self.allow_name_fallback = allow_name_fallback
-        self.known_names = {normalize(name) for name in known_names if clean(name)}
-        self.by_product_id = self._unique_index("EPOS Product ID", self.rules, lambda r: r.epos_product_id)
+        self.known_name_counts = Counter(normalize(name) for name in known_names if clean(name))
+        self.known_names = set(self.known_name_counts)
+        self.by_product_id = self._unique_index("EPOS Product ID", self.rules, lambda r: canonical_product_id(r.epos_product_id))
         self.by_sku = self._unique_index("EPOS SKU", self.rules, lambda r: r.epos_sku)
         self.by_name = self._unique_index("EPOS Name", self.rules, lambda r: r.epos_name)
         self.approved_target_item_ids = {
             clean(rule.target_qbo_item_id) for rule in self.rules if clean(rule.target_qbo_item_id)
         }
         self._validate_target_pairs(self.rules)
+        self.by_row_id = self._unique_index("Row ID", self.rules, lambda r: r.row_id)
+        targets = {}
+        ids = {}
+        families = {}
+        for rule in self.rules:
+            identity = (rule.target_qbo_item_id, rule.target_qbo_type, rule.target_qbo_sku)
+            if rule.target_qbo_type == "Inventory":
+                family_identity = (identity, rule.target_qbo_name, rule.canonical_unit)
+                if families.setdefault(rule.family_key, family_identity) != family_identity:
+                    raise MappingValidationError("One canonical family must map to one QBO stock item and unit")
+            name = normalize(rule.target_qbo_name)
+            if name in targets and targets[name] != identity:
+                raise MappingValidationError("Conflicting exact target identity for " + rule.target_qbo_name)
+            targets[name] = identity
+            if rule.target_qbo_item_id:
+                prior = ids.setdefault(rule.target_qbo_item_id, (name, rule.target_qbo_sku, rule.target_qbo_type))
+                if prior != (name, rule.target_qbo_sku, rule.target_qbo_type):
+                    raise MappingValidationError("One QBO Item Id has conflicting name/SKU/type")
+        self.source_sha256 = ""
 
     @staticmethod
     def _unique_index(label: str, rules: list[ProductConversionRule], getter) -> dict[str, ProductConversionRule]:
@@ -167,7 +199,8 @@ class ProductConversionRegistry:
 
         approved: list[ProductConversionRule] = []
         known_names: list[str] = []
-        with source.open("r", encoding="utf-8-sig", newline="") as handle:
+        source_bytes = source.read_bytes()
+        with io.StringIO(source_bytes.decode("utf-8-sig"), newline="") as handle:
             reader = csv.DictReader(handle)
             required = {
                 "EPOS Name",
@@ -210,10 +243,17 @@ class ProductConversionRegistry:
                     raise MappingValidationError(
                         f"Row {row_number}: Target QBO Item Type must be Inventory, Non-inventory, or Service"
                     )
+                family_key = clean(row.get("Canonical Family Key"))
+                canonical_unit = clean(row.get("Canonical Unit"))
+                purchase_multiplier = Decimal("1")
+                if target_type == "Inventory":
+                    if not family_key or not canonical_unit:
+                        raise MappingValidationError(f"Row {row_number}: Inventory requires Canonical Family Key and Canonical Unit")
+                    purchase_multiplier = parse_positive_decimal(row.get("Staff Approved Purchase Multiplier"), "Staff Approved Purchase Multiplier", row_number)
                 approved.append(
                     ProductConversionRule(
                         row_id=clean(row.get("Row ID")) or str(row_number),
-                        epos_product_id=clean(row.get("EPOS Product ID")),
+                        epos_product_id=canonical_product_id(row.get("EPOS Product ID")),
                         epos_sku=clean(row.get("EPOS Existing SKU")),
                         epos_name=epos_name,
                         target_qbo_type=target_type,
@@ -227,9 +267,12 @@ class ProductConversionRegistry:
                         ),
                         effective_date=parse_effective_date(row.get("Effective Date"), row_number),
                         approved_by=approved_by,
+                        family_key=family_key, canonical_unit=canonical_unit, purchase_multiplier=purchase_multiplier,
                     )
                 )
-        return cls(approved, known_names, allow_name_fallback=allow_name_fallback)
+        registry = cls(approved, known_names, allow_name_fallback=allow_name_fallback)
+        registry.source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+        return registry
 
     def resolve(
         self,
@@ -240,7 +283,7 @@ class ProductConversionRegistry:
         transaction_date: date | None = None,
     ) -> ProductConversionRule:
         name = clean(product_name)
-        product_id_key = normalize(product_id)
+        product_id_key = normalize(canonical_product_id(product_id))
         sku_key = normalize(sku)
         name_key = normalize(name)
 
@@ -255,6 +298,8 @@ class ProductConversionRegistry:
             if rule is None:
                 raise ProductResolutionError("UNMAPPED_SKU", name, f"EPOS SKU {clean(sku)} is not approved")
         elif self.allow_name_fallback:
+            if self.known_name_counts.get(name_key, 0) > 1:
+                raise ProductResolutionError("AMBIGUOUS_NAME", name, "Exact name is not unique across source rows")
             rule = self.by_name.get(name_key)
             if rule is None:
                 code = "NOT_APPROVED" if name_key in self.known_names else "UNMAPPED_PRODUCT"
@@ -264,7 +309,9 @@ class ProductConversionRegistry:
                 "MISSING_STABLE_IDENTIFIER", name, "Sales row has neither EPOS Product ID nor SKU"
             )
 
-        if transaction_date is not None and transaction_date < rule.effective_date:
+        if transaction_date is None:
+            raise ProductResolutionError("MISSING_TRANSACTION_DATE", name, "A valid transaction date is required")
+        if transaction_date < rule.effective_date:
             raise ProductResolutionError(
                 "MAPPING_NOT_EFFECTIVE",
                 name,
@@ -307,6 +354,7 @@ def apply_product_conversion_to_sales(
     *,
     catch_all_name: str = "",
     fail_closed_from: date | None = None,
+    transaction_date_override: date | None = None,
 ) -> pd.DataFrame:
     """Return a mapped copy, optionally routing unresolved products to a catch-all.
 
@@ -329,14 +377,35 @@ def apply_product_conversion_to_sales(
     target_quantities: list[float] = []
     line_descriptions: list[str] = []
     fallback_flags: list[bool] = []
+    proofs: list[str] = []
     fallback_name = clean(catch_all_name)
     if isinstance(fail_closed_from, str):
         fail_closed_from = datetime.strptime(fail_closed_from[:10], "%Y-%m-%d").date()
 
     for _, row in mapped.iterrows():
         quantity = Decimal("0")
+        txn_date = transaction_date_override or _row_date(row)
+        proof = {"mapping_sha256": registry.source_sha256, "date": txn_date.isoformat() if txn_date else "",
+                 "product": clean(row.get("Product")), "product_id": clean(_first_present(row, ["ProductId", "ProductID", "Product ID", "EPOS Product ID"])),
+                 "sku": clean(_first_present(row, ["SKU", "OrderCode", "Order Code", "ArticleCode"]))}
+        if _row_date(row) is None:
+            failures.append(ProductResolutionError("MISSING_TRANSACTION_DATE", clean(row.get("Product")), "Invalid source date"))
+            continue
         try:
-            quantity = Decimal(clean(row.get("Quantity")) or "0")
+            # clean() maps a numeric 0 to "" (``value or ""``), so test blankness on the
+            # raw value: a genuine 0 / 0.0 quantity is valid history (zero/offset lines).
+            raw_quantity = row.get("Quantity")
+            try:
+                blank_quantity = raw_quantity is None or bool(pd.isna(raw_quantity))
+            except (TypeError, ValueError):
+                blank_quantity = False
+            quantity_text = "" if blank_quantity else str(raw_quantity).replace(",", "").strip()
+            if not quantity_text:
+                raise InvalidOperation
+            quantity = Decimal(quantity_text)
+            if not quantity.is_finite():
+                raise InvalidOperation
+            proof["quantity"] = str(quantity)
             rule = registry.resolve(
                 product_name=row.get("Product"),
                 product_id=_first_present(
@@ -344,19 +413,23 @@ def apply_product_conversion_to_sales(
                     ["ProductId", "ProductID", "Product ID", "EPOS Product ID"],
                 ),
                 sku=_first_present(row, ["SKU", "OrderCode", "Order Code", "ArticleCode"]),
-                transaction_date=_row_date(row),
+                transaction_date=txn_date,
             )
+            if fail_closed_from and txn_date >= fail_closed_from:
+                if rule.target_qbo_type != "Inventory" or not rule.target_qbo_item_id or not rule.target_qbo_sku.startswith("AKP-"):
+                    raise ProductResolutionError("INVALID_OCTOBER_TARGET", rule.epos_name, "October requires an exact new Inventory Id and AKP- SKU")
+            proof["row_id"] = rule.row_id
             target_names.append(rule.target_qbo_name)
             target_quantities.append(float(quantity * rule.sale_multiplier))
-            line_descriptions.append(clean(row.get("Category")))
+            line_descriptions.append(clean(row.get("Product")))
             fallback_flags.append(False)
         except ProductResolutionError as exc:
-            txn_date = _row_date(row)
             allow_catch_all = bool(fallback_name) and (
                 fail_closed_from is None
                 or (txn_date is not None and txn_date < fail_closed_from)
             )
             if allow_catch_all:
+                proof["row_id"] = "HISTORY_CATCH_ALL"
                 target_names.append(fallback_name)
                 target_quantities.append(float(quantity))
                 line_descriptions.append(f"Unmapped EPOS product: {clean(row.get('Product'))}")
@@ -376,6 +449,8 @@ def apply_product_conversion_to_sales(
             line_descriptions.append(clean(row.get("Category")))
             fallback_flags.append(False)
 
+        proofs.append(json.dumps([proof], sort_keys=True))
+
     if failures:
         counts = Counter(error.code for error in failures)
         examples = "; ".join(str(error) for error in failures[:5])
@@ -386,6 +461,7 @@ def apply_product_conversion_to_sales(
             f"{summary}. Examples: {examples}",
         )
 
+    mapped["_Conversion Proof"] = proofs
     mapped["Product"] = target_names
     mapped["Quantity"] = target_quantities
     mapped["_QBO Line Description"] = line_descriptions
@@ -401,7 +477,7 @@ def audit_sales(
     resolution_cache: dict[tuple[str, str, str, date | None], tuple[str, str, str, str, Decimal]] = {}
     for _, row in sales.iterrows():
         name = clean(row.get("Product"))
-        product_id = clean(_first_present(row, ["ProductID", "Product ID", "EPOS Product ID"]))
+        product_id = clean(_first_present(row, ["ProductId", "ProductID", "Product ID", "EPOS Product ID"]))
         sku = clean(_first_present(row, ["SKU", "OrderCode", "Order Code", "ArticleCode"]))
         barcode = clean(row.get("Barcode"))
         transaction_date = _row_date(row)
@@ -488,7 +564,7 @@ def build_qbo_catalog_plan(
     by_sku: dict[str, list[dict[str, Any]]] = {}
     for row in qbo_rows:
         name = clean(row.get("Product/Service Name") or row.get("Name"))
-        sku = clean(row.get("SKU"))
+        sku = clean(row.get("SKU") or row.get("Sku"))
         if name:
             by_name.setdefault(normalize(name), []).append(row)
         if sku:
@@ -531,12 +607,12 @@ def build_qbo_catalog_plan(
                     reason = (
                         f"Existing Inventory Id={existing_id or 'unknown'} is not an approved new catalogue Id"
                     )
-                elif existing_id and existing_id != approved_id:
+                elif existing_id != approved_id:
                     status = "BLOCK_LEGACY_INVENTORY_NAME_COLLISION"
                     reason = (
                         f"Existing Inventory Id={existing_id} is not the approved new Id {approved_id}"
                     )
-                elif existing_sku and normalize(existing_sku) != normalize(rule.target_qbo_sku):
+                elif existing_sku != rule.target_qbo_sku:
                     status = "BLOCK_QBO_SKU_MISMATCH"
                     reason = f"Existing exact-name item uses SKU {existing_sku}"
                 else:

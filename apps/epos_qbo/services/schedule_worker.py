@@ -53,6 +53,14 @@ def env_fallback_enabled() -> bool:
     return _env_flag("OIAT_SCHEDULER_ENABLE_ENV_FALLBACK", True)
 
 
+COMPANY_A_KEY = "company_a"
+
+
+def company_a_sales_automation_enabled() -> bool:
+    """Whether scheduled runs may include Company A sales (default: no, until W9)."""
+    return _env_flag("OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED", False)
+
+
 def _default_schedule_timezone() -> str:
     return str(
         getattr(
@@ -115,6 +123,14 @@ def _schedule_requires_company(schedule: RunSchedule) -> bool:
     return schedule.scope in {RunJob.SCOPE_SINGLE, RunJob.SCOPE_INVENTORY_PIPELINE}
 
 
+def _is_blocked_company_a_sales_schedule(schedule: RunSchedule) -> bool:
+    return (
+        schedule.scope == RunJob.SCOPE_SINGLE
+        and (schedule.company_key or "").strip() == COMPANY_A_KEY
+        and not company_a_sales_automation_enabled()
+    )
+
+
 def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime) -> dict[str, Any]:
     target_date = None
     inventory_options: dict[str, Any] = {}
@@ -132,6 +148,10 @@ def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime) -> dict[
         )
     else:
         target_date = get_target_trading_date(now=now)
+    # Company A sales stay out of automated all-company runs (system fallback and
+    # user-created schedules alike) until W9 go-live flips the opt-in flag.
+    if schedule.scope == RunJob.SCOPE_ALL and not company_a_sales_automation_enabled():
+        inventory_options["exclude_companies"] = [COMPANY_A_KEY]
     return {
         "scope": schedule.scope,
         "company_key": schedule.company_key or None,
@@ -302,6 +322,21 @@ def enqueue_run_for_schedule(
                 schedule=schedule,
                 event_type=RunScheduleEvent.TYPE_SKIPPED_INVALID,
                 message="Schedule is invalid: run once time is required.",
+            )
+            return None, RunScheduleEvent.TYPE_SKIPPED_INVALID
+        if _is_blocked_company_a_sales_schedule(schedule):
+            message = (
+                "Company A sales automation is disabled until go-live; "
+                "set OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1 to allow scheduled Company A sales runs."
+            )
+            schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_INVALID
+            schedule.last_error = message
+            schedule.last_fired_at = current
+            schedule.save(update_fields=["last_result", "last_error", "last_fired_at", "updated_at"])
+            _create_event(
+                schedule=schedule,
+                event_type=RunScheduleEvent.TYPE_SKIPPED_INVALID,
+                message=message,
             )
             return None, RunScheduleEvent.TYPE_SKIPPED_INVALID
         if _active_scheduled_run_exists(schedule):

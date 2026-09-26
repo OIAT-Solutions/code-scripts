@@ -1085,6 +1085,7 @@ def main(
     skip_download: bool = False,
     verbose_logs: bool = False,
     inventory_sync_mode: Optional[str] = None,
+    upload_dry_run: bool = False,
 ) -> int:
     """
     Full pipeline for a specific company:
@@ -1115,6 +1116,8 @@ def main(
         to_date: End date for range mode in YYYY-MM-DD format (must be used with from_date)
         skip_download: If True, skip EPOS download and use existing split files in uploads/range_raw/ (range mode only)
         inventory_sync_mode: Optional CLI override for qbo_upload inventory sync mode (inline/upload_fast)
+        upload_dry_run: Single-day only. Pass --dry-run to qbo_upload (build payloads and write
+            October approval evidence, no POST), then stop before reconcile/archive.
     """
     # Load company configuration
     try:
@@ -1539,6 +1542,9 @@ def main(
                 if persist_reconcile_to_metadata(repo_root, config.metadata_file, reconcile_result):
                     logging.info(f"Persisted reconciliation payload to metadata for {day_date}")
                 
+                from code_scripts.operations_controls import require_reconciliation_match
+                require_reconciliation_match(company_key, reconcile_result, business_date=day_date)
+
                 # Phase 5: Archive files
                 logging.info(f"\n=== Phase 5: Archive Files - {day_date} ===")
                 try:
@@ -1814,11 +1820,19 @@ def main(
                 qbo_upload_args.extend(["--inventory-sync-mode", inventory_sync_mode])
             if verbose_logs:
                 qbo_upload_args.append("--verbose-logs")
+            if upload_dry_run:
+                qbo_upload_args.append("--dry-run")
             run_step(
                 "Phase 3: Upload to QBO (qbo_upload)",
                 "qbo_upload.py",
                 qbo_upload_args
             )
+            if upload_dry_run:
+                logging.info(
+                    "Dry run: qbo_upload built payloads without posting; skipping reconcile and archive. "
+                    "Transformed CSV left in place for review."
+                )
+                return 0
             
             # Check upload stats after Phase 3 for partial failures
             if metadata_path.exists():
@@ -1857,6 +1871,9 @@ def main(
             # Persist reconcile payload into metadata before archive.
             if persist_reconcile_to_metadata(repo_root, config.metadata_file, reconcile_result):
                 logging.info("Persisted reconciliation payload to metadata")
+
+            from code_scripts.operations_controls import require_reconciliation_match
+            require_reconciliation_match(company_key, reconcile_result, business_date=target_date)
 
             # Phase 5: Archive files after successful upload and reconciliation
             logging.info("\n=== Phase 5: Archive Files ===")
@@ -2103,6 +2120,15 @@ Examples:
             "Default is company config/env; use only when intentionally overriding."
         ),
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Single-day only: pass --dry-run to qbo_upload (no QBO writes; writes Company A October "
+            "approval evidence), then stop before reconcile/archive."
+        ),
+    )
     args = parser.parse_args()
     
     if not args.company:
@@ -2112,6 +2138,9 @@ Examples:
     if (args.from_date is None) != (args.to_date is None):
         parser.error("--from-date and --to-date must be provided together")
     
+    if args.dry_run and (args.from_date is not None or args.to_date is not None):
+        parser.error("--dry-run supports single-day runs only (use --target-date)")
+
     # Validation: --skip-download only works in range mode
     if args.skip_download and (args.from_date is None or args.to_date is None):
         parser.error("--skip-download can only be used with --from-date and --to-date (range mode)")
@@ -2131,5 +2160,6 @@ Examples:
                 args.skip_download,
                 args.verbose_logs,
                 args.inventory_sync_mode,
+                args.dry_run,
             )
         )

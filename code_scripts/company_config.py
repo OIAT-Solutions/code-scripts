@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Set
 from datetime import date, datetime
 
-from code_scripts.paths import OPS_COMPANIES_DIR, REPO_CODE_SCRIPTS_DIR
+from code_scripts.paths import OPS_COMPANIES_DIR, REPO_CODE_SCRIPTS_DIR, STATE_ROOT
 
 
 def normalize_qbo_environment(raw_value: str | None, default: str = "production") -> str:
@@ -202,6 +202,12 @@ class CompanyConfig:
         raw = os.environ.get(env_key) or self._data.get("transform", {}).get("product_conversion", {}).get("file")
         if raw is None or not str(raw).strip():
             return None
+        if str(raw).startswith("state:"):
+            state_root = Path(os.environ.get("STATE_ROOT") or os.environ.get("OIAT_STATE_ROOT") or STATE_ROOT)
+            relative = Path(str(raw)[6:])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("Invalid mapping state path")
+            return state_root / relative
         path = Path(str(raw).strip()).expanduser()
         return path if path.is_absolute() else (REPO_CODE_SCRIPTS_DIR.parent / path).resolve()
 
@@ -235,9 +241,11 @@ class CompanyConfig:
             or self._data.get("transform", {}).get("product_conversion", {}).get("fail_closed_from", "")
         )
         text = str(raw or "").strip()
-        if not text:
-            return None
-        return datetime.strptime(text[:10], "%Y-%m-%d").date()
+        parsed = date.fromisoformat(text) if text else None
+        if self.company_key == "company_a":
+            cutoff = date(2026, 10, 1)
+            return min(parsed, cutoff) if parsed else cutoff
+        return parsed
 
     @property
     def product_conversion_approved_item_ids(self) -> Set[str]:

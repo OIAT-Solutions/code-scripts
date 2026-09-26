@@ -51,6 +51,13 @@ link_path() {
   ln -s "${src}" "${dst}"
 }
 
+# Seed once, never replace an installed approval (even an intentionally empty file).
+mkdir -p "${STATE_ROOT}/mappings/company_a"
+if [ ! -e "${STATE_ROOT}/mappings/company_a/approved.csv" ]; then
+  cp "${APP_ROOT}/templates/product_conversion_empty.csv" "${STATE_ROOT}/mappings/company_a/approved.csv"
+fi
+export COMPANY_A_PRODUCT_CONVERSION_FILE="${COMPANY_A_PRODUCT_CONVERSION_FILE:-${STATE_ROOT}/mappings/company_a/approved.csv}"
+
 seed_file_if_empty "${STATE_ROOT}/db.sqlite3" "${SEED_ROOT}/db.sqlite3"
 seed_file_if_empty "${STATE_ROOT}/code_scripts/qbo_tokens.sqlite" "${SEED_ROOT}/code_scripts/qbo_tokens.sqlite"
 seed_dir_if_empty "${COMPANIES_ROOT}" "${SEED_ROOT}/code_scripts/companies"

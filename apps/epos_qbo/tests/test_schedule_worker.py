@@ -325,6 +325,131 @@ class ScheduleWorkerTests(TestCase):
         self.assertTrue(fallback.enabled)
         self.assertEqual(fallback.scope, RunJob.SCOPE_ALL)
 
+    def test_system_fallback_excludes_company_a_until_explicit_opt_in(self):
+        fallback = RunSchedule.objects.create(
+            name=schedule_worker.FALLBACK_SCHEDULE_NAME,
+            enabled=True,
+            scope=RunJob.SCOPE_ALL,
+            cron_expr="0 18 * * *",
+            timezone_name="Africa/Lagos",
+            target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+            is_system_managed=True,
+        )
+        with mock.patch.dict("os.environ", {}, clear=True):
+            payload = schedule_worker._job_payload_from_schedule(fallback, now=self.fixed_now)
+        self.assertEqual(payload["inventory_options_json"]["exclude_companies"], ["company_a"])
+
+        with mock.patch.dict(
+            "os.environ", {"OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "1"}, clear=True
+        ):
+            opted_in = schedule_worker._job_payload_from_schedule(fallback, now=self.fixed_now)
+        self.assertNotIn("exclude_companies", opted_in["inventory_options_json"])
+
+    @mock.patch("apps.epos_qbo.services.schedule_worker.get_target_trading_date", return_value=date(2026, 2, 19))
+    def test_company_a_exclusion_keeps_trading_target_date(self, _mock_target_date):
+        # Regression (H2): the exclusion must not swallow the trading-date assignment.
+        for system_managed in (True, False):
+            with self.subTest(system_managed=system_managed):
+                schedule = RunSchedule(
+                    name=f"all-{system_managed}",
+                    enabled=True,
+                    scope=RunJob.SCOPE_ALL,
+                    cron_expr="0 18 * * *",
+                    timezone_name="Africa/Lagos",
+                    target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+                    is_system_managed=system_managed,
+                )
+                with mock.patch.dict("os.environ", {}, clear=True):
+                    payload = schedule_worker._job_payload_from_schedule(schedule, now=self.fixed_now)
+                self.assertEqual(payload["target_date"], date(2026, 2, 19))
+                self.assertEqual(payload["inventory_options_json"], {"exclude_companies": ["company_a"]})
+
+    @mock.patch("apps.epos_qbo.services.schedule_worker.get_target_trading_date", return_value=date(2026, 2, 19))
+    def test_inventory_pipeline_schedule_has_no_target_date_or_exclusion(self, _mock_target_date):
+        schedule = RunSchedule(
+            name="inv",
+            enabled=True,
+            scope=RunJob.SCOPE_INVENTORY_PIPELINE,
+            company_key="company_b",
+            cron_expr="0 20 * * 0",
+            timezone_name="Africa/Lagos",
+            inventory_options_json={"mode": "x"},
+            is_system_managed=True,
+        )
+        with mock.patch.dict("os.environ", {}, clear=True):
+            payload = schedule_worker._job_payload_from_schedule(schedule, now=self.fixed_now)
+        self.assertIsNone(payload["target_date"])
+        self.assertEqual(payload["inventory_options_json"], {"mode": "x"})
+
+    @mock.patch("apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job")
+    @mock.patch("apps.epos_qbo.services.schedule_worker.get_target_trading_date", return_value=date(2026, 2, 19))
+    def test_user_all_company_schedule_excludes_company_a_in_command(self, _mock_target_date, _mock_dispatch):
+        from apps.epos_qbo.services.job_runner import build_command_for_job
+
+        schedule = RunSchedule.objects.create(
+            name="User daily all",
+            enabled=True,
+            scope=RunJob.SCOPE_ALL,
+            cron_expr="*/5 * * * *",
+            timezone_name="UTC",
+            target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+            next_fire_at=self.fixed_now - timedelta(minutes=1),
+        )
+        with mock.patch.dict(
+            "os.environ", {"OIAT_SCHEDULER_ENABLE_ENV_FALLBACK": "0"}, clear=False
+        ), mock.patch.dict("os.environ", {"OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "0"}):
+            schedule_worker.process_schedule_cycle(now=self.fixed_now)
+        job = RunJob.objects.get(scheduled_by=schedule)
+        self.assertEqual(job.target_date.isoformat(), "2026-02-19")
+        command = build_command_for_job(job)
+        self.assertEqual(command[command.index("--exclude-company") + 1], "company_a")
+
+    @mock.patch("apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job")
+    @mock.patch("apps.epos_qbo.services.schedule_worker.get_target_trading_date", return_value=date(2026, 2, 19))
+    def test_company_a_single_sales_schedule_skipped_until_opt_in(self, _mock_target_date, _mock_dispatch):
+        schedule = RunSchedule.objects.create(
+            name="Company A daily",
+            enabled=True,
+            scope=RunJob.SCOPE_SINGLE,
+            company_key="company_a",
+            cron_expr="*/5 * * * *",
+            timezone_name="UTC",
+            target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+            next_fire_at=self.fixed_now - timedelta(minutes=1),
+        )
+        with mock.patch.dict("os.environ", {"OIAT_SCHEDULER_ENABLE_ENV_FALLBACK": "0"}, clear=False):
+            os_env = {"OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "0"}
+            with mock.patch.dict("os.environ", os_env):
+                job, result = schedule_worker.enqueue_run_for_schedule(schedule, now=self.fixed_now)
+            self.assertIsNone(job)
+            self.assertEqual(result, RunScheduleEvent.TYPE_SKIPPED_INVALID)
+            self.assertFalse(RunJob.objects.filter(scheduled_by=schedule).exists())
+            schedule.refresh_from_db()
+            self.assertIn("OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED", schedule.last_error)
+
+            with mock.patch.dict("os.environ", {"OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "1"}):
+                job, result = schedule_worker.enqueue_run_for_schedule(schedule, now=self.fixed_now)
+            self.assertIsNotNone(job)
+            self.assertEqual(job.company_key, "company_a")
+            self.assertEqual(job.target_date.isoformat(), "2026-02-19")
+
+    @mock.patch("apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job")
+    @mock.patch("apps.epos_qbo.services.schedule_worker.get_target_trading_date", return_value=date(2026, 2, 19))
+    def test_other_company_single_schedule_unaffected(self, _mock_target_date, _mock_dispatch):
+        schedule = RunSchedule.objects.create(
+            name="Company B daily",
+            enabled=True,
+            scope=RunJob.SCOPE_SINGLE,
+            company_key="company_b",
+            cron_expr="*/5 * * * *",
+            timezone_name="UTC",
+            target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+        )
+        with mock.patch.dict("os.environ", {"OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "0"}):
+            job, result = schedule_worker.enqueue_run_for_schedule(schedule, now=self.fixed_now)
+        self.assertEqual(result, RunScheduleEvent.TYPE_QUEUED)
+        self.assertEqual(job.inventory_options_json, {})
+
     @mock.patch("apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job")
     @mock.patch("apps.epos_qbo.services.schedule_worker.get_target_trading_date", return_value=date(2026, 2, 19))
     def test_process_schedule_cycle_records_heartbeat(self, _mock_target_date, _mock_dispatch):

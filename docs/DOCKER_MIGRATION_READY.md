@@ -54,7 +54,8 @@ This is cleaner than trying to copy raw Docker volumes between hosts unless you 
 
 ## State paths to copy onto the new server before bootstrap
 
-Copy these from the current server into the repo working tree on `oiat-srv-01`:
+Copy the application files into the repo working tree and restore the persistent
+state files into the paths shown below on `oiat-srv-01`:
 
 - `db.sqlite3`
 - `code_scripts/qbo_tokens.sqlite`
@@ -63,6 +64,8 @@ Copy these from the current server into the repo working tree on `oiat-srv-01`:
 - `code_scripts/logs/`
 - `code_scripts/reports/`
 - `code_scripts/outputs/`
+- `/data/mappings/company_a/approved.csv` and its versioned mapping/approval receipt files
+- `/data/company_a_posting_hold.json` and `/data/company_a_proposals.sqlite` when present
 
 Then run:
 
@@ -83,6 +86,12 @@ docker compose run --rm --profile bootstrap bootstrap
 docker compose up -d caddy web scheduler
 docker compose logs -f caddy web scheduler
 ```
+
+Before W9 approval, keep `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=0` (the
+Compose default). The scheduler's system fallback continues to run configured
+companies such as Company B, while excluding Company A. Set it to `1` only as
+part of the separately approved W9 activation, after checking the installed
+mapping SHA, posting hold state, and exact approved batch manifest.
 
 ## Post-migration smoke tests
 
@@ -125,6 +134,7 @@ After migration, back up the Docker volume-backed state on `oiat-srv-01` regular
 - starting `web` and `scheduler` on the new host before seeding state
 - forgetting that `bootstrap` is a one-time import step, not a normal update step
 - forgetting to seed `code_scripts/companies/*.json` on the volume after migration — the portal reads from the DB, but `run_all_companies.py` / `run_pipeline.py` read the JSON files. If the volume's companies directory is empty, scheduled and Quick Sync runs fail with "No runnable companies found." Fix: `docker compose exec web python manage.py sync_companies_to_json` once after bootstrap
+- forgetting to migrate `mappings/company_a/` and posting-control state — the entrypoint creates a header-only mapping when the persistent file is absent; restore the approved mapping and verify its SHA before enabling Company A
 - using a Cloudflare proxied record instead of `DNS only`
 - assuming Cloudflare is acting as a WAF here when it is not
 - leaving Tailscale access too broad
