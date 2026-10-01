@@ -1,156 +1,121 @@
 # Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
 
-**Read this before any QBO write, inventory change, or Company A pipeline change.**
-Longer background: `docs/AKPONORA_COGS_RECOVERY_PLAN.md`. If that file conflicts with this one, **this file wins**.
-Start-now execution status: `docs/AKPONORA_OCT1_START_NOW_STATUS_18_Sep_2026.md`.
-Full calendar/workstreams: `../MISC/AKPONORA Investigation/Chart of Accounts/AKPONORA_Oct1_Inventory_Golive_Plan_18_Sep_2026.md`.
+**Read this before any QBO write, inventory change, or Company A pipeline change.** This file wins over every other plan document.
 
-**Company:** AKPONORA VENTURES LTD. (`company_a`, QBO realm `9341455406194328`, production)
-**As of:** 18 September 2026
-**Goal:** Solid **Inventory-tracked** restart ~1 Oct 2026. Catch-all / Non-inventory is **history only** (Jan–Sep). It is not the October end-state.
+| Need | Read |
+| --- | --- |
+| Tonight/tomorrow, step by step with commands | [`docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md) |
+| What has already been posted, and when | [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md) |
+| Code contract, posting controls, incident response | [`docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md`](docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md), [`docs/AKPONORA_OPERATIONS_CONTROLS.md`](docs/AKPONORA_OPERATIONS_CONTROLS.md) |
+| Operator tools (EPOS pulls, mapping, renames, creates, journals) | [`code_scripts/scripts/akponora_cutover/README.md`](code_scripts/scripts/akponora_cutover/README.md) |
+| Bookkeeper rules | [`docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md`](docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md) |
+| Background (Jan–Sep recovery) | `docs/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
 
-Sales cannot be paused. Historical EPOS quantities were messy. Close enough is acceptable for the past. From 1 Oct, till sales must hit **new Inventory Ids only**.
+**Company:** AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `9341455406194328`, production).
+**As of:** 30 September 2026.
+**Goal:** from **1 Oct 2026**, till sales post only to **new QBO items**. These are Inventory `AKP-{EPOS master ProductID}`, or NonInventory `AKP-NS-{ProductID}` for products EPOS does not stock-track. QBO perpetual FIFO then gives COGS. Jan–Sep is history on the catch-all.
 
 ---
 
 ## Non-negotiables
 
-1. **Do not delete** existing QBO products or historical sales receipts.
-2. **Do not bulk-inactivate** legacy QBO Inventory items. Inactivation zeros QtyOnHand and posts value to COGS / Inventory Shrinkage. `qbo_inv_manager.py inactivate-all` is **forbidden** on Company A except sequenced W10 dry-run batches after chat yes.
-3. **Do not patch QtyOnHand** on the existing ~4,316 legacy Inventory items to “match EPOS.”
-4. **Do not post QBO `InventoryAdjustment`** on the sales/sync path (quantity-apply stays removed). After Oct go-live, the **only** allowed legacy adjustment is qty → 0 offset to **`300150`**, never Shrinkage, never “match EPOS,” and only after a per-batch dry-run + chat yes.
-5. **Do not import** a fresh catalogue onto **existing QBO names**. January already did a fake opening (importer default QtyOnHand **10**; sales upload auto-creates Inventory items).
-6. **Do not use barcodes** as product keys. Use EPOS Product ID, then SKU, then approved unique exact name.
-7. **Do not infer pack size from trailing `*N`** once conversion mode is on. Use the staff-approved sale multiplier only.
-8. **Do not copy carton/pack cost** onto an each/unit item unchanged.
-9. Legacy QBO Inventory items are **frozen** until W5 (rename `LEGACY — {name}` to free a display name) and W10 (safe inactivation). They are excluded from Oct sales mapping.
-10. **October sales targets are new Inventory items** (new Ids, `AKP-` SKU, InvStartDate **2026-10-01**, Asset account **Inventory Asset id `77` only** — never `120000`). Catch-all Non-inventory `AKP-UNMAPPED-EPOS-SALES` Id `15030` is **Jan–Sep history only**. TxnDate ≥ **2026-10-01** is fail-closed: no catch-all, no auto-create.
-11. **Do not create Inventory items on the sales path.** Company A `create_inventory_item` stays refused. Oct creates are a **separate approved batch** after chat yes.
-12. Bookkeeper freeze: **no new Inventory items**; **no bills to Inventory products or `120000`**. Use `200100` / `200201` / `200202` / `200300` until the new catalogue exists. The 17 Sep Red Bull create is the example of what must stop.
+1. **Never delete** QBO products or historical sales receipts.
+2. **Never bulk-inactivate** legacy Inventory items: inactivation zeros qty and posts value to COGS/Shrinkage. `qbo_inv_manager.py inactivate-all` is forbidden on Company A.
+3. **Never patch QtyOnHand** on legacy items "to match EPOS". **Never post `InventoryAdjustment`** on the sales/sync path. After go-live the only allowed legacy adjustment is qty → 0 offset to `300150` (W10, per-batch dry-run + chat yes).
+4. **Never import a catalogue onto existing QBO names**, and never create items with default qty (January's importer used qty 10).
+5. **Product identity = EPOS Product ID**, then SKU, then approved unique exact name. **Never barcodes.** Never infer pack size from a trailing `*N`. Use the approved sale multiplier (= what EPOS deducts).
+6. **One physical product = one QBO Inventory item.** Crate/pack/each EPOS buttons map to that item with a multiplier; purchases and costs use the same unit. Never copy a carton cost onto a unit item.
+7. **October sales targets are the new items only.** TxnDate ≥ 2026-10-01 fails closed: no catch-all `15030`, no legacy items, no auto-create. The sales path never creates or patches items (`create_inventory_item` refuses Company A).
+8. **Legacy items are frozen.** They are renamed `LEGACY — {name}` (W5, name only) before the creates, and inactivated safely only after stable operation (W10).
+9. **Asset account for new Inventory is Inventory Asset `77` only.** The `120000` family must end at ₦0 and receive nothing new.
+10. **Bookkeeper: bills and customer invoices are paused** until the owner says the fix is complete. No backdating. Nothing on legacy Inventory items. No new items.
+11. **Every production QBO write needs a chat yes for that specific action** (see Write policy). Dry-run first, verify after.
 
 ---
 
-## End state (October)
+## October end state
 
 | Layer | Source of truth |
 | --- | --- |
-| Physical quantity, packs, till buttons | EPOS |
-| Product identity going forward | Approved Product Conversion List → **new** Inventory name + `AKP-` SKU + **new QBO Item Id** |
-| Daily sales in QBO from 1 Oct | New **Inventory** items only (approved Ids). Unmapped line → fail the day |
-| Financial Inventory Asset | New-item subledger + GL. Opening qty from **30 Sep** EPOS zero-floor, created with InvStartDate 2026-10-01 |
-| Jan–Sep sales history | Catch-all Non-inventory `15030` (already posted through 15 Sep; 16–30 Sep still to backfill) |
-| Month-end COGS through Sep | `opening + verified purchases − EPOS closing value`, or option-1 stock-movement journal when purchases already sit on `200xxx` |
-| Legacy catalogue | Frozen, then renamed `LEGACY —` where needed, then inactivated **after** go-live (W10). Not left active forever |
+| Physical stock, packs, till buttons, pack deductions | EPOS |
+| Product identity | Approved mapping `STATE_ROOT/mappings/company_a/approved.csv` (EPOS ProductID → new QBO Item Id + multiplier) |
+| Daily sales from 1 Oct | New Inventory / `AKP-NS-` NonInventory items only. Any unmapped line fails the day |
+| Inventory value | New-item subledger = IA `77` GL. Opening = 30 Sep EPOS count, InvStartDate 2026-10-01 |
+| COGS from 1 Oct | QBO FIFO on new items; month-end posts only a verified count variance |
+| Purchases after the fix | Item lines on the **new** `AKP-` items in the item's unit (e.g. 5 cartons × 24 = 120 cans). `AKP-NS-` items: purchases expense to 200xxx |
+| Jan–Sep sales history | Catch-all `15030` (posted through 24 Sep; 25–30 Sep pending) |
+| Legacy catalogue | Renamed `LEGACY —` (W5), excluded from mapping, inactivated later (W10) |
 
-A Non-inventory / catch-all October is **not** the plan.
-
-**Critical create-night rule:** creating new Inventory with QtyOnHand **debits Inventory Asset**. The 16 Sep equity true-up already set IA to EPOS. Same-day offset required (credit IA / debit `300150`) so IA after create equals **30 Sep EPOS only**, not EPOS + leftover ghost. Recalc live that night. Chat yes before posting.
-
----
-
-## What is already done
-
-- Inventory-sync quantity apply is removed in code. Do not re-enable it.
-- Transfer **`68049`** (31 Mar 2026, ₦58,659,919, Moniepoint `6397730972` → `120000 - Inventory`, memo “moniepoint sales for march 2026”) has been **deleted**. Same amount still exists as Transfer **`68091`** (22 Apr, same Moniepoint → Undeposited Funds). Leave `68091`.
-- Jan–Jun zero-floor journals posted: `COGS-ZF-2026-01` … `COGS-ZF-2026-06` (debit Inventory Asset id `77`, credit `COGS Historical Correction - Jan-Jun 2026` id `1150040049`, total ₦281,069,104.71). QBO JournalEntry Ids `74403`–`74407` (Jan–May) plus `74556` (June). **Sep month-end COGS is not posted.**
-- July/August journals **updated 16 Sep 2026** (option 1): DocNumbers `COGS-2026-07` JournalEntry `75097` and `COGS-2026-08` `75098`. Inventory-movement only: debit Inventory Asset `77` / credit `200000 - Cost of sales` `76`.
-- Catch-all Non-inventory **`AKP-UNMAPPED-EPOS-SALES`** Id `15030` created 16 Sep 2026 for **history**. Income `1150040024` (400100). Do not use it for TxnDate ≥ 2026-10-01.
-- Inventory GL true-up 16 Sep 2026: Equity **`300150`** Id `86`; `INV-CONS-2026-09-16` `75153`; `INV-EQ-2026-09-16` `75154` writing IA down to EPOS 16 Sep zero-floor **₦142,028,049.94**.
-- Sales backfill to catch-all through **15 Sep**. **16 Sep onward** not posted. Pipeline/server **off**.
-- Product conversion **on**. Empty approved map still in config until W7 fills new Inventory Ids. `fail_closed_from`: **2026-10-01**. `auto_fix_wrong_type_items`: **false**. Sales upload hard-blocks unless conversion is on; `create_inventory_item` refuses Company A / conversion-mode creates.
-- Live QBO 18 Sep W1 dump (read-only): **4,316** active Inventory; **2** active Non-inventory; IA still **₦142,028,049.94**. `120100` ₦207,339.54 and `120202` ₦22,379.81 have **refilled** after the 16 Sep zero. 9 Inventory items created in September, including **REDBULL WATERMELON** Id `15031` on 17 Sep.
-- 16 Sep EPOS pack build-now (W2): **5,504** non-negative unique-name rows plus **160** negatives at opening 0 = **5,664** dry-run create payloads (qty 0). **3,786** of those collide with a **live active** QBO Inventory name (W5). Staff 237 yellow columns: **0 filled**. 237 does **not** block the 5,664.
+**Create-night rule:** creating Inventory with QtyOnHand debits IA. A same-night offset (credit IA `77` / debit `300150` = `B + C − V`) makes IA after the creates equal the **30 Sep EPOS value V** only. Recalculate live. Chat yes.
 
 ---
 
-## Workstreams
+## Status (30 Sep 2026)
 
-| ID | What | Status 18 Sep |
+| ID | What | Status |
 | --- | --- | --- |
-| W0 | Bookkeeper freeze | Note written; human must send/enforce |
-| W1 | Live QBO item dump | **Done** (read-only artifacts) |
-| W2 | Mapping workbook from 16 Sep pack | **Done** (no live creates) |
-| W3 | Staff 237 yellow columns (till-sold first) | Open — 0 filled; does not block W2/W4 |
-| W4 | Pipeline: Inventory targets, fail-closed from 1 Oct, no auto-create | **Code + tests in this PR**; server still off |
-| W5 | Rename colliding legacy names `LEGACY — {name}` | **Wait for chat yes** |
-| W6 | 30 Sep EPOS pack | Wait |
-| W7 | Create new Inventory (qty from 30 Sep, InvStartDate 1 Oct) + IA offset | **Wait for chat yes** — dry-run qty-0 payloads exist |
-| W8 | Sep close: 16–30 Sep catch-all backfill + option-1 Sep COGS | Wait for 30 Sep + chat yes |
-| W9 | Pipeline on | Wait |
-| W10 | Safe legacy inactivation (lab → Z0 → qty→0 to 300150 → inactivate) | After W9 stable |
+| W0 | Bookkeeper freeze (bills + invoices paused) | Note updated 26 Sep; owner to send/enforce |
+| W2/W3 | Canonical mapping | **Done**: final map approved by the owner (6,150 products, 99.89% of Sep till value). Item Ids are filled after W7 |
+| W4 | Pipeline code (October contract, controls, scheduler gate) | **Merged in PR #62**. Not deployed |
+| W5 | Rename 3,877 legacy items `LEGACY — …` | **Approved by owner; not executed.** The owner runs it (agent QBO writes are blocked by the permission system) |
+| — | QBO closing date 31 Aug 2026 | Owner sets in the QBO UI |
+| W6 | 30 Sep EPOS pack (stock count, product list, sales, POs) | Tonight after close |
+| W8 | 25–30 Sep sales backfill to `15030`; September close journals | After W6, chat yes |
+| W7 | Create 3,939 Inventory + 536 NonInventory items; IA offset; install mapping | After W5 + W6, chat yes |
+| W9 | Pipeline on for Company A (`OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`) | After a clean 1 Oct dry-run, chat yes |
+| W10 | Safe legacy inactivation | After W9 is stable |
 
-Do **not** wait on 237 or 30 Sep to keep mapping/code current. Do **not** go live onto legacy items to “make the date.”
+Open items that do **not** block go-live (tracked in the runbook):
+
+- 536 EPOS-untracked products. The owner may turn frozen food, eggs and rice into tracked EPOS masters (one master per family in grams/each, children deduct). Re-pull and rebuild the mapping when done; until then they go NonInventory.
+- 109 pack-named children where EPOS deducts 1 (`pricing_review.csv`): check the EPOS Master Products amount.
+- Staff questions: Ernest's 19 Sep stock adds (deliveries or recounts?), and duplicate POs `3828`/`3829`/`3855`/`3861`.
+- Undeposited Funds is ₦0 through 24 Sep. Receipts posted from 25 Sep on land in `100900` and need depositing by the same till-sheet method (`akponora_cutover/uf_*`).
 
 ---
 
-## Historical correction rules
+## Accounting rules
 
-```text
-Opening inventory value + verified purchases − EPOS closing value = COGS
-```
-
-When purchase bills already sit on `200100`/`200201`/`200202`/`200300`, the month-end journal is **only the stock movement** (`closing − opening`). Jul/Aug 2026 use this method. September waits for the 30 Sep pack.
-
-- Negative EPOS/QBO product qty valued at **zero** unless staff confirm stock exists.
-- Missing cost on positive stock: create with PurchaseCost 0, flag for staff; do not invent cost.
-- 16–30 Sep missing sales: backfill as **sales onto catch-all `15030`**, not onto new Oct Inventory (InvStartDate would reject).
+- **Through September (periodic):** `opening stock + purchases − closing count = COGS`. The September close is one journal set (see runbook):
+  - IA `77` to the 30 Sep EPOS value;
+  - zero every 120xxx sub-account into the matching 200xxx (this clears the GPFH invoice COGS);
+  - a GRNI accrual for unbilled September POs: post-16-Sep receipts to COGS, pre-reset receipts against `300150`, ex-tax; possible-duplicate POs excluded.
+- Negative counts are valued at 0. Missing cost: create at 0 and flag; never invent cost.
+- Don't edit or void old bills or invoices. Correct by journal in the open period (the August-dated GPFH COGS is corrected in September with a memo).
+- **From October (perpetual):** QBO FIFO. Month-end posts only the verified variance between the new-item subledger and the EPOS count.
 
 ---
 
 ## Code traps (do not repeat January)
 
-| Trap | Where |
+| Trap | Guard |
 | --- | --- |
-| Importer default QtyOnHand **10** | `code_scripts/scripts/qbo_inv_manager.py` — default is now **0**; live Company A import is disabled |
-| Sales upload creates Inventory | `qbo_upload.py` `create_inventory_item` — refused for Company A / conversion |
-| `auto_fix_wrong_type_items: true` | Must stay **false** for Company A |
-| Catch-all on Oct runs | `fail_closed_from: 2026-10-01` — unmapped Oct lines fail the batch |
-| Mapping to a legacy Inventory **name** whose Id is not in the approved new-Id list | Fail closed |
-| Trailing `*N` pack expansion | Bypassed when conversion is on |
-| Conversion flag off | Recreates FIFO COGS on the next sales upload. Do not set false |
-| `inactivate-all` on Company A | Forbidden (zeros qty → Shrinkage) |
-
-Conversion mode must keep: Approved rows only; ID → SKU → optional unique exact name; Oct targets = **approved Inventory Ids**; no sales-path Inventory create/patch.
+| Importer default QtyOnHand 10 | `qbo_inv_manager.py` default 0; live Company A import disabled |
+| Sales upload creating Inventory | `create_inventory_item` refused for Company A / conversion mode |
+| `auto_fix_wrong_type_items` | Must stay `false` for Company A |
+| Conversion flag off | Recreates legacy FIFO COGS. Never set false |
+| Catch-all or legacy target in October | `october_target_error` fails the day |
+| Missing mapping file | Local: `runtime/mappings/company_a/approved.csv` must exist (header-only before W7). Never fall back to an old map |
+| Scheduler posting Company A early | Excluded unless `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1` |
+| Running backfills from the wrong place | Run from the repo root: `OIAT_COMPANIES_DIR=code_scripts/companies python run_pipeline.py --company company_a …` (tokens in `runtime/`) |
 
 ---
 
-## QBO write policy
+## Write policy
 
-Allowed without extra approval:
+**Allowed without asking:** read-only QBO/EPOS queries and reports; code and tests; mapping/workbook files on disk; dry-runs.
 
-- Read-only queries and reports.
-- Pipeline code + tests.
-- Mapping CSV / workbook updates on disk.
-- Dry-run create payloads (not posted).
+**Needs a chat yes for the specific action:** sales backfills; journals (Sep close, GRNI, IA offset); W5 renames; W7 creates; installing the mapping; turning the pipeline/scheduler on; any InventoryAdjustment; inactivating any item; Undeposited Funds deposits/transfers; any Bill Payment on `66251`; creating accounts (e.g. the GRNI liability); changing QBO settings.
 
-Needs explicit human approval in chat before doing:
-
-- Posting journals (Sep COGS, create-night IA offset).
-- Creating Inventory items in production QBO (W7).
-- Renaming legacy items `LEGACY —` (W5).
-- Inactivating any Inventory item (W10 lab/batches).
-- 16–30 Sep sales backfill.
-- Turning the pipeline/server on.
-- Any Bill Payment on `66251`.
-- Any InventoryAdjustment, including qty → 0.
-
-Forbidden:
-
-- InventoryAdjustment posting on the sales/sync path.
-- Bulk inactivation or delete of products.
-- QtyOnHand edits on legacy items to match EPOS.
-- Re-running January-style import with qty 10.
-- Catch-all as the October sales target.
-- Banking Undeposited Funds as part of this cutover.
+**Forbidden:** InventoryAdjustment on the sales path; bulk inactivation or deletion of products; legacy qty edits to match EPOS; January-style qty-10 import; catch-all or legacy items as October targets.
 
 ---
 
-## Evidence locations
+## Evidence locations (gitignored — never commit)
 
-- W1/W2/dry-run artifacts (gitignored live stock): `outputs/akponora_oct1_golive_2026-09-18/`
-- 16 Sep conversion rebuild: `outputs/akponora_from_2026-08-22/`
-- EPOS 16 Sep pack: `../MISC/AKPONORA Investigation/COGS Analysis/As of 16th September 2026/`
-- Bookkeeper freeze note: `docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md`
-- Do not commit QBO exports, tokens, or workbooks with live stock.
+- `outputs/nora_gaps_2026-09-25/`: final mapping, W5 plan, catalogue pulls, Sep close draft, bills/PO drafts, stock bridge, invoice drift, backfill verification.
+- `outputs/akponora_uf_allocation_2026-09-26/`: Undeposited Funds work.
+- EPOS packs: `../MISC/AKPONORA Investigation/COGS Analysis/As of …/`.
+- Do not commit QBO exports, tokens, workbooks with live stock, or `runtime/`.
 
 Company B (Goldplates) is out of scope unless asked.

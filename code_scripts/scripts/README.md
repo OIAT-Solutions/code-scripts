@@ -7,5 +7,6 @@ Run all commands from the **repo root** (`code-scripts`).
 | [invoice/](invoice/) | Transform raw invoice CSV, prepare (alias/fuzzy match), import invoices into QBO |
 | [bills/](bills/) | Export QBO Bills to CSV, re-import bills from CSV |
 | [qbo_queries/](qbo_queries/) | Ad-hoc QBO queries (items, accounts, etc.) |
+| [akponora_cutover/](akponora_cutover/) | Akponora / NORA (company_a) cutover tools (catalogue pull, mapping, W5, backfill checks, month close, bills, stock bridge, UF) |
 | `qbo_delete_sales_receipts.py` | Delete sales receipts in QBO (e.g. by date or DocNumber) |
 | `qbo_inv_manager.py` | Inventory / InvStartDate management |
