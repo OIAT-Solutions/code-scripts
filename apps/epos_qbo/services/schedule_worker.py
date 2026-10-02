@@ -61,6 +61,24 @@ def company_a_sales_automation_enabled() -> bool:
     return _env_flag("OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED", False)
 
 
+def company_a_daily_run_enabled() -> bool:
+    """When on, Company A runs only through ``code_scripts.akponora_ops.daily_run`` (scheduled by the
+    akponora-ops container), so this worker never schedules Company A sales itself."""
+    return _env_flag("OIAT_COMPANY_A_DAILY_RUN_ENABLED", False)
+
+
+def company_a_scheduled_sales_allowed() -> bool:
+    return company_a_sales_automation_enabled() and not company_a_daily_run_enabled()
+
+
+def company_a_blocked_message() -> str:
+    if company_a_daily_run_enabled():
+        return ("Company A is scheduled by the Akponora daily run (OIAT_COMPANY_A_DAILY_RUN_ENABLED=1); "
+                "this schedule does not run Company A to avoid a double run.")
+    return ("Company A sales automation is disabled until go-live; "
+            "set OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1 to allow scheduled Company A sales runs.")
+
+
 def _default_schedule_timezone() -> str:
     return str(
         getattr(
@@ -127,7 +145,7 @@ def _is_blocked_company_a_sales_schedule(schedule: RunSchedule) -> bool:
     return (
         schedule.scope == RunJob.SCOPE_SINGLE
         and (schedule.company_key or "").strip() == COMPANY_A_KEY
-        and not company_a_sales_automation_enabled()
+        and not company_a_scheduled_sales_allowed()
     )
 
 
@@ -149,8 +167,9 @@ def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime) -> dict[
     else:
         target_date = get_target_trading_date(now=now)
     # Company A sales stay out of automated all-company runs (system fallback and
-    # user-created schedules alike) until W9 go-live flips the opt-in flag.
-    if schedule.scope == RunJob.SCOPE_ALL and not company_a_sales_automation_enabled():
+    # user-created schedules alike) until W9 go-live flips the opt-in flag, and always
+    # while the Akponora daily run owns Company A (no double runs).
+    if schedule.scope == RunJob.SCOPE_ALL and not company_a_scheduled_sales_allowed():
         inventory_options["exclude_companies"] = [COMPANY_A_KEY]
     return {
         "scope": schedule.scope,
@@ -325,10 +344,7 @@ def enqueue_run_for_schedule(
             )
             return None, RunScheduleEvent.TYPE_SKIPPED_INVALID
         if _is_blocked_company_a_sales_schedule(schedule):
-            message = (
-                "Company A sales automation is disabled until go-live; "
-                "set OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1 to allow scheduled Company A sales runs."
-            )
+            message = company_a_blocked_message()
             schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_INVALID
             schedule.last_error = message
             schedule.last_fired_at = current

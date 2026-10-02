@@ -568,6 +568,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--out", help="run folder (default outputs/item_guard_<UTC timestamp>/)")
     parser.add_argument("--no-slack", action="store_true", help="never post to Slack")
     parser.add_argument("--fail-on-alert", action="store_true", help=f"exit {EXIT_ALERT} when any ALERT exists")
+    parser.add_argument("--no-state", action="store_true",
+                        help="dry-run: do not advance the stored cursor / legacy snapshot")
     return parser.parse_args(argv)
 
 
@@ -608,9 +610,10 @@ def main(
     if not args.no_slack and should_send(report):
         slack(text)
 
-    dump_json(snapshot_path, guard.legacy_state())
-    dump_json(cursor_path, {"since": report["next_cursor"], "previous_since": report["since"],
-                            "advanced_at": iso(now()), "report": str(report_path)})
+    if not args.no_state:
+        dump_json(snapshot_path, guard.legacy_state())
+        dump_json(cursor_path, {"since": report["next_cursor"], "previous_since": report["since"],
+                                "advanced_at": iso(now()), "report": str(report_path)})
     print(text)
     return EXIT_ALERT if args.fail_on_alert and report["counts"][ALERT] else 0
 

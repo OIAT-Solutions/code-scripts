@@ -7,16 +7,25 @@
 
 ---
 
-## What runs every day
+## What runs every day: `daily_run`
 
-| Order | Job | When | What |
-| --- | --- | --- | --- |
-| 1 | **Catalogue sync** | Before sales (opt-in), or on its own cron | New EPOS products → mapping rows; new masters → QBO items at **qty 0** |
-| 2 | **Sales pipeline** | 18:00 Lagos once W9 is on | Yesterday's till → SalesReceipts on mapped items only |
-| 3 | **Bills sync** | Own cron (e.g. mid-morning / afternoon) | Received EPOS POs → unpaid QBO Bills for human review |
-| 4 | **Item guard** | Own cron (e.g. after sales) | Read-only scan; Slack on ALERT / WARN |
+One routine runs everything, in order, for the last closed business day. On the server it runs at 06:00 Lagos (setup, env, holds and approvals: [`SERVER_SETUP.md`](SERVER_SETUP.md)):
 
-Until W9, sales are still posted by hand from this repo (dry-run, then chat yes + post). The three ops jobs live under `code_scripts/akponora_ops/`.
+```bash
+.venv/bin/python -m code_scripts.akponora_ops.daily_run [--date YYYY-MM-DD] [--dry-run] [--only catalogue,bills,sales,guard,uf]
+```
+
+| Order | Step | What |
+| --- | --- | --- |
+| 1 | **catalogue** | `catalogue_sync scheduled`: new EPOS products → mapping rows; new masters → QBO items at **qty 0** (auto only under its gates/cap). A failure here does not stop bills or sales; sales still fail closed on unmapped products |
+| 2 | **bills** | `bills_sync scheduled`: received POs (that day + earlier pending days) → **unpaid** Bills. New suppliers → QBO vendor (gated); near matches HOLD. PO payment mode → Bill memo hint |
+| 3 | **sales** | `run_pipeline --target-date <day>` via the standing auto-approval; without it, a dry-run and exit 3. Skipped while the posting hold is in place |
+| 4 | **guard** | `item_guard`: read-only, report only |
+| 5 | **uf** | Undeposited Funds placeholder (`OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`): balance + days since last deposit. Never deposits |
+
+Exit 0 = clean, 3 = waits for review, 2 = a step failed. One Slack summary; evidence under `STATE_ROOT/ops/company_a/daily/<day>/`. It holds the global run lock. While `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`, the portal scheduler never schedules Company A, and the individual job crons below are ignored. Each job below can still be run on its own.
+
+Until the server is on, sales are still posted by hand from this repo (dry-run, then chat yes + post).
 
 ---
 
@@ -56,8 +65,9 @@ Until W9, sales are still posted by hand from this repo (dry-run, then chat yes 
 
 - Only POs **received on or after 1 Oct**. September receipts stay against GRNI `210200` (Id 87).
 - Lines are in the QBO item's unit: `QuantityReceived × Staff Approved Purchase Multiplier`. Unmapped products or vendors HOLD the whole PO.
-- Bills are left **unpaid**. Never creates BillPayments, vendors, items or accounts.
-- Vendor map: `STATE_ROOT/mappings/company_a/vendors.csv` (human-approved from `vendors-suggest`).
+- Bills are left **unpaid**. Never creates BillPayments, items or accounts. The EPOS PO "MODE OF PAYMENT" (CASH / TRANSFER; typos like `PAYMENY` are tolerated) is written into the Bill PrivateNote as a payment hint.
+- Vendor map: `STATE_ROOT/mappings/company_a/vendors.csv` (human-approved from `vendors-suggest`, or `auto:<ref>` rows).
+- **Automatic vendors** (`scheduled` only, never `plan`; off by default): when a PO supplier is not in vendors.csv, it is scored against all live QBO vendors. Best score < 0.75 (genuinely new) → created with DisplayName = the cleaned EPOS supplier name, provided `OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1`, `OIAT_COMPANY_A_VENDOR_APPROVAL_REF` is set, the name is free across Vendors/Customers/Employees, and the per-run cap is not reached (`OIAT_COMPANY_A_VENDOR_AUTO_MAX`, default 5). Score ≥ 0.75 (possible typo/duplicate) → HOLD with the candidates. Evidence: `vendor_actions.json`. Shared code with `vendor_admin`: `code_scripts/akponora_ops/vendors.py`.
 - **Automated post** (off by default): `OIAT_COMPANY_A_BILLS_AUTO_POST=1` + approval ref + per-bill / per-run caps.
 
 ---
@@ -77,9 +87,9 @@ First live run (2 Oct): October sales clean; 11 negative items pending bills; **
 
 ---
 
-## Ops scheduler (optional container)
+## Ops scheduler (container)
 
-Separate from the portal sales scheduler. Opt-in:
+Separate from the portal sales scheduler. With `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1` it runs only `daily_run` (`OIAT_COMPANY_A_DAILY_RUN_CRON`, default `0 6 * * *`), and the individual crons below are ignored unless `OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS=1`. **Keep them unset while the daily run is on.** Opt-in:
 
 ```bash
 docker compose --profile akponora-ops up -d akponora-ops
@@ -106,6 +116,8 @@ List / one-shot:
 ---
 
 ## Sales (until / after W9)
+
+From W9 the server's `daily_run` posts sales ([`SERVER_SETUP.md`](SERVER_SETUP.md)).
 
 Until the server is deployed and W9 is on, each day from this laptop:
 

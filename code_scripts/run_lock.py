@@ -51,10 +51,12 @@ class GlobalRunLock:
                 try:
                     msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)  # pragma: no cover
                 except OSError:
+                    self._close_unacquired()
                     return LockResult(acquired=False, reason="another run is already active")
             else:
                 fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            self._close_unacquired()
             return LockResult(acquired=False, reason="another run is already active")
 
         self._handle.seek(0)
@@ -72,6 +74,11 @@ class GlobalRunLock:
         os.fsync(self._handle.fileno())
         self._acquired = True
         return LockResult(acquired=True, reason="acquired")
+
+    def _close_unacquired(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
     def release(self) -> None:
         if not self._handle or not self._acquired:

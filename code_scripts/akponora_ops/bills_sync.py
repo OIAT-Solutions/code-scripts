@@ -2,8 +2,11 @@
 
 Realm 9341455406194328 (production). AGENTS.md governs: Bills only, on the new ``AKP-`` /
 ``AKP-NS-`` items, never LEGACY items, the catch-all 15030 or the 120xxx accounts. Bills are
-left UNPAID (the owner pays them in QBO); this tool never creates BillPayments, vendors, items
-or accounts, never posts InventoryAdjustment and never edits or voids an existing bill.
+left UNPAID (the owner pays them in QBO); this tool never creates BillPayments, items or accounts,
+never posts InventoryAdjustment and never edits or voids an existing bill. It creates a QBO vendor
+only in ``scheduled`` mode, for a genuinely new EPOS supplier, behind its own env gate and cap
+(see ``code_scripts/akponora_ops/vendors.py``). The EPOS PO "MODE OF PAYMENT" (CASH / TRANSFER)
+goes into the Bill PrivateNote as a payment hint only.
 
 Subcommands
 -----------
@@ -25,7 +28,11 @@ Subcommands
     ``OIAT_COMPANY_A_BILLS_AUTO_MAX_COUNT`` (default 20). Off by default.
 ``scheduled``
     ``plan`` with the default window, then ``post --auto`` when the auto gates are on. Exit 0 =
-    nothing waiting, 3 = bills wait for human review (READY or HOLD), 2 = stopped.
+    nothing waiting, 3 = bills wait for human review (READY or HOLD), 2 = stopped. Before the
+    bills are planned, unmapped suppliers are scored against live QBO vendors: genuinely new ones
+    (best score < 0.75) are created when ``OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1`` and
+    ``OIAT_COMPANY_A_VENDOR_APPROVAL_REF`` are set (cap ``OIAT_COMPANY_A_VENDOR_AUTO_MAX``, default
+    5) and appended to vendors.csv as ``auto:<ref>``; near matches HOLD with the candidates.
 ``vendors-suggest`` (READ-ONLY)
     Fuzzy-matches every EPOS supplier name (current POs plus the September PO-to-bill matches in
     ``--history``) against live QBO vendors and writes ``vendors_suggest.csv`` for a human. The
@@ -84,6 +91,7 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 from playwright.sync_api import sync_playwright
 
+from code_scripts.akponora_ops import vendors as vendor_ops
 from code_scripts.akponora_ops.common import (
     AKP_NS_SKU_PREFIX, AKP_SKU_PREFIX, ASSET_ID, CATCH_ALL_ITEM_ID, COMPANY, INV_START, LEGACY_PREFIX, REALM,
     dump_json, env_flag, mapping_file, read_csv, run_dir, send_slack, sha256_file, state_dir, write_csv,
@@ -95,7 +103,7 @@ from code_scripts.scripts.akponora_cutover._common import (
     REPO_ROOT, business_date, company_config, epos_login, setup_env,
 )
 from code_scripts.scripts.akponora_cutover.bills_from_epos_pos import (
-    PO_LIST_URL, extract_po_model, norm, parse_note, sim,
+    PO_LIST_URL, extract_po_model, norm,
 )
 from code_scripts.scripts.akponora_cutover.w7_create_items import (
     D, QBOClient, StopRun, canonical_json, now_iso, q, qbo_escape, sha256_text,
@@ -122,7 +130,7 @@ APPROVE_SKIP = {"skip", "resolved"}
 DONE_RESULTS = {"POSTED", "ADOPTED", "RESOLVED"}
 DEFAULT_HISTORY = REPO_ROOT / "outputs" / "grni_2026-09"
 
-VENDOR_COLS = ["EPOS Supplier Id", "EPOS Supplier Name", "QBO Vendor Id", "QBO Vendor Name", "Approved By"]
+VENDOR_COLS = vendor_ops.VENDOR_COLS
 REVIEW_COLS = ["PO", "Received At", "Received Date", "GRN", "EPOS Supplier", "Payment Mode", "QBO Vendor Id",
                "QBO Vendor Name", "Lines", "EPOS Total Ex", "EPOS Total Inc", "Bill Total", "DocNumber", "Status",
                "Reasons", "Warnings", "Payload SHA", "Approve"]
@@ -179,6 +187,37 @@ def ensure_vendor_file(path: Path) -> None:
 
 def vendor_key(name: str) -> str:
     return norm(name)
+
+
+_SUPPLIER_RE = re.compile(r"S\s*U+\s*P+\s*L\s*I\s*E\s*R\s*S?\s*[:\-]?", re.I)
+_PAYMENT_RE = re.compile(r"MODE\s*OF\s*PAY\w*(?:\s+ME?NT\w*)?\s*[:\-]?", re.I)
+
+
+def payment_mode(text) -> str:
+    """CASH / TRANSFER (or POS / CHEQUE / CREDIT) from free text; '' when absent; else the text."""
+    t = " ".join(clean(text).upper().split()).strip(" ,.;:-")
+    if not t:
+        return ""
+    for needle, mode in (("CASH", "CASH"), ("TRANSFER", "TRANSFER"), ("TRANSFR", "TRANSFER"), ("TRF", "TRANSFER"),
+                         ("BANK", "TRANSFER"), ("POS", "POS"), ("CHEQUE", "CHEQUE"), ("CREDIT", "CREDIT")):
+        if needle in t:
+            return mode
+    return t[:40]
+
+
+def parse_po_note(note) -> tuple[str, str, str]:
+    """(supplier, payment mode, note) from an EPOS PO note. Tolerates the staff spellings seen on
+    real POs: ``SUPPLIER:X   MODE OF PAYMENT:CASH``, ``SUPPLIER: BUNARICH  BREAD,  MODE OF PAYMENY:
+    CASH`` (PO 3968), ``SUUPPLIER: ... MODE OF PAY MENT:TRANSFER``."""
+    note = clean(note)
+    sup_m, pay_m = _SUPPLIER_RE.search(note), _PAYMENT_RE.search(note)
+    supplier, payment = "", ""
+    if sup_m:
+        end = pay_m.start() if pay_m and pay_m.start() > sup_m.end() else len(note)
+        supplier = " ".join(note[sup_m.end():end].split()).strip(" ,.;:-")
+    if pay_m:
+        payment = payment_mode(note[pay_m.end():])
+    return supplier, payment, note
 
 
 def today_lagos() -> datetime:
@@ -312,7 +351,8 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
 # ---------------------------------------------------------------- EPOS -> PO records
 def build_po(order: dict, detail: dict | None) -> dict:
     recv_at = parse_epos_ts(order.get("DateReceived")) or parse_epos_ts((detail or {}).get("DateCompleted"))
-    supplier, payment, note = parse_note((detail or {}).get("Note") or order.get("Note"))
+    supplier, payment, note = parse_po_note((detail or {}).get("Note") or order.get("Note"))
+    payment = payment or payment_mode((detail or {}).get("PaymentMode") or order.get("PaymentMode"))
     supplier_id = clean((detail or {}).get("SupplierId") or order.get("SupplierId"))
     lines = []
     for n, p in enumerate((detail or {}).get("Products") or [], start=1):
@@ -662,9 +702,9 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
             continue
         e["status"] = "READY"
         due, term_ref = due_date(txn, vendor, ctx.get("terms", {}))
-        note = (f"EPOS PO {po['ref']} | GRN {po['grn'] or '-'} | received {po['received_at']} | supplier "
-                f"{po['supplier'] or '-'} | payment mode {po['payment'] or '-'} | created by {TOOL} "
-                f"(tax mode {tax_mode})")
+        note = (f"Payment hint: {po['payment'] or 'not stated'} (EPOS PO note; bill left UNPAID - pay in QBO) | "
+                f"EPOS PO {po['ref']} | GRN {po['grn'] or '-'} | received {po['received_at']} | supplier "
+                f"{po['supplier'] or '-'} | created by {TOOL} (tax mode {tax_mode})")
         payload = {
             "VendorRef": {"value": vendor["Id"], "name": vendor.get("DisplayName")},
             "APAccountRef": {"value": AP_ACCOUNT_ID}, "TxnDate": txn, "DueDate": due, "DocNumber": doc,
@@ -822,11 +862,66 @@ def slack_text(summary: dict, out: Path, posted: dict | None = None) -> str:
     lines = [head]
     for h in summary["holds"][:10]:
         lines.append(f"- HOLD PO {h['po']} {h['supplier'] or '(no supplier)'} N{h['total_inc']}: {h['reasons'][0][:160]}")
+    for v in summary.get("vendor_actions", [])[:10]:
+        lines.append(f"- vendor {v['state']}: {v['detail'][:200]}")
     if posted:
         lines.append(f"Posted {posted.get('POSTED', 0)}, adopted {posted.get('ADOPTED', 0)}, "
                      f"held live {posted.get('HELD_LIVE', 0)}, capped {posted.get('CAPPED', 0)} (bills left unpaid).")
     lines.append(f"Review: {out}/review.csv (set Approve=yes, then post with --expect-sha {summary['payloads_sha256'][:12]}...)")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- vendors (automatic creation)
+def unmapped_suppliers(pos: list[dict], vmap, window: tuple[str, str]) -> list[dict]:
+    """Suppliers of October POs received in ``window`` that vendors.csv does not resolve
+    (id or name), grouped by normalized name."""
+    by_id, by_name, conflicts = vmap
+    groups: dict[str, dict] = {}
+    for po in pos:
+        if not (window[0] <= po["received_date"] <= window[1]) or po["received_date"] < INV_START:
+            continue
+        if not any(ln["qty_received"] for ln in po["lines"]):
+            continue
+        if po["supplier_id"] and po["supplier_id"] in by_id:
+            continue
+        key = vendor_key(po["supplier"])
+        if not key or key in by_name or key in conflicts:
+            continue
+        g = groups.setdefault(key, {"key": key, "name": po["supplier"], "supplier_id": po["supplier_id"],
+                                    "po_refs": set()})
+        g["po_refs"].add(po["ref"])
+        g["supplier_id"] = g["supplier_id"] or po["supplier_id"]
+    return [groups[k] for k in sorted(groups)]
+
+
+def vendor_stage(pos, vmap, ctx, *, window, vendors_path: Path, create: bool, write_client=None,
+                 history: Path | None = None) -> list[dict]:
+    """Score unmapped suppliers; in ``create`` mode (scheduled) create genuinely new vendors when the
+    auto gates allow. Updates ``ctx['vendors']`` with created vendors. Returns the actions."""
+    suppliers = unmapped_suppliers(pos, vmap, window)
+    if not suppliers:
+        return []
+    hist = history_suppliers(history) if history and Path(history).exists() else {}
+    actions = vendor_ops.plan_actions(suppliers, ctx["vendors"], history=hist, bill_counts=ctx.get("bill_counts"))
+    if not create:
+        for act in actions:
+            if act["state"] == vendor_ops.CREATE:
+                act["detail"] += f" - plan only; scheduled mode creates it when {vendor_ops.AUTO_ENV}=1"
+        return actions
+    settings = vendor_ops.auto_settings()
+    wants = [a for a in actions if a["state"] == vendor_ops.CREATE]
+    client = None
+    if wants and settings is not None and settings["max"] > 0:
+        client = write_client or QBOClient.for_company_a(allow_writes=True)
+    vendor_ops.apply_actions(actions, client=client, vendors_path=vendors_path, settings=settings)
+    for act in actions:
+        if act["state"] == vendor_ops.CREATED:
+            ctx["vendors"][act["vendor_id"]] = act.pop("vendor")
+    return actions
+
+
+def vendor_reason(act: dict) -> str:
+    return f"vendor: {act['state']} - {act['detail']}"
 
 
 # ---------------------------------------------------------------- plan (CLI)
@@ -876,7 +971,7 @@ def collect_pos(a, ev: Path, window: tuple[str, str]) -> tuple[list, list]:
     return pos, lookback
 
 
-def run_plan(a, client: QBOClient | None = None) -> tuple[Path, dict, list]:
+def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None = None) -> tuple[Path, dict, list]:
     out = run_dir(TOOL, a.out)
     ev = out / "evidence"
     ev.mkdir(exist_ok=True)
@@ -893,15 +988,30 @@ def run_plan(a, client: QBOClient | None = None) -> tuple[Path, dict, list]:
     bills_to = (date.fromisoformat(window[1]) + timedelta(days=5)).isoformat()
     ctx = fetch_context(client, pos, registry, bills_from=bills_from, bills_to=bills_to)
     vmap = load_vendor_map(read_csv(vpath))
+    ctx["bill_counts"] = Counter((b.get("VendorRef") or {}).get("value") for b in ctx["bills"])
+    history = Path(a.history) if getattr(a, "history", None) else (DEFAULT_HISTORY if hasattr(a, "history") else None)
+    vendor_actions = vendor_stage(pos, vmap, ctx, window=window, vendors_path=vpath,
+                                  create=bool(getattr(a, "create_vendors", False)), write_client=write_client,
+                                  history=history)
+    if any(act["state"] == vendor_ops.CREATED for act in vendor_actions):
+        vmap = load_vendor_map(read_csv(vpath))
     entries = plan_bills(pos, registry=registry, ctx=ctx, vmap=vmap, window=window, tax_mode=a.tax_mode,
                          lookback=lookback, dup_days=a.dup_days, dup_min_value=Decimal(a.dup_min_value))
+    by_key = {act["key"]: act for act in vendor_actions if act["state"] != vendor_ops.CREATED}
+    for e in entries:
+        act = by_key.get(vendor_key(e["po"]["supplier"]))
+        if act and e["status"] == "HOLD":
+            e["reasons"].append(vendor_reason(act))
+    dump_json(out / "vendor_actions.json", vendor_actions)
     meta = {"tool": TOOL, "realm": REALM, "mode": "plan", "window": list(window), "tax_mode": a.tax_mode,
             "captured_at_lagos": captured_at.isoformat(timespec="seconds"),
             "closed_through": min(window[1], (business_date(captured_at) - timedelta(days=1)).isoformat()),
             "mapping": {"path": str(Path(a.mapping) if a.mapping else mapping_file()), "sha256": registry.source_sha256},
             "vendors_file": {"path": str(vpath), "sha256": sha256_file(vpath)},
             "lookback_pos": len(lookback), "qbo_bills_checked": len(ctx["bills"]), "book_close": ctx["book_close"],
-            "qbo_requests": client.requests}
+            "qbo_requests": client.requests,
+            "vendor_actions": [{k: act[k] for k in ("state", "epos_name", "display_name", "vendor_id", "best_score",
+                                                    "candidates", "po_refs", "detail")} for act in vendor_actions]}
     summary = write_plan(out, entries, meta)
     return out, summary, entries
 
@@ -1180,21 +1290,26 @@ def cmd_post(a) -> int:
     return 2 if res["stopped"] else 0
 
 
-def cmd_scheduled(a) -> int:
-    out, summary, _ = run_plan(a)
-    posted = None
+def cmd_scheduled(a, *, client: QBOClient | None = None, write_client: QBOClient | None = None) -> int:
+    """Plan (creating genuinely new vendors when the vendor gates allow), then auto-post when the
+    bills gates allow. Writes ``scheduled.json`` (counts, stop reason, waiting) for daily_run."""
+    a.create_vendors = True
+    out, summary, _ = run_plan(a, client=client, write_client=write_client)
+    posted, stopped = None, None
     if env_flag(AUTO_ENV) and clean(os.getenv(AUTO_REF_ENV)) and summary["counts"].get("READY"):
         registry = load_registry(Path(a.mapping) if a.mapping else None)
-        client = QBOClient.for_company_a(allow_writes=True)
-        res = run_post(out, client=client, registry=registry, approval_ref=clean(os.getenv(AUTO_REF_ENV)),
+        wclient = write_client or QBOClient.for_company_a(allow_writes=True)
+        res = run_post(out, client=wclient, registry=registry, approval_ref=clean(os.getenv(AUTO_REF_ENV)),
                        expect_sha=summary["payloads_sha256"], review_path=None, auto=True)
-        posted = res["counts"]
-        if res["stopped"]:
-            send_slack(slack_text(summary, out, posted) + f"\nSTOPPED: {res['stopped']}")
-            return 2
-    send_slack(slack_text(summary, out, posted))
+        posted, stopped = res["counts"], res["stopped"]
     waiting = summary["counts"].get("HOLD", 0) + summary["counts"].get("READY", 0) - sum(
         (posted or {}).get(k, 0) for k in ("POSTED", "ADOPTED"))
+    dump_json(out / "scheduled.json", {"posted": posted or {}, "stopped": stopped, "waiting": waiting,
+                                       "auto_post": bool(env_flag(AUTO_ENV) and clean(os.getenv(AUTO_REF_ENV)))})
+    if not a.no_slack:
+        send_slack(slack_text(summary, out, posted) + (f"\nSTOPPED: {stopped}" if stopped else ""))
+    if stopped:
+        return 2
     return 3 if waiting else 0
 
 
@@ -1222,14 +1337,8 @@ def suggest_vendors(suppliers: dict, vendors: dict, history: dict, mapped: set, 
     for key, info in sorted(suppliers.items(), key=lambda kv: (-len(kv[1]["refs"]), kv[0])):
         name = info["names"].most_common(1)[0][0]
 
-        def score(v):
-            s = sim(name, v["DisplayName"])
-            a, b = key.split(), norm(v["DisplayName"]).split()
-            if a and b and a[0] == b[0] and len(a[0]) >= 4 and bill_counts.get(v["Id"], 0) > 0:
-                s = max(s, 0.86)
-            return s
-
-        ranked = sorted(((score(v), bill_counts.get(v["Id"], 0), v) for v in active), key=lambda t: (-t[0], -t[1]))
+        ranked = sorted(((vendor_ops.score(name, v, bill_counts), bill_counts.get(v["Id"], 0), v) for v in active),
+                        key=lambda t: (-t[0], -t[1]))
         evidence, best, s = "", None, 0.0
         hist = history.get(key)
         if hist:
@@ -1316,6 +1425,7 @@ def main(argv=None) -> int:
         p.add_argument("--tax-mode", choices=("gross", "split"), default="gross")
         p.add_argument("--dup-days", type=int, default=14, help="duplicate-receipt lookback days (default 14)")
         p.add_argument("--dup-min-value", default="50000", help="duplicate hold threshold, inc-tax (default 50000)")
+        p.add_argument("--history", default=None, help=f"September build folder for vendor evidence (default {DEFAULT_HISTORY})")
     p = sub.add_parser("post", help="WRITES: post approved READY bills")
     p.add_argument("--review", default=None, help="<plan>/review.csv with Approve=yes rows")
     p.add_argument("--plan-dir", default=None, help="plan folder (default: the review.csv folder)")

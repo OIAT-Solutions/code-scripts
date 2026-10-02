@@ -8,6 +8,7 @@
 | What has already been posted, and when | [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md) |
 | Code contract, posting controls, incident response | [`docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md`](docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md), [`docs/AKPONORA_OPERATIONS_CONTROLS.md`](docs/AKPONORA_OPERATIONS_CONTROLS.md) |
 | Daily running from October: catalogue sync, bills from POs, item guard | [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md) |
+| Server: the one scheduled Company A routine (`daily_run`), env, holds, approvals | [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
 | Operator tools (EPOS pulls, mapping, renames, creates, journals) | [`code_scripts/scripts/akponora_cutover/README.md`](code_scripts/scripts/akponora_cutover/README.md) |
 | Bookkeeper rules | [`docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md`](docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md) |
 | Background (Jan–Sep recovery) | `docs/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
@@ -67,7 +68,7 @@ The cutover is done. Details and receipts: [`docs/AKPONORA_CUTOVER_LOG.md`](docs
 | W6 / W8 | 30 Sep pack; 25–30 Sep backfill; Sep close journals; GRNI | **Done** (JE 76552, 76553, 76554; GRNI account `210200` Id 87). IA `77` = V ₦148,824,877.40 at 30 Sep; every 120xxx ₦0 |
 | W7 | 3,938 Inventory + 492 NonInventory creates; IA offset JE 80493; equity reclass JE 80500 | **Done** 2 Oct |
 | — | 1 Oct sales | **Posted** 2 Oct (SalesReceipts 80494–80499, ₦3,211,950.00, MATCH, FIFO COGS ₦1,933,536.56) |
-| W9 | Company A daily automation on the server | **Not on.** Needs: push + deploy, copy the installed mapping to the server `STATE_ROOT`, set env vars, chat yes. Until then each day is run by hand from this repo (dry-run, then post with a chat yes) |
+| W9 | Company A daily automation on the server | **Not on.** One routine: `code_scripts/akponora_ops/daily_run.py` (catalogue → vendors+bills → sales → guard, 06:00 Lagos). Branch `claude/akponora-daily-run`. Steps in [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md): push + deploy, copy mapping/vendors/cursors/tokens to `/data`, dry-run smoke test, env switches with chat yes. Until then each day is run by hand from this repo |
 | W10 | Safe legacy inactivation | After W9 is stable |
 
 ### Being built now (2 Oct) — `code_scripts/akponora_ops/`
@@ -77,7 +78,8 @@ The cutover is done. Details and receipts: [`docs/AKPONORA_CUTOVER_LOG.md`](docs
 | `catalogue_sync` | Finds new/changed EPOS products; maps pack children to their master using the EPOS Master Products amount; creates new `AKP-`/`AKP-NS-` items at **qty 0**; checks EPOS stock and PO history and flags unexplained stock; installs the new mapping version. Also runs just before the Company A transform when `OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES=1` | Creates + mapping install only with an approval ref (or the automated env gate, capped) |
 | `bills_sync` | Turns received EPOS POs (received ≥ 1 Oct) into unpaid QBO Bills on the mapped items in the item's unit; vendor map, duplicate checks, review sheet + Slack | Posts only bills a human marked `Approve=yes` (or the automated env gate, capped). Never pays |
 | `item_guard` | Daily read-only QBO scan: non-`AKP-` items, lines on `LEGACY —`/`15030`/unmapped items, 120xxx activity, wrong asset account, near-duplicate names, negative stock. Slack alert | None (GET only) |
-| `ops_scheduler` | Cron runner for the three jobs (`docker compose --profile akponora-ops`); each job only when its `OIAT_AKPONORA_<JOB>_CRON` is set | — |
+| `ops_scheduler` | Cron runner (`akponora-ops` container). With `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1` runs only `daily_run`, and the portal scheduler skips Company A (no double runs) | — |
+| `daily_run` | The single scheduled Company A routine, in order; exit 0/3/2; one Slack summary; global run lock. New suppliers → QBO vendor only with `OIAT_COMPANY_A_VENDOR_AUTO_CREATE` (+ ref, cap 5); near matches hold | Only through each step's own gates |
 
 Enabling any automated write mode on production is a chat-yes action.
 
@@ -126,7 +128,7 @@ Open items:
 
 **Allowed without asking:** read-only QBO/EPOS queries and reports; code and tests; mapping/workbook files on disk; dry-runs.
 
-**Needs a chat yes for the specific action:** sales backfills; journals (Sep close, GRNI, IA offset); W5 renames; W7 creates; installing the mapping; `catalogue_sync apply`; `bills_sync post`; turning on any automated mode (`OIAT_COMPANY_A_CATALOGUE_AUTO_CREATE`, `OIAT_COMPANY_A_BILLS_AUTO_POST`, the before-sales hook) or the pipeline/scheduler; any InventoryAdjustment; inactivating any item; Undeposited Funds deposits/transfers; any Bill Payment on `66251`; creating accounts (e.g. the GRNI liability); changing QBO settings.
+**Needs a chat yes for the specific action:** sales backfills; journals (Sep close, GRNI, IA offset); W5 renames; W7 creates; installing the mapping; `catalogue_sync apply`; `bills_sync post`; turning on any automated mode (`OIAT_COMPANY_A_CATALOGUE_AUTO_CREATE`, `OIAT_COMPANY_A_BILLS_AUTO_POST`, `OIAT_COMPANY_A_VENDOR_AUTO_CREATE`, `OIAT_COMPANY_A_DAILY_RUN_ENABLED`, the before-sales hook) or the pipeline/scheduler; any InventoryAdjustment; inactivating any item; Undeposited Funds deposits/transfers; any Bill Payment on `66251`; creating accounts (e.g. the GRNI liability); changing QBO settings.
 
 **Forbidden:** InventoryAdjustment on the sales path; bulk inactivation or deletion of products; legacy qty edits to match EPOS; January-style qty-10 import; catch-all or legacy items as October targets.
 

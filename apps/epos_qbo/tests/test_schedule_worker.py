@@ -544,6 +544,49 @@ class CompanyAStandingApprovalSchedulerTests(TestCase):
         command = job_runner.build_command_for_job(job)
         self.assertEqual(command[command.index("--exclude-company") + 1], "company_a")
 
+    def test_daily_run_owns_company_a_so_fallback_excludes_it(self):
+        from apps.epos_qbo.services import job_runner
+
+        env = dict(self.STANDING_ENV, OIAT_COMPANY_A_DAILY_RUN_ENABLED="1")
+        job = self._fire_fallback_on_2_oct(env)
+        self.assertEqual(job.inventory_options_json.get("exclude_companies"), ["company_a"])
+        command = job_runner.build_command_for_job(job)
+        self.assertEqual(command[command.index("--exclude-company") + 1], "company_a")
+
+    def test_daily_run_blocks_single_company_a_sales_schedule(self):
+        schedule = RunSchedule.objects.create(
+            name="Company A daily",
+            enabled=True,
+            scope=RunJob.SCOPE_SINGLE,
+            company_key="company_a",
+            cron_expr="0 18 * * *",
+            timezone_name="Africa/Lagos",
+            target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+        )
+        env = dict(self.STANDING_ENV, OIAT_COMPANY_A_DAILY_RUN_ENABLED="1")
+        with mock.patch.dict("os.environ", env, clear=False):
+            job, result = schedule_worker.enqueue_run_for_schedule(schedule, now=timezone.now())
+        self.assertIsNone(job)
+        self.assertEqual(result, RunScheduleEvent.TYPE_SKIPPED_INVALID)
+        schedule.refresh_from_db()
+        self.assertIn("OIAT_COMPANY_A_DAILY_RUN_ENABLED", schedule.last_error)
+
+    def test_daily_run_leaves_other_companies_scheduled(self):
+        schedule = RunSchedule.objects.create(
+            name="Company B daily",
+            enabled=True,
+            scope=RunJob.SCOPE_SINGLE,
+            company_key="company_b",
+            cron_expr="0 18 * * *",
+            timezone_name="Africa/Lagos",
+            target_date_mode=RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
+        )
+        with mock.patch.dict("os.environ", {"OIAT_COMPANY_A_DAILY_RUN_ENABLED": "1"}, clear=False), \
+                mock.patch("apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job"):
+            job, result = schedule_worker.enqueue_run_for_schedule(schedule, now=timezone.now())
+        self.assertIsNotNone(job)
+        self.assertEqual(job.company_key, "company_b")
+
     def test_trading_date_before_cutoff_is_two_days_back(self):
         from datetime import timezone as dt_timezone
 
