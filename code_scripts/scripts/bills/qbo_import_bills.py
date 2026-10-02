@@ -5,12 +5,16 @@ Re-import one or more QBO Bills from two CSVs (header + lines).
 Use this after exporting bills (qbo_export_bills.py), deleting them in QBO,
 and updating InvStartDate for inventory items, to re-create bills accurately.
 
-Usage (example):
-  python scripts/bills/qbo_import_bills.py --company company_a --bill-id 123 --dry-run
-  python scripts/bills/qbo_import_bills.py --company company_a --bill-id 123 --create
-  python scripts/bills/qbo_import_bills.py --company company_a --bill-ids 58984 58985 58986 --create
-  python scripts/bills/qbo_import_bills.py --company company_a --all --create
-  python scripts/bills/qbo_import_bills.py --company company_a --bill-ids 58984 58985 --taxcode-id 4 --create
+COMPANY A: live --create is refused for company_a (AKPONORA). This legacy importer resolves
+item lines by name; Akponora bills are created from POs by code_scripts/akponora_ops/bills_sync.py
+(see AGENTS.md). --dry-run still works.
+
+Usage (example; company_b shown for --create):
+  python scripts/bills/qbo_import_bills.py --company company_b --bill-id 123 --dry-run
+  python scripts/bills/qbo_import_bills.py --company company_b --bill-id 123 --create
+  python scripts/bills/qbo_import_bills.py --company company_b --bill-ids 58984 58985 58986 --create
+  python scripts/bills/qbo_import_bills.py --company company_b --all --create
+  python scripts/bills/qbo_import_bills.py --company company_b --bill-ids 58984 58985 --taxcode-id 4 --create
 
 Pass exactly one of: --bill-id (single), --bill-ids (list), or --all (every BillId in header with lines).
 TaxCode is resolved once at start (by name or --taxcode-id) and reused for every bill.
@@ -35,6 +39,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from code_scripts.company_a_guard import company_a_refusal
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config, get_available_companies
 from code_scripts.token_manager import verify_realm_match
@@ -58,6 +63,19 @@ TAX_INCLUSIVE_RATE = 1.075
 DOCNUMBER_MAX_LEN = 21
 
 logger = logging.getLogger(__name__)
+
+
+def company_a_create_refusal(company_key: str, realm_id: Optional[str], create: bool) -> Optional[str]:
+    """Refusal message when a live --create targets Company A (superseded by bills_sync)."""
+    if not create:
+        return None
+    return company_a_refusal(
+        "legacy bill import --create",
+        company_key=company_key,
+        realm_id=realm_id,
+        reason="This importer matches item lines by name, which is forbidden for Company A October items.",
+        alternative="code_scripts/akponora_ops/bills_sync.py (bills from POs, exact AKP- Item Ids).",
+    )
 
 
 def _is_nan(x: Any) -> bool:
@@ -492,7 +510,7 @@ def validate_totals(payload: Dict[str, Any], header_total: Optional[float]) -> N
         )
 
 
-def main() -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Re-import one QBO Bill from header + lines CSVs (dry-run or create)."
     )
@@ -564,7 +582,7 @@ def main() -> None:
         default="Due on receipt",
         help="Term (payment terms) name to resolve and set on Bill (default: Due on receipt)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Exactly one of --bill-id, --bill-ids, or --all
     bill_id_count = sum([args.bill_id is not None, args.bill_ids is not None, args.all])
@@ -581,6 +599,11 @@ def main() -> None:
     if not args.dry_run and not args.create:
         print("Error: pass --dry-run or --create.", file=sys.stderr)
         sys.exit(1)
+
+    refusal = company_a_create_refusal(args.company, None, args.create)
+    if refusal:
+        print(f"Error: {refusal}", file=sys.stderr)
+        sys.exit(2)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -618,6 +641,10 @@ def main() -> None:
             sys.exit(0)
 
     config = load_company_config(args.company)
+    refusal = company_a_create_refusal(config.company_key, config.realm_id, args.create)
+    if refusal:
+        print(f"Error: {refusal}", file=sys.stderr)
+        sys.exit(2)
     verify_realm_match(args.company, config.realm_id)
     token_mgr = TokenManager(config.company_key, config.realm_id)
     realm_id = config.realm_id

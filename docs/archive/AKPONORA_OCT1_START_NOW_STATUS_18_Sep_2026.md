@@ -1,8 +1,8 @@
-> **Superseded (30 Sep 2026).** Historical snapshot only. The 5,664-create list below was withdrawn on 19 Sep. Current plan: [`AGENTS.md`](../AGENTS.md) and [`AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](AKPONORA_OCT1_GOLIVE_RUNBOOK.md).
+> **Superseded (30 Sep 2026).** Historical snapshot only. The 5,664-create list below was withdrawn on 19 Sep. Current plan: [`AGENTS.md`](../../AGENTS.md) and [`AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](../AKPONORA_OCT1_GOLIVE_RUNBOOK.md).
 
 # Akponora Oct 1 Inventory go-live — start-now status (18 Sep 2026)
 
-> Historical Cursor snapshot. Canonical review supersedes the 5,664-create claim and W4 readiness: see [current runbook](AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md). Preserve these counts as evidence only; do not post the old dry-run catalogue.
+> Historical Cursor snapshot. Canonical review supersedes the 5,664-create claim and W4 readiness: see [current runbook](../AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md). Preserve these counts as evidence only; do not post the old dry-run catalogue.
 
 Executed the plan’s **start now** slice. No live QBO creates, renames, inactivations, journals, or pipeline start.
 
@@ -22,7 +22,7 @@ Live stock / dumps are gitignored. Durable docs and code are in this PR.
 | W2 237 blocked | `outputs/akponora_oct1_golive_2026-09-18/w2_staff_237_blocked.csv` |
 | W2 counts | `outputs/akponora_oct1_golive_2026-09-18/w2_summary.json` |
 | Dry-run create payloads (qty 0) | `outputs/akponora_oct1_golive_2026-09-18/w4_dryrun_create_payloads_qty0.jsonl` (+ `.csv`) |
-| Dump / mapping scripts | `code_scripts/scripts/akponora_oct1_w1_item_dump.py`, `akponora_oct1_w2_mapping.py` |
+| Dump / mapping scripts | `code_scripts/scripts/akponora_oct1_w1_item_dump.py`, `akponora_oct1_w2_mapping.py` (removed 2 Oct 2026; superseded by `code_scripts/scripts/akponora_cutover/`) |
 | Operating plan | `AGENTS.md` |
 | Bookkeeper freeze note | `docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md` |
 

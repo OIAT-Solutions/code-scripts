@@ -193,7 +193,7 @@ class QboInventoryRemediationTests(unittest.TestCase):
         plan_rows = [
             {
                 **remediation._plan_row_from_adjustment(
-                    company_key="company_a",
+                    company_key="company_b",
                     realm_id="realm-1",
                     adjustment=_adjustment("INVCON-1", qbo_id="1", sync="0"),
                     doc_number="INVCON-1",
@@ -205,7 +205,7 @@ class QboInventoryRemediationTests(unittest.TestCase):
             },
             {
                 **remediation._plan_row_from_adjustment(
-                    company_key="company_a",
+                    company_key="company_b",
                     realm_id="realm-1",
                     adjustment=_adjustment("INVCON-2", qbo_id="2", sync="0"),
                     doc_number="INVCON-2",
@@ -242,3 +242,97 @@ class QboInventoryRemediationTests(unittest.TestCase):
                 fail_fast=True,
             )
         self.assertEqual([r["result"] for r in results], ["failed"])
+
+
+class CompanyARemediationRefusalTests(unittest.TestCase):
+    COMPANY_A_REALM = "9341455406194328"
+
+    def _args(self, td: Path, company: str):
+        return argparse.Namespace(
+            command="delete",
+            company=company,
+            from_date="2026-04-29",
+            to_date="2026-04-30",
+            number_prefix="INVCON",
+            candidate_csv=None,
+            exclude_number=[],
+            max_transactions=None,
+            min_impact=None,
+            output_dir=td,
+            allow_invadj=False,
+            apply=True,
+            confirm_delete_inventory_adjustments=True,
+            fail_fast=False,
+        )
+
+    def test_run_delete_refuses_company_a_before_any_qbo_call(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = self._args(Path(td), "company_a")
+            with mock.patch.object(remediation, "load_company_config") as cfg_mock, \
+                 mock.patch.object(remediation, "TokenManager") as tm_mock, \
+                 mock.patch.object(remediation, "query_inventory_adjustments") as query_mock, \
+                 mock.patch.object(remediation, "delete_inventory_adjustment") as delete_mock:
+                exit_code = remediation.run(args)
+        self.assertEqual(exit_code, 2)
+        cfg_mock.assert_not_called()
+        tm_mock.assert_not_called()
+        query_mock.assert_not_called()
+        delete_mock.assert_not_called()
+
+    def test_run_delete_refuses_company_a_realm_under_other_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = self._args(Path(td), "company_x")
+            cfg = SimpleNamespace(company_key="company_x", realm_id=self.COMPANY_A_REALM)
+            with mock.patch.object(remediation, "load_company_config", return_value=cfg), \
+                 mock.patch.object(remediation, "TokenManager") as tm_mock, \
+                 mock.patch.object(remediation, "delete_inventory_adjustment") as delete_mock:
+                exit_code = remediation.run(args)
+        self.assertEqual(exit_code, 2)
+        tm_mock.assert_not_called()
+        delete_mock.assert_not_called()
+
+    def test_delete_inventory_adjustment_refuses_company_a_realm(self):
+        from code_scripts.company_a_guard import CompanyAProtectedError
+
+        with mock.patch.object(remediation, "_make_qbo_request") as req_mock:
+            with self.assertRaises(CompanyAProtectedError):
+                remediation.delete_inventory_adjustment(
+                    mock.Mock(), self.COMPANY_A_REALM, adjustment_id="1", sync_token="0"
+                )
+        req_mock.assert_not_called()
+
+    def test_apply_deletions_refuses_company_a_rows(self):
+        from code_scripts.company_a_guard import CompanyAProtectedError
+
+        row = {
+            **remediation._plan_row_from_adjustment(
+                company_key="company_a",
+                realm_id="realm-1",
+                adjustment=_adjustment("INVCON-1"),
+                doc_number="INVCON-1",
+                action="delete_candidate",
+                reason="matches_remediation_criteria",
+                status="planned",
+            ),
+            "sync_token": "0",
+        }
+        with mock.patch.object(remediation, "delete_inventory_adjustment") as delete_mock:
+            with self.assertRaises(CompanyAProtectedError):
+                remediation.apply_deletions(token_mgr=mock.Mock(), realm_id="realm-1", plan_rows=[row])
+        delete_mock.assert_not_called()
+
+    def test_run_delete_allowed_for_other_company(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = self._args(Path(td), "company_b")
+            cfg = SimpleNamespace(company_key="company_b", realm_id="realm-b")
+            with mock.patch.object(remediation, "load_company_config", return_value=cfg), \
+                 mock.patch.object(remediation, "verify_realm_match"), \
+                 mock.patch.object(remediation, "TokenManager", return_value=mock.Mock()), \
+                 mock.patch.object(remediation, "query_inventory_adjustments", return_value=[_adjustment("INVCON-20260429-9275")]), \
+                 mock.patch.object(remediation, "fetch_full_inventory_adjustments", side_effect=lambda _tm, _realm, rows: rows), \
+                 mock.patch.object(remediation, "fetch_inventory_adjustment", return_value={"SyncToken": "0"}), \
+                 mock.patch.object(remediation, "_make_qbo_request", side_effect=AssertionError("no live QBO in tests")), \
+                 mock.patch.object(remediation, "delete_inventory_adjustment", return_value=(True, "")) as delete_mock:
+                exit_code = remediation.run(args)
+        self.assertEqual(exit_code, 0)
+        delete_mock.assert_called_once()

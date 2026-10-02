@@ -14,20 +14,23 @@ Subcommands:
   import-products  Create QBO Items from a products CSV (uses Product.Mapping for accounts)
   inactivate-all   Set all active products (Items) to inactive; use before re-creating from a fresh list
 
+Company A (company_a / AKPONORA): set-invstart*, recreate-invstart, live inactivate-all and
+live import-products are refused (AGENTS.md). Read-only subcommands still work.
+
 Examples:
   python scripts/qbo_inv_manager.py --company company_a get --item-id 7220
   python scripts/qbo_inv_manager.py --company company_a get --name "NAN-OPTIPRO"
   python scripts/qbo_inv_manager.py --company company_a list-invstart --cutoff-date 2026-01-01 --export-csv reports/issues.csv
-  python scripts/qbo_inv_manager.py --company company_a set-invstart --item-id 7220 --date 2026-01-01
-  python scripts/qbo_inv_manager.py --company company_a set-invstart-bulk --cutoff-date 2026-01-01 --new-date 2026-01-01
-  python scripts/qbo_inv_manager.py --company company_a set-invstart-from-csv --csv reports/inventory_start_date_blockers_company_a_2026-01-01.csv --new-date 2026-01-01
+  python scripts/qbo_inv_manager.py --company company_b set-invstart --item-id 7220 --date 2026-01-01
+  python scripts/qbo_inv_manager.py --company company_b set-invstart-bulk --cutoff-date 2026-01-01 --new-date 2026-01-01
+  python scripts/qbo_inv_manager.py --company company_b set-invstart-from-csv --csv reports/inventory_start_date_blockers_company_b_2026-01-01.csv --new-date 2026-01-01
   python scripts/qbo_inv_manager.py --company company_a export-products --out exports/company_a_products.csv
   python scripts/qbo_inv_manager.py --company company_a export-products --out exports/company_a_inventory.csv --type Inventory
   python scripts/qbo_inv_manager.py --company company_a inactivate-all --dry-run
-  python scripts/qbo_inv_manager.py --company company_a inactivate-all --type Inventory --report-csv reports/inactivated_company_a.csv
+  python scripts/qbo_inv_manager.py --company company_b inactivate-all --type Inventory --report-csv reports/inactivated_company_b.csv
   python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --dry-run
-  python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --as-of-date 2026-01-01 --default-qty 0 --report-csv reports/imported_products.csv
-  python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --as-of-date 2026-01-01 --create
+  python scripts/qbo_inv_manager.py --company company_b import-products --csv exports/company_b_products.csv --as-of-date 2026-01-01 --default-qty 0 --report-csv reports/imported_products.csv
+  python scripts/qbo_inv_manager.py --company company_b import-products --csv exports/company_b_products.csv --as-of-date 2026-01-01 --create
   python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --inventory-only --dry-run
 """
 from __future__ import annotations
@@ -46,6 +49,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from code_scripts.company_a_guard import COMPANY_A_REALM_ID
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config, get_available_companies
 from code_scripts.token_manager import verify_realm_match
@@ -423,8 +427,24 @@ def cmd_list_invstart(args: argparse.Namespace, token_mgr: TokenManager, realm_i
     return 0
 
 
+def _refuse_company_a_invstart(args: argparse.Namespace, realm_id: Optional[str] = None) -> bool:
+    """Print a refusal and return True when an InvStartDate write targets Company A."""
+    if getattr(args, "company", "") == "company_a" or str(realm_id or "") == COMPANY_A_REALM_ID:
+        print(
+            "[ERROR] Company A set-invstart / set-invstart-bulk / set-invstart-from-csv is disabled. "
+            "Changing InvStartDate on legacy or AKP- Inventory items re-runs FIFO and rewrites COGS "
+            "(AGENTS.md non-negotiables). Use list-invstart (read-only) and raise it with the owner.",
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def cmd_set_invstart(args: argparse.Namespace, token_mgr: TokenManager, realm_id: str) -> int:
     """Set InvStartDate for one item."""
+    if _refuse_company_a_invstart(args, realm_id):
+        return 1
+
     try:
         new_date = _parse_date(args.date)
     except ValueError as e:
@@ -446,6 +466,9 @@ def cmd_set_invstart(args: argparse.Namespace, token_mgr: TokenManager, realm_id
 
 def cmd_set_invstart_bulk(args: argparse.Namespace, token_mgr: TokenManager, realm_id: str) -> int:
     """Find all items with InvStartDate > cutoff, patch each to new_date."""
+    if _refuse_company_a_invstart(args, realm_id):
+        return 1
+
     try:
         cutoff_date = _parse_date(args.cutoff_date)
         new_date = _parse_date(args.new_date)
@@ -505,6 +528,9 @@ def cmd_set_invstart_bulk(args: argparse.Namespace, token_mgr: TokenManager, rea
 
 def cmd_set_invstart_from_csv(args: argparse.Namespace, token_mgr: TokenManager, realm_id: str) -> int:
     """Patch InvStartDate for all item IDs listed in a CSV (e.g. blockers file)."""
+    if _refuse_company_a_invstart(args, realm_id):
+        return 1
+
     try:
         new_date = _parse_date(args.new_date)
     except ValueError as e:

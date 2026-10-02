@@ -1,6 +1,6 @@
 # AKPONORA COGS and Inventory Recovery Plan
 
-> **Superseded as the operating plan.** Follow [`AGENTS.md`](../AGENTS.md) (1 Oct 2026 Inventory go-live). This file is historical background from July–August 2026. Where it says Non-inventory cutover or 31 Aug restart, ignore it.
+> **Superseded as the operating plan.** Follow [`AGENTS.md`](../../AGENTS.md) (1 Oct 2026 Inventory go-live). This file is historical background from July–August 2026. Where it says Non-inventory cutover or 31 Aug restart, ignore it.
 
 **Plan date:** 23 July 2026  
 **Last refreshed:** 24 August 2026  

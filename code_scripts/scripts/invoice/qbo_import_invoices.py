@@ -1,3 +1,10 @@
+"""Import Invoices from CSV into QBO (company_a only), matching items by fuzzy name.
+
+Company A go-live guard: live posting (no --dry-run / --validate-only) of any invoice with
+TxnDate on/after 2026-10-01 is refused. Fuzzy name matching would land October invoices on
+legacy items; October invoices must reference exact approved AKP-/AKP-NS- Item Ids
+(see AGENTS.md and docs/AKPONORA_DAILY_OPERATIONS.md). Pre-October history is unchanged.
+"""
 from __future__ import annotations
 
 import argparse
@@ -14,6 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from code_scripts.company_a_guard import COMPANY_A_GO_LIVE_DATE, company_a_refusal_message, is_company_a
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config
 from code_scripts.token_manager import verify_realm_match
@@ -256,7 +264,34 @@ def _load_aliases(path: Optional[str]) -> Dict[str, str]:
     return aliases
 
 
-def main() -> int:
+def company_a_live_invoice_refusal(
+    company_key: str,
+    realm_id: Optional[str],
+    invoice_dates: List[str],
+    *,
+    live: bool,
+) -> Optional[str]:
+    """Refusal message when a live run would post Company A invoices dated on/after go-live."""
+    if not live or not is_company_a(company_key, realm_id):
+        return None
+    blocked = sorted({d for d in invoice_dates if str(d) >= COMPANY_A_GO_LIVE_DATE})
+    if not blocked:
+        return None
+    shown = ", ".join(blocked[:5]) + (" ..." if len(blocked) > 5 else "")
+    return company_a_refusal_message(
+        "live invoice import (fuzzy item-name matching)",
+        reason=(
+            f"{len(blocked)} invoice date(s) on/after {COMPANY_A_GO_LIVE_DATE} ({shown}). "
+            "Name matching would post October invoices onto legacy items."
+        ),
+        alternative=(
+            "the new-item workflow: exact approved AKP-/AKP-NS- Item Ids from the Company A "
+            "catalogue (docs/AKPONORA_DAILY_OPERATIONS.md). --dry-run / --validate-only remain available."
+        ),
+    )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Import Invoices from CSV into QBO (company_a only).")
     parser.add_argument("--company", required=True, help="Company key (company_a)")
     parser.add_argument("--csv", required=True, help="Path to invoice CSV")
@@ -265,7 +300,7 @@ def main() -> int:
     parser.add_argument("--min-similarity", type=float, default=0.90, help="Min fuzzy match score (0-1)")
     parser.add_argument("--aliases", help="Optional CSV of item aliases (CsvItemName,QboItemName)")
     parser.add_argument("--spelling-corrections", default="templates/spelling_corrections.csv", help="Spelling corrections CSV (Wrong,Correct)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     config = load_company_config(args.company)
     if config.company_key != "company_a":
@@ -282,6 +317,17 @@ def main() -> int:
     if missing:
         print(f"[ERROR] Missing required columns: {', '.join(missing)}")
         return 1
+
+    live = not (args.dry_run or args.validate_only)
+    try:
+        guard_dates = [_parse_date(v) for v in df["InvoiceDate"].tolist()]
+    except ValueError as e:
+        print(f"[ERROR] {e}")
+        return 1
+    refusal = company_a_live_invoice_refusal(config.company_key, config.realm_id, guard_dates, live=live)
+    if refusal:
+        print(f"[ERROR] {refusal}", file=sys.stderr)
+        return 2
 
     verify_realm_match(config.company_key, config.realm_id)
     token_mgr = TokenManager(config.company_key, config.realm_id)
@@ -488,6 +534,12 @@ def main() -> int:
         if args.validate_only or args.dry_run:
             print(f"[DRY-RUN] Would create Invoice {doc_number} for {customer_name} ({len(lines)} lines)")
         else:
+            refusal = company_a_live_invoice_refusal(
+                config.company_key, config.realm_id, [invoice_date], live=True
+            )
+            if refusal:
+                print(f"[ERROR] {refusal}", file=sys.stderr)
+                return 2
             url = f"{BASE_URL}/v3/company/{config.realm_id}/invoice?minorversion=70"
             resp = _make_qbo_request("POST", url, token_mgr, json=payload)
             if resp.status_code not in (200, 201):

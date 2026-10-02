@@ -17,7 +17,8 @@ of the pack-variant items, **only** when:
 * the pack variant's ``QtyOnHand`` is zero (so we don't lose stock by
   inactivating).
 
-Outputs a CSV report.  ``--apply`` performs sparse QBO updates that rename
+Outputs a CSV report.  ``--apply`` (never for Company A; see AGENTS.md: no
+bulk-inactivation of Company A items) performs sparse QBO updates that rename
 the variant to ``"{original_name} (old-{item_id})"`` and set
 ``Active=false`` in a single ``POST /v3/company/{realm}/item`` call.
 
@@ -45,6 +46,7 @@ from typing import Any, Iterable, Optional
 from urllib.parse import quote
 
 from code_scripts.artifact_paths import qbo_pack_variant_reports_dir
+from code_scripts.company_a_guard import assert_not_company_a, company_a_refusal
 from code_scripts.company_config import (
     ensure_company_runtime_compatible,
     get_available_companies,
@@ -290,6 +292,12 @@ def _fetch_item_with_sync_token(token_mgr: TokenManager, realm_id: str, item_id:
     return item
 
 
+_COMPANY_A_APPLY_REASON = (
+    "Bulk inactivation of Company A items is forbidden (QBO zeros QtyOnHand and can post "
+    "Shrinkage/COGS). Plan / --dry-run mode remains available."
+)
+
+
 def build_inactivate_payload(item_id: str, sync_token: str, original_name: str) -> dict[str, Any]:
     return {
         "Id": str(item_id),
@@ -301,6 +309,7 @@ def build_inactivate_payload(item_id: str, sync_token: str, original_name: str) 
 
 
 def _post_inactivate(token_mgr: TokenManager, realm_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    assert_not_company_a("pack-variant inactivation", realm_id=realm_id, reason=_COMPANY_A_APPLY_REASON)
     base_url = get_qbo_api_base_url()
     url = f"{base_url}/v3/company/{realm_id}/item?minorversion={_QBO_MINOR_VERSION}"
     resp = _make_qbo_request("POST", url, token_mgr, json=payload)
@@ -445,6 +454,18 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     config = load_company_config(args.company)
     ensure_company_runtime_compatible(config)
+
+    if args.apply:
+        # Independent of OIAT_ALLOW_INVENTORY_APPLY: Company A is never applied.
+        refusal = company_a_refusal(
+            "pack-variant cleanup --apply",
+            company_key=getattr(config, "company_key", None) or args.company,
+            realm_id=getattr(config, "realm_id", None),
+            reason=_COMPANY_A_APPLY_REASON,
+        )
+        if refusal:
+            print(f"Error: {refusal}", file=sys.stderr)
+            return 2
 
     qbo_path = _resolve_qbo_csv(args, config)
     qbo_df = load_qbo_inventory_item_rows(str(qbo_path))
