@@ -57,3 +57,23 @@ Company: AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `934145
 
 - Tools organized under `code_scripts/scripts/akponora_cutover/`, docs consolidated, PR #62 updated.
 - Last QBO SalesReceipt date: **24 Sep**. 25 Sep EPOS gross ₦4,905,275.00 (not yet posted).
+
+## 1–2 Oct 2026 (read-only recovery; no production writes in this work)
+
+- Live QBO verification confirms the 25–30 Sep catch-all backfill is now present and balanced: 35 SalesReceipts, only item `15030`, no duplicate DocNumbers. Daily totals are ₦4,905,275.00; ₦4,859,500.00; ₦4,080,500.00; ₦3,113,300.00; ₦5,097,324.99; and ₦3,965,950.00.
+- A multiplier defect was found in the mapping builders: blank child `VolumeOfSale` could silently become x1. All 2,212 mapped non-owner products were read through the view-only EPOS Master Products page. The builders now fail closed without an explicit child multiplier, and the full 409-test suite passes.
+- Mapping v3 has 6,150 rules and 258 evidence-backed corrections: 112 multiplier fixes, 95 real-master retargets and 51 rows moved to their own NonInventory item because no live tracked master exists. The final create set is 3,938 Inventory + 492 NonInventory.
+- The 1 Oct stock proof improved from 451/485 sold families matching (92.99%) to 496/496 (100%). All 3,936 families with usable Stock History match; the two `NO_HISTORY` rows had no activity.
+- The definitive v3 W7 read-only preflight calculated opening **V = ₦148,824,877.40** and payload SHA `9854f694def575675639160f5b283bcdea4c5a61895799ffcdee6ec64b6594e8`. It refused, as designed, because W5 is not executed.
+- The W5 plan now has 3,879 rows. Two v3 additions (QBO Ids 11796 and 10688) passed a fresh read-only dry-run with all monitored balances unchanged. **W5 remains unexecuted.**
+- September close journals, W7 creates/offset, mapping installation and Company A scheduler activation remain approval-gated and were not run.
+
+## 1 Oct 2026, evening (production writes, owner chat yes 22:07 EDT)
+
+- **September close journals**, all `POSTED_VERIFIED` (receipts next to each spec):
+  - `SEP-120XXX-CLEAR` JE `76552`: Dr `120100` ₦13,430,840.54 / Cr `200100`; Dr `120202` ₦29,398.70 / Cr `200202`. Payload SHA `0e7c38ce…`.
+  - `COGS-2026-09` JE `76553`: Dr IA `77` / Cr `200000` `76` ₦6,796,827.46. Payload SHA `27ac8fe8…`.
+  - Account `210200 - Goods Received Not Invoiced` created (Id `87`, Other Current Liability / AccruedLiabilities).
+  - `GRNI-2026-09` JE `76554`: Dr 200xxx ₦35,579,577.33 + Dr `300150` ₦11,654,130.30 / Cr `87` ₦47,233,707.63. Payload SHA `32ee13dd…`. Not auto-reversed: the real September bills are entered against `210200`.
+- Live check after the journals: IA `77` = **₦148,824,877.40 = V**; every 120xxx account ₦0.
+- **W5 rename** started: 10-item test `RENAMED`, balances unchanged; full 3,879-row run in progress (`w5_legacy_rename/results.csv`, `run_all_2026-10-01.log`).

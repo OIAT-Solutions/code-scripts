@@ -12,7 +12,7 @@
 | Background (Jan–Sep recovery) | `docs/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
 
 **Company:** AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `9341455406194328`, production).
-**As of:** 30 September 2026.
+**As of:** 1 October 2026 (v3 recovery completed after the 1 Oct trading-day proof).
 **Goal:** from **1 Oct 2026**, till sales post only to **new QBO items**. These are Inventory `AKP-{EPOS master ProductID}`, or NonInventory `AKP-NS-{ProductID}` for products EPOS does not stock-track. QBO perpetual FIFO then gives COGS. Jan–Sep is history on the catch-all.
 
 ---
@@ -55,20 +55,20 @@
 | ID | What | Status |
 | --- | --- | --- |
 | W0 | Bookkeeper freeze (bills + invoices paused) | Note updated 26 Sep; owner to send/enforce |
-| W2/W3 | Canonical mapping | **Done**: final map approved by the owner (6,150 products, 99.89% of Sep till value). Item Ids are filled after W7 |
+| W2/W3 | Canonical mapping | **Rebuilt as v3**: 6,150 products; all 2,212 non-owner rows checked against view-only EPOS Master Products evidence; 1 Oct sold-family proof 496/496. Item Ids are filled after W7 |
 | W4 | Pipeline code (October contract, controls, scheduler gate) | **Merged in PR #62**. Not deployed |
-| W5 | Rename 3,877 legacy items `LEGACY — …` | **Approved by owner; not executed.** The owner runs it (agent QBO writes are blocked by the permission system) |
+| W5 | Rename 3,879 legacy items `LEGACY — …` | **Not executed.** The v3 evidence added QBO Ids 11796 and 10688 to the prior 3,877-row plan; both passed a read-only dry-run. The updated production action needs a specific chat yes |
 | — | QBO closing date 31 Aug 2026 | Owner sets in the QBO UI |
-| W6 | 30 Sep EPOS pack (stock count, product list, sales, POs) | Tonight after close |
-| W8 | 25–30 Sep sales backfill to `15030`; September close journals | After W6, chat yes |
-| W7 | Create 3,939 Inventory + 536 NonInventory items; IA offset; install mapping | After W5 + W6, chat yes |
+| W6 | 30 Sep EPOS pack (stock count, product list, sales, POs) | **Done** |
+| W8 | 25–30 Sep sales backfill to `15030`; September close journals | **Backfill done and live-verified** (35 receipts, no duplicates); close journals remain pending and need specific chat yes |
+| W7 | Create 3,938 Inventory + 492 NonInventory items; IA offset; install mapping | Read-only v3 preflight done: V ₦148,824,877.40, payload SHA `9854f694…`; refused until W5. Execution remains chat-yes gated |
 | W9 | Pipeline on for Company A (`OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`) | After a clean 1 Oct dry-run, chat yes |
 | W10 | Safe legacy inactivation | After W9 is stable |
 
 Open items that do **not** block go-live (tracked in the runbook):
 
-- 536 EPOS-untracked products. The owner may turn frozen food, eggs and rice into tracked EPOS masters (one master per family in grams/each, children deduct). Re-pull and rebuild the mapping when done; until then they go NonInventory.
-- 109 pack-named children where EPOS deducts 1 (`pricing_review.csv`): check the EPOS Master Products amount.
+- 492 final NonInventory products. The owner may later turn frozen food, eggs and rice into tracked EPOS masters (one master per family in grams/each, children deduct); any such EPOS change requires a fresh pull and map rebuild before posting.
+- Pack multipliers are no longer inferred from blank `VolumeOfSale`: all 2,212 non-owner products were checked against EPOS Master Products evidence. Five name-suffix and 14 cost-ratio disagreements remain flagged for review, but the map follows EPOS and the 1 Oct stock proof is 100% for comparable families.
 - Staff questions: Ernest's 19 Sep stock adds (deliveries or recounts?), and duplicate POs `3828`/`3829`/`3855`/`3861`.
 - Undeposited Funds is ₦0 through 24 Sep. Receipts posted from 25 Sep on land in `100900` and need depositing by the same till-sheet method (`akponora_cutover/uf_*`).
 

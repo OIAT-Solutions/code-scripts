@@ -34,7 +34,7 @@ export OIAT_COMPANIES_DIR=code_scripts/companies
 
 ### 1a. ✋ W5 — rename legacy items (owner runs)
 
-Name only. Quantities, costs, accounts and the IA balance are verified unchanged after every item. The script stops on the first difference.
+Name only. The current v3 plan has 3,879 rows, including QBO Ids 11796 and 10688 added by the master-link correction. Quantities, costs, accounts and the IA balance are verified unchanged after every item. The script stops on the first difference.
 
 ```bash
 python -m code_scripts.scripts.akponora_cutover.w5_legacy_rename --test --execute
@@ -50,7 +50,7 @@ Rollback, if ever needed: `--rollback` (dry-run by default; uses `rollback.csv`)
 
 ### 1b. QBO closing date (owner, in the QBO UI)
 
-Gear → Account and settings → Advanced → Accounting → **Close the books**, date **31/08/2026**, with a password only the owner holds. Move it to 30/09/2026 after step 4.
+Gear → Account and settings → Advanced → Accounting → **Close the books**, date **31/08/2026**, with a password only the owner holds. Move it to 30/09/2026 after the step 5 journals are verified.
 
 ### 1c. Bookkeeper
 
@@ -100,13 +100,13 @@ V (the 30 Sep opening stock value) must be **one number used in both the Septemb
 
 ```bash
 M=code_scripts.scripts.akponora_cutover
-F=outputs/nora_gaps_2026-09-25/final_mapping_2026-09-26
-python -m $M.w7_create_items create --mapping $F/approved_mapping_final.csv --inventory-list $F/create_list_inventory.csv --noninventory-list $F/create_list_noninventory.csv --stock-report "<StockReport_2026_09_30_*.csv>" --catalogue "<30 Sep catalogue_products.json>" --as-of 2026-09-30 --out outputs/w7_2026-09-30
+F=outputs/final_mapping_2026-10-01
+python -m $M.w7_create_items create --mapping $F/approved_mapping_final_v3.csv --inventory-list $F/create_list_inventory.csv --noninventory-list $F/create_list_noninventory_v3.csv --stock-report "<StockReport_2026_09_30_close_for_opening.csv>" --catalogue "<30 Sep catalogue_products.json>" --as-of 2026-09-30 --out outputs/w7_2026-09-30_v3
 ```
 
 - The output folder has `payloads.jsonl`, the summary with **V** and the payload SHA, and the live preflight.
 - **Zero collisions are required.** Any collision means W5 is incomplete.
-- 25 Sep rehearsal: 3,939 Inventory + 536 NonInventory, V ≈ ₦160.8M, 0 account/tax problems, collisions only from the not-yet-run W5.
+- Definitive v3 dry-run: 3,938 Inventory + 492 NonInventory, **V ₦148,824,877.40**, payload SHA `9854f694def575675639160f5b283bcdea4c5a61895799ffcdee6ec64b6594e8`, 0 account/tax problems. It correctly refuses until the 3,879-row W5 plan has executed.
 
 ---
 
@@ -142,14 +142,14 @@ python -m $M.w7_create_items create <same args as step 4> --execute --test 3 --a
 python -m $M.w7_create_items create <same args as step 4> --execute --approval-ref "<chat yes>" --expect-payloads-sha <sha from dry-run>
 ```
 
-Expected: 3,939 Inventory (`AKP-…`, InvStartDate 2026-10-01, asset `77`) + 536 NonInventory (`AKP-NS-…`).
+Expected: 3,938 Inventory (`AKP-…`, InvStartDate 2026-10-01, asset `77`) + 492 NonInventory (`AKP-NS-…`).
 
 ### 6a. ✋ IA offset (same night, dated 1 Oct)
 
 ```bash
-python -m $M.post_journal offset --w7-summary outputs/w7_2026-09-30/summary_execute.json --approved-v <V> --out outputs/w7_2026-09-30/offset.json
-python -m $M.post_journal post --spec outputs/w7_2026-09-30/offset.json
-python -m $M.post_journal post --spec outputs/w7_2026-09-30/offset.json --execute --expect-sha <sha> --approval-ref "<chat yes>"
+python -m $M.post_journal offset --w7-summary outputs/w7_2026-09-30_v3/summary_execute.json --approved-v 148824877.40 --out outputs/w7_2026-09-30_v3/offset.json
+python -m $M.post_journal post --spec outputs/w7_2026-09-30_v3/offset.json
+python -m $M.post_journal post --spec outputs/w7_2026-09-30_v3/offset.json --execute --expect-sha <sha> --approval-ref "<chat yes>"
 ```
 
 DocNumber `INV-EQ-2026-10-01`: credit IA `77` / debit `300150` = `B + C − V`. Afterwards IA `77` must equal **V** exactly.
@@ -157,8 +157,8 @@ DocNumber `INV-EQ-2026-10-01`: credit IA `77` / debit `300150` = `B + C − V`. 
 ### 6b. ✋ Install the mapping with Item Ids
 
 ```bash
-python -m $M.w7_create_items fill-ids --mapping $F/approved_mapping_final.csv --register outputs/w7_2026-09-30/register.csv --out-csv outputs/w7_2026-09-30/approved_mapping_with_ids.csv
-python -m code_scripts.scripts.install_conversion_mapping --source outputs/w7_2026-09-30/approved_mapping_with_ids.csv --destination runtime/mappings/company_a/approved.csv --sha256 <sha printed by fill-ids> --approval-ref "<chat yes>"
+python -m $M.w7_create_items fill-ids --mapping $F/approved_mapping_final_v3.csv --register outputs/w7_2026-09-30_v3/register.csv --out-csv outputs/w7_2026-09-30_v3/approved_mapping_with_ids.csv
+python -m code_scripts.scripts.install_conversion_mapping --source outputs/w7_2026-09-30_v3/approved_mapping_with_ids.csv --destination runtime/mappings/company_a/approved.csv --sha256 <sha printed by fill-ids> --approval-ref "<chat yes>"
 ```
 
 ---

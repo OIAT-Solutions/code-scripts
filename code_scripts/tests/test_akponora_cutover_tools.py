@@ -102,6 +102,36 @@ class ImportAndHelpers(unittest.TestCase):
                          ("ADEBAM VENTURES", "TRANSFER"))
 
 
+class MissingChildMultiplier(unittest.TestCase):
+    def test_blank_or_zero_child_multiplier_fails_closed_across_build_stages(self):
+        canonical = mod("build_canonical")
+        review = mod("review_approval")
+        final = mod("build_final_mapping")
+
+        # Tracked-owner behavior remains unchanged; only child rows require explicit evidence.
+        self.assertEqual(canonical.mult_of({"VolumeOfSale": None}), Decimal("1"))
+        self.assertEqual(canonical.explicit_mult_of({"VolumeOfSale": 4}), Decimal("4"))
+        for missing in (None, 0, "", "0"):
+            with self.subTest(volume_of_sale=missing):
+                product = {"VolumeOfSale": missing}
+                self.assertIsNone(canonical.explicit_mult_of(product))
+                self.assertEqual(canonical.child_multiplier_label(product), "MISSING_MASTER_AMOUNT")
+                self.assertEqual(
+                    review.child_volume_failure("CHILD", product),
+                    "CHILD_VOS_MISSING_MASTER_AMOUNT_REQUIRED",
+                )
+                self.assertIsNone(review.child_volume_failure("STOCK_OWNER", product))
+                with self.assertRaisesRegex(ValueError, "Master Product amount"):
+                    final.require_child_multiplier("child-1", product)
+
+        # This is the same guard run before build_final_mapping's approved-staging fast path.
+        # A staged child multiplier of 1 cannot override missing catalogue evidence.
+        staged_child = {"VolumeOfSale": None, "Staff Approved Sale Multiplier": "1"}
+        with self.assertRaisesRegex(ValueError, "blank/zero VolumeOfSale"):
+            final.require_child_multiplier("child-1", staged_child)
+        self.assertEqual(final.require_child_multiplier("child-1", {"VolumeOfSale": 4}), 4)
+        self.assertEqual(canonical.child_multiplier_label({"VolumeOfSale": 4}), "4")
+
 class FamilyWorkbook(unittest.TestCase):
     catalogue = [
         {"Id": 10, "Name": "MILK 1L*12", "CategoryName": "DRINKS", "IsStockTracked": True, "SellOnTill": False,

@@ -1,9 +1,11 @@
 """Final EPOS -> QBO mapping for AKPONORA / NORA MINI MART (company_a).
 
 OFFLINE: files only, no QBO/EPOS calls. Applies the owner/accountant decisions of 26 Sep 2026 (chat):
-  (a) rows already approved (approval/approved_mapping_staging.csv) stay approved unchanged;
+  (a) rows already approved (approval/approved_mapping_staging.csv) stay approved unchanged, subject to
+      the same required-multiplier check for child products;
   (b) blocked CHILD / STOCK_OWNER rows with a tracked stock owner are approved with the multiplier EPOS
-      actually uses (EPOS VolumeOfSale, or 1 when null) and listed in pricing_review.csv;
+      actually uses (explicit positive EPOS VolumeOfSale) and listed in pricing_review.csv; children without
+      an explicit multiplier are rejected until their Master Product amount is verified;
   (c) STANDALONE_UNTRACKED rows are approved to a dedicated NonInventory item per product
       (SKU AKP-NS-{EPOS ProductID}, name = EPOS name normalised, multiplier 1);
   (d) CONFIRM_QTY / COST_MISSING families are approved; create-list cost = current catalogue cost
@@ -81,6 +83,21 @@ def q(v, places="0.00001"):
 def mult(p):
     v = p.get("VolumeOfSale")
     return int(v) if v not in (None, 0) else 1
+
+
+def require_child_multiplier(product_id, product):
+    """Fail finalization for a child whose EPOS sale multiplier is not explicit."""
+    v = product.get("VolumeOfSale")
+    try:
+        amount = int(v)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        raise ValueError(
+            f"EPOS child {product_id} has blank/zero VolumeOfSale; "
+            "verify its Master Product amount before finalizing the mapping"
+        )
+    return amount
 
 
 def ns_name(n):
@@ -198,6 +215,11 @@ def build(canonical, approval, catalogue_path, items_dump, w5_plan, sales, out, 
             continue
         p = cat[pid]
         e = ev[pid]
+        role = e["Role"]
+        if role == "CHILD":
+            # This check runs before the approved-staging fast path too: stale/staged x1 rows
+            # cannot bypass the required EPOS multiplier evidence.
+            require_child_multiplier(pid, p)
         if pid in stg:  # rule (a)
             r = dict(stg[pid])
             assert r["Review Status"] == "Approved" and r["Target QBO Item Type"] == "Inventory"
@@ -205,12 +227,11 @@ def build(canonical, approval, catalogue_path, items_dump, w5_plan, sales, out, 
             final_rows.append(r)
             continue
         b = blk[pid]
-        role = e["Role"]
         if role in ("CHILD", "STOCK_OWNER"):  # rule (b)
             owner = e["Owner Product ID"]
             assert owner and owner in cat and cat[owner].get("IsStockTracked"), (pid, owner)
             f = fam["AKP-" + owner]
-            m = mult(p)
+            m = require_child_multiplier(pid, p) if role == "CHILD" else mult(p)
             if role == "STOCK_OWNER":
                 assert owner == pid and str(m) == f["Owner multiplier (canonical units per owner unit)"], pid
             else:

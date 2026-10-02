@@ -64,6 +64,21 @@ def fnum(v):
         return None
 
 
+def has_explicit_volume_of_sale(product) -> bool:
+    """Whether EPOS supplied a positive VolumeOfSale value for this product."""
+    try:
+        return int(product.get("VolumeOfSale")) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def child_volume_failure(role, product) -> str | None:
+    """Return a blocking reason when a child has no authoritative sale multiplier."""
+    if role == "CHILD" and not has_explicit_volume_of_sale(product):
+        return "CHILD_VOS_MISSING_MASTER_AMOUNT_REQUIRED"
+    return None
+
+
 def review(base, catalogue, sales, out, seed=DEFAULT_SEED, approved_by=DEFAULT_APPROVED_BY):
     base, out = Path(base), Path(out)
     prop_fields, proposal = read(base / "mapping_proposal.csv")
@@ -168,8 +183,11 @@ def review(base, catalogue, sales, out, seed=DEFAULT_SEED, approved_by=DEFAULT_A
         # child
         if p.get("IsStockTracked"):
             fails.append("CHILD_IS_TRACKED")
-        if m != mult(p):
-            fails.append("CHILD_MULT_NOT_VOS_OR_1")
+        volume_failure = child_volume_failure(e["Role"], p)
+        if volume_failure:
+            fails.append(volume_failure)
+        if not volume_failure and m != mult(p):
+            fails.append("CHILD_MULT_NOT_VOS")
         if m > om:
             fails.append("CHILD_MULT_GT_OWNER")
         if base_key(p["Name"]) != base_key(o["Name"]):

@@ -143,6 +143,22 @@ def mult_of(prod) -> Decimal:
     return Decimal(int(v)) if v not in (None, 0) else Decimal(1)
 
 
+def explicit_mult_of(prod) -> Decimal | None:
+    """Return a positive explicit sale multiplier, or None when EPOS leaves it blank/zero."""
+    v = prod.get("VolumeOfSale")
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return Decimal(n) if n > 0 else None
+
+
+def child_multiplier_label(prod) -> str:
+    """Render child evidence without converting a missing amount into x1."""
+    value = explicit_mult_of(prod)
+    return fmt_mult(value) if value is not None else "MISSING_MASTER_AMOUNT"
+
+
 def cost_ex(prod) -> Decimal:
     return dec(prod.get("CostPriceExTax")) or Decimal(0)
 
@@ -458,7 +474,7 @@ def build(args):
     # children / standalone
     standalone = 0
     for p in untracked:
-        cm = mult_of(p)
+        cm = explicit_mult_of(p)
         cands = strict_idx.get(key_strict(p["Name"]), [])
         loose = False
         if not cands:
@@ -468,6 +484,8 @@ def build(args):
         def check(o):
             om = mult_of(o)
             issues, soft = [], []
+            if cm is None:
+                return ["child VolumeOfSale is blank/zero; Master Product amount required"], soft, None
             if o.get("VolumeOfSale") is None and p.get("VolumeOfSale") not in (None, 1):
                 issues.append(f"owner has no VoS but child VoS {p['VolumeOfSale']}")
             elif cm > om:
@@ -516,8 +534,8 @@ def build(args):
         f = families[chosen["Id"]]
         if loose:
             soft.append("base name matches only after punctuation/space normalisation")
-        if p.get("VolumeOfSale") is None:
-            soft.append("multiplier 1 implied (child VoS null)")
+        if cm is None:
+            hard.append("child VolumeOfSale is blank/zero; Master Product amount required")
         if any(x.startswith("TRACKED_SIBLING") for x in f["flags"]):
             hard.append("owner family has a tracked sibling (double stock owner)")
         if (p.get("SalePriceTaxGroupName") or "") != (chosen.get("SalePriceTaxGroupName") or ""):
@@ -551,7 +569,7 @@ def build(args):
             "Owner multiplier (canonical units per owner unit)": fmt_mult(f["mult"]),
             "Canonical unit": unit_label(f), "Owner tier": f["tier"], "Create readiness": readiness,
             "Children A/B/C": f"{sum(1 for _, t in f['children'] if t == 'A')}/{sum(1 for _, t in f['children'] if t == 'B')}/{sum(1 for _, t in f['children'] if t == 'C')}",
-            "Child Product IDs": " | ".join(f"{c['Id']}x{fmt_mult(mult_of(c))}({t})" for c, t in f["children"]),
+            "Child Product IDs": " | ".join(f"{c['Id']}x{child_multiplier_label(c)}({t})" for c, t in f["children"]),
             "Owner cost ex tax": o.get("CostPriceExTax"), "Owner cost inc tax": o.get("CostPriceIncTax"),
             "Cost tax group": f["cost_tax"], "Unit cost ex tax (canonical)": q(f["unit_cost"], "0.00001"),
             "Stock report MeasuredCostPrice": "" if f["stock_cost"] is None else str(f["stock_cost"]),
