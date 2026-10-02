@@ -11,7 +11,8 @@
 | Server: the one scheduled Company A routine (`daily_run`), env, holds, approvals | [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
 | Operator tools (EPOS pulls, mapping, renames, creates, journals) | [`code_scripts/scripts/akponora_cutover/README.md`](code_scripts/scripts/akponora_cutover/README.md) |
 | Bookkeeper rules | [`docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md`](docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md) |
-| Background (Jan–Sep recovery) | `docs/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
+| Background (Jan–Sep recovery) | `docs/archive/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
+| Everything outstanding (checklist) | [`docs/AKPONORA_ROADMAP.md`](docs/AKPONORA_ROADMAP.md) |
 
 **Company:** AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `9341455406194328`, production).
 **As of:** 2 October 2026 — live on the new items since 1 Oct (see Status).
