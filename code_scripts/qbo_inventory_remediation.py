@@ -3,6 +3,9 @@
 
 This is a remediation-only utility. It does not run inventory sync, create new
 InventoryAdjustments, or touch sales transactions.
+
+Company A (company_a / AKPONORA): ``delete`` is hard-refused (AGENTS.md). ``plan``
+(read-only) still works.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from typing import Any
 from urllib.parse import quote
 
 from code_scripts.artifact_paths import artifact_day_stamp
+from code_scripts.company_a_guard import assert_not_company_a, company_a_refusal
 from code_scripts.company_config import get_available_companies, get_qbo_api_base_url, load_company_config
 from code_scripts.load_env import load_env_file
 from code_scripts.qbo_upload import TokenManager, _make_qbo_request
@@ -28,6 +32,10 @@ from code_scripts.token_manager import verify_realm_match
 
 MINORVERSION = "70"
 DEFAULT_NUMBER_PREFIX = "INVCON"
+_COMPANY_A_DELETE_REASON = (
+    "Deleting Company A InventoryAdjustments rewrites historical QtyOnHand/COGS; "
+    "any Company A inventory correction needs an owner-approved, separately reviewed plan."
+)
 CONFIRM_DELETE_FLAG = "--confirm-delete-inventory-adjustments"
 DEFAULT_EXCLUDED_NUMBERS = {
     "INVCON-20260430-14620",
@@ -478,6 +486,7 @@ def delete_inventory_adjustment(
     adjustment_id: str,
     sync_token: str,
 ) -> tuple[bool, str]:
+    assert_not_company_a("InventoryAdjustment delete", realm_id=realm_id, reason=_COMPANY_A_DELETE_REASON)
     base_url = get_qbo_api_base_url()
     url = f"{base_url}/v3/company/{realm_id}/inventoryadjustment?operation=delete&minorversion={MINORVERSION}"
     resp = _make_qbo_request(
@@ -504,6 +513,16 @@ def apply_deletions(
     plan_rows: list[dict[str, Any]],
     fail_fast: bool = False,
 ) -> list[dict[str, Any]]:
+    assert_not_company_a("InventoryAdjustment delete", realm_id=realm_id, reason=_COMPANY_A_DELETE_REASON)
+    for row in plan_rows:
+        if row.get("action") != "delete_candidate":
+            continue
+        assert_not_company_a(
+            "InventoryAdjustment delete",
+            company_key=row.get("company_key"),
+            realm_id=row.get("realm_id"),
+            reason=_COMPANY_A_DELETE_REASON,
+        )
     results: list[dict[str, Any]] = []
     operator_host = socket.gethostname()
     operator_user = getpass.getuser()
@@ -608,8 +627,25 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 def run(args: argparse.Namespace) -> int:
     _validate_args(args)
+    if args.command == "delete":
+        refusal = company_a_refusal(
+            "InventoryAdjustment delete", company_key=args.company, reason=_COMPANY_A_DELETE_REASON
+        )
+        if refusal:
+            print(f"[ERROR] {refusal}", file=sys.stderr)
+            return 2
     load_env_file()
     config = load_company_config(args.company)
+    if args.command == "delete":
+        refusal = company_a_refusal(
+            "InventoryAdjustment delete",
+            company_key=config.company_key,
+            realm_id=config.realm_id,
+            reason=_COMPANY_A_DELETE_REASON,
+        )
+        if refusal:
+            print(f"[ERROR] {refusal}", file=sys.stderr)
+            return 2
     verify_realm_match(config.company_key, config.realm_id)
     token_mgr = TokenManager(config.company_key, config.realm_id)
     exclude_numbers = set(DEFAULT_EXCLUDED_NUMBERS)

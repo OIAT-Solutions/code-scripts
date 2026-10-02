@@ -47,22 +47,16 @@ __pycache__/
 # Spreadsheets (keep out of source control by default)
 *.xlsx
 *.xls
-# Allow explicitly-curated references/fixtures if needed
-!docs/reference/*.xlsx
-!docs/reference/*.xls
-!apps/**/tests/fixtures/*.xlsx
-!apps/**/tests/fixtures/*.xls
-# Allow category mapping (no secrets; required for inventory account resolution)
-!mappings/Product.Mapping.csv
-# Allow invoice CSV template
-!templates/invoice_template.csv
-!templates/item_aliases.csv
 last_epos_transform.json
 transform_metadata.json
 
-# Per-company generated outputs / downloads
+# Per-company generated outputs / downloads / exports
 outputs/
 downloads/
+exports/
+
+# Root-level ad-hoc scripts (local only; real scripts live in code_scripts/scripts/)
+/scripts/
 
 # RAW spill staging (future-date rows awaiting processing)
 # These files are managed by run_pipeline.py and archived after use

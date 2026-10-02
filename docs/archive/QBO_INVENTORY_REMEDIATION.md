@@ -1,5 +1,7 @@
 # QBO Inventory Remediation
 
+> **Archived (2 Oct 2026).** Historical April 2026 remediation notes. `delete` is now hard-refused for Company A (`company_a`, realm 9341455406194328) in code; `plan` remains read-only. Follow [`AGENTS.md`](../../AGENTS.md).
+
 This utility is for remediation only. It helps plan and optionally delete historical QuickBooks `InventoryAdjustment` transactions created by prior inventory automation runs. It does not run the normal inventory sync, does not create new inventory adjustments, and does not touch sales sync.
 
 The default workflow is plan-only:

@@ -13,12 +13,15 @@ Modes:
 Use --dry-run to list what would be deleted without deleting.
 Use --limit N to cap how many to delete (default: no limit).
 
-Examples:
-  python scripts/qbo_delete_sales_receipts.py --company company_a --doc-number "SR-20260101-001" --dry-run
-  python scripts/qbo_delete_sales_receipts.py --company company_a --target-date 2026-01-15 --dry-run
-  python scripts/qbo_delete_sales_receipts.py --company company_a --from-date 2026-01-01 --to-date 2026-01-31 --dry-run
-  python scripts/qbo_delete_sales_receipts.py --company company_a --target-date 2026-01-15
-  python scripts/qbo_delete_sales_receipts.py --company company_a --from-date 2026-01-01 --to-date 2026-01-31 --limit 100
+COMPANY A (company_a / AKPONORA, realm 9341455406194328) IS HARD-REFUSED in every
+mode: AGENTS.md forbids deleting historical sales receipts. Not overridable.
+
+Examples (company_b shown; company_a is refused):
+  python scripts/qbo_delete_sales_receipts.py --company company_b --doc-number "SR-20260101-001" --dry-run
+  python scripts/qbo_delete_sales_receipts.py --company company_b --target-date 2026-01-15 --dry-run
+  python scripts/qbo_delete_sales_receipts.py --company company_b --from-date 2026-01-01 --to-date 2026-01-31 --dry-run
+  python scripts/qbo_delete_sales_receipts.py --company company_b --target-date 2026-01-15
+  python scripts/qbo_delete_sales_receipts.py --company company_b --from-date 2026-01-01 --to-date 2026-01-31 --limit 100
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from code_scripts.company_a_guard import assert_not_company_a, company_a_refusal
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config, get_available_companies
 from code_scripts.token_manager import verify_realm_match
@@ -41,6 +45,11 @@ from code_scripts.qbo_upload import BASE_URL, _make_qbo_request, TokenManager
 load_env_file()
 
 MINORVERSION = "70"
+
+_COMPANY_A_REASON = (
+    "Deleting historical QBO SalesReceipts is forbidden for Company A; correct sales with "
+    "an approved reversing/adjusting entry instead."
+)
 
 
 def _parse_date(s: str) -> str:
@@ -131,6 +140,7 @@ def _delete_sales_receipt(
     sync_token: str,
 ) -> Tuple[bool, str]:
     """Delete one Sales Receipt (QBO operation=delete). Returns (success, error_message)."""
+    assert_not_company_a("SalesReceipt delete", realm_id=realm_id, reason=_COMPANY_A_REASON)
     url = f"{BASE_URL}/v3/company/{realm_id}/salesreceipt?operation=delete&minorversion={MINORVERSION}"
     payload = {"Id": receipt_id, "SyncToken": sync_token}
     resp = _make_qbo_request("POST", url, token_mgr, json=payload)
@@ -147,7 +157,7 @@ def _delete_sales_receipt(
     return False, f"HTTP {resp.status_code}: {msg}"
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Delete QBO Sales Receipts: single receipt, by target date, or by date range.",
     )
@@ -164,7 +174,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="List what would be deleted; do not delete")
     parser.add_argument("--limit", type=int, metavar="N", help="Max number of receipts to delete (default: no limit)")
     parser.add_argument("--report-csv", metavar="PATH", help="Write delete report to CSV (Id, DocNumber, TxnDate, Status, Error)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Validate dates
     if args.from_date and not args.to_date:
@@ -185,7 +195,21 @@ def main() -> int:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 1
 
+    refusal = company_a_refusal("SalesReceipt delete", company_key=args.company, reason=_COMPANY_A_REASON)
+    if refusal:
+        print(f"[ERROR] {refusal}", file=sys.stderr)
+        return 2
+
     config = load_company_config(args.company)
+    refusal = company_a_refusal(
+        "SalesReceipt delete",
+        company_key=config.company_key,
+        realm_id=config.realm_id,
+        reason=_COMPANY_A_REASON,
+    )
+    if refusal:
+        print(f"[ERROR] {refusal}", file=sys.stderr)
+        return 2
     verify_realm_match(args.company, config.realm_id)
     token_mgr = TokenManager(config.company_key, config.realm_id)
     realm_id = config.realm_id

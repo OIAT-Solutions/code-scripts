@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from code_scripts.company_a_guard import assert_not_company_a
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import (
     ensure_company_runtime_compatible,
@@ -1180,7 +1181,12 @@ def get_or_create_item_category_id(
                 print(f"[INFO] Reused existing Category item: Name={category_normalized!r} Id={cat_id}")
                 return cat_id
 
-    # Create Category item
+    # Create Category item (never for Company A: the Oct catalogue is a separate approved batch)
+    assert_not_company_a(
+        "Category item create",
+        realm_id=realm_id,
+        reason="Company A catalogue changes go through the approved akponora_ops catalogue sync only.",
+    )
     create_url = f"{BASE_URL}/v3/company/{realm_id}/item?minorversion=70"
     payload = {
         "Name": category_normalized,
@@ -1879,7 +1885,21 @@ def resolve_all_unique_items(
     """
     Resolve each unique item name once: use prefetch, patch if needed, or create.
     Fills item_result_by_name and patched_items. Returns counts for logging.
+
+    Legacy name-based Inventory create/patch path: refused for Company A and for any
+    company in product-conversion mode (those use resolve_conversion_items).
     """
+    assert_not_company_a(
+        "name-based Inventory item resolution (resolve_all_unique_items)",
+        company_key=getattr(config, "company_key", None),
+        realm_id=realm_id,
+        reason="October sales must map to exact approved AKP-/AKP-NS- Ids via product conversion.",
+    )
+    if bool(getattr(config, "product_conversion_enabled", False)):
+        raise RuntimeError(
+            "resolve_all_unique_items is not allowed in product conversion mode; "
+            "use resolve_conversion_items (exact approved Ids only)."
+        )
     default_item_id = config.get_qbo_config().get("default_item_id", "1")
     auto_fix = bool(allow_wrong_type_autofix and getattr(config, "auto_fix_wrong_type_items", False))
     stats = {
@@ -3440,7 +3460,7 @@ def main():
     if inventory_enabled:
         print(f"\n[INFO] Items created as Inventory. QtyOnHand starts at {config.default_qty_on_hand}. QBO must allow negative inventory.")
         print("[INFO] Item hierarchy enabled: True")
-        print("[INFO] For InvStartDate issues (QBO 6270), use: python scripts/qbo_inv_manager.py --company <key> list-invstart / set-invstart-bulk")
+        print("[INFO] For InvStartDate issues (QBO 6270), review with: python code_scripts/scripts/qbo_inv_manager.py --company <key> list-invstart (set-invstart* is refused for company_a; see AGENTS.md)")
         try:
             mapping_cache = load_category_account_mapping(config)
             print(f"[INFO] Loaded {len(mapping_cache)} category mappings from {config.product_mapping_file}")

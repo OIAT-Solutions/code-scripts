@@ -36,3 +36,29 @@ reports
 **/*.sqlite-shm
 **/*.xlsx
 **/*.xls
+
+# Runtime state, evidence and secrets never belong in a deploy image
+# (docker/entrypoint.sh recreates/links these under STATE_ROOT at start-up)
+Uploaded
+**/Uploaded
+uploads
+**/uploads
+logs
+**/logs
+**/outputs
+**/reports
+**/downloads
+**/exports
+**/*.csv
+# entrypoint.sh copies this header-only template into STATE_ROOT on first start
+!templates/product_conversion_empty.csv
+**/uploaded_docnumbers*.json
+**/qbo_tokens*.sqlite
+*.sqlite3
+**/*.sqlite3
+.claude
+.oiat
+.env.*
+**/__pycache__
+**/.DS_Store
+.DS_Store

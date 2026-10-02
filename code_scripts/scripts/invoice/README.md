@@ -4,6 +4,10 @@ Scripts for preparing and importing customer invoices into QuickBooks Online.
 
 **Run from repo root** (code-scripts) so relative paths (e.g. `templates/item_aliases.csv`, `invoices/...`) resolve correctly.
 
+> **Company A (AKPONORA):** live `qbo_import_invoices.py` posting is refused for any invoice dated
+> on/after 2026-10-01 (fuzzy name matching would land on legacy items). October invoices must use exact
+> approved AKP-/AKP-NS- Item Ids; see [AGENTS.md](../../../AGENTS.md). `--dry-run` / `--validate-only` still work.
+
 ### Config files (`templates/`)
 
 Config CSVs live under **`templates/`** at the repo root so paths stay consistent and out of source data folders.
