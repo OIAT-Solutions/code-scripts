@@ -7,12 +7,13 @@
 | Tonight/tomorrow, step by step with commands | [`docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md) |
 | What has already been posted, and when | [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md) |
 | Code contract, posting controls, incident response | [`docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md`](docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md), [`docs/AKPONORA_OPERATIONS_CONTROLS.md`](docs/AKPONORA_OPERATIONS_CONTROLS.md) |
+| Daily running from October: catalogue sync, bills from POs, item guard | [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md) |
 | Operator tools (EPOS pulls, mapping, renames, creates, journals) | [`code_scripts/scripts/akponora_cutover/README.md`](code_scripts/scripts/akponora_cutover/README.md) |
 | Bookkeeper rules | [`docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md`](docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md) |
 | Background (Jan–Sep recovery) | `docs/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
 
 **Company:** AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `9341455406194328`, production).
-**As of:** 1 October 2026 (v3 recovery completed after the 1 Oct trading-day proof).
+**As of:** 2 October 2026 — live on the new items since 1 Oct (see Status).
 **Goal:** from **1 Oct 2026**, till sales post only to **new QBO items**. These are Inventory `AKP-{EPOS master ProductID}`, or NonInventory `AKP-NS-{ProductID}` for products EPOS does not stock-track. QBO perpetual FIFO then gives COGS. Jan–Sep is history on the catch-all.
 
 ---
@@ -43,29 +44,49 @@
 | Inventory value | New-item subledger = IA `77` GL. Opening = 30 Sep EPOS count, InvStartDate 2026-10-01 |
 | COGS from 1 Oct | QBO FIFO on new items; month-end posts only a verified count variance |
 | Purchases after the fix | Item lines on the **new** `AKP-` items in the item's unit (e.g. 5 cartons × 24 = 120 cans). `AKP-NS-` items: purchases expense to 200xxx |
-| Jan–Sep sales history | Catch-all `15030` (posted through 24 Sep; 25–30 Sep pending) |
+| Jan–Sep sales history | Catch-all `15030` (posted through 30 Sep) |
+| New EPOS products after 1 Oct | `catalogue_sync` (never by hand in QBO) |
+| Purchases from October | EPOS received POs → `bills_sync` → reviewed unpaid Bills |
 | Legacy catalogue | Renamed `LEGACY —` (W5), excluded from mapping, inactivated later (W10) |
 
 **Create-night rule:** creating Inventory with QtyOnHand debits IA. A same-night offset (credit IA `77` / debit `300150` = `B + C − V`) makes IA after the creates equal the **30 Sep EPOS value V** only. Recalculate live. Chat yes.
 
 ---
 
-## Status (30 Sep 2026)
+## Status (2 Oct 2026) — LIVE
+
+The cutover is done. Details and receipts: [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md). Day-to-day running: [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md).
 
 | ID | What | Status |
 | --- | --- | --- |
-| W0 | Bookkeeper freeze (bills + invoices paused) | Note updated 26 Sep; owner to send/enforce |
-| W2/W3 | Canonical mapping | **Rebuilt as v3**: 6,150 products; all 2,212 non-owner rows checked against view-only EPOS Master Products evidence; 1 Oct sold-family proof 496/496. Item Ids are filled after W7 |
-| W4 | Pipeline code (October contract, controls, scheduler gate) | **Merged in PR #62**. Not deployed |
-| W5 | Rename 3,879 legacy items `LEGACY — …` | **Not executed.** The v3 evidence added QBO Ids 11796 and 10688 to the prior 3,877-row plan; both passed a read-only dry-run. The updated production action needs a specific chat yes |
-| — | QBO closing date 31 Aug 2026 | Owner sets in the QBO UI |
-| W6 | 30 Sep EPOS pack (stock count, product list, sales, POs) | **Done** |
-| W8 | 25–30 Sep sales backfill to `15030`; September close journals | **Backfill done and live-verified** (35 receipts, no duplicates); close journals remain pending and need specific chat yes |
-| W7 | Create 3,938 Inventory + 492 NonInventory items; IA offset; install mapping | Read-only v3 preflight done: V ₦148,824,877.40, payload SHA `9854f694…`; refused until W5. Execution remains chat-yes gated |
-| W9 | Pipeline on for Company A (`OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`) | After a clean 1 Oct dry-run, chat yes |
+| W0 | Bookkeeper freeze | Bills **can resume on the new `AKP-` items once the owner says so** (prefer the bills sync below). September deliveries billed late go against GRNI `210200`, never items. Still no new items by hand, nothing on `LEGACY —` items |
+| W2/W3 | Canonical mapping v3 | **Done and installed**: 6,150 rules → 4,430 Item Ids, sha `b4d8c640…` |
+| W4 | Pipeline code | Merged (PR #62) plus later fixes on branch `cursor/post-akponora-qbo-writes-51f3` (not pushed yet). **Not deployed to OIAT-SRV-01** |
+| W5 | Legacy rename | **Done** 1 Oct: 3,879 items `LEGACY — …` |
+| — | QBO closing date | Owner sets **30 Sep 2026** in the QBO UI (not yet confirmed) |
+| W6 / W8 | 30 Sep pack; 25–30 Sep backfill; Sep close journals; GRNI | **Done** (JE 76552, 76553, 76554; GRNI account `210200` Id 87). IA `77` = V ₦148,824,877.40 at 30 Sep; every 120xxx ₦0 |
+| W7 | 3,938 Inventory + 492 NonInventory creates; IA offset JE 80493; equity reclass JE 80500 | **Done** 2 Oct |
+| — | 1 Oct sales | **Posted** 2 Oct (SalesReceipts 80494–80499, ₦3,211,950.00, MATCH, FIFO COGS ₦1,933,536.56) |
+| W9 | Company A daily automation on the server | **Not on.** Needs: push + deploy, copy the installed mapping to the server `STATE_ROOT`, set env vars, chat yes. Until then each day is run by hand from this repo (dry-run, then post with a chat yes) |
 | W10 | Safe legacy inactivation | After W9 is stable |
 
-Open items that do **not** block go-live (tracked in the runbook):
+### Being built now (2 Oct) — `code_scripts/akponora_ops/`
+
+| Job | What | Writes |
+| --- | --- | --- |
+| `catalogue_sync` | Finds new/changed EPOS products; maps pack children to their master using the EPOS Master Products amount; creates new `AKP-`/`AKP-NS-` items at **qty 0**; checks EPOS stock and PO history and flags unexplained stock; installs the new mapping version. Also runs just before the Company A transform when `OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES=1` | Creates + mapping install only with an approval ref (or the automated env gate, capped) |
+| `bills_sync` | Turns received EPOS POs (received ≥ 1 Oct) into unpaid QBO Bills on the mapped items in the item's unit; vendor map, duplicate checks, review sheet + Slack | Posts only bills a human marked `Approve=yes` (or the automated env gate, capped). Never pays |
+| `item_guard` | Daily read-only QBO scan: non-`AKP-` items, lines on `LEGACY —`/`15030`/unmapped items, 120xxx activity, wrong asset account, near-duplicate names, negative stock. Slack alert | None (GET only) |
+| `ops_scheduler` | Cron runner for the three jobs (`docker compose --profile akponora-ops`); each job only when its `OIAT_AKPONORA_<JOB>_CRON` is set | — |
+
+Enabling any automated write mode on production is a chat-yes action.
+
+Open items:
+
+- Undeposited Funds `100900` ₦29,233,799.99 (25 Sep–1 Oct receipts) awaits the till-sheet deposits; 25, 26 and 29 Sep sheets were blank. A teammate is building the "Daily Sales Account Breakdown" sheet → server → QBO deposit flow (review later).
+- 11 items went negative on 1 Oct (deliveries not yet billed); they clear when the October bills are posted.
+- **438 legacy items were never renamed** (W5 renamed only the 3,879 whose names clashed with a new item). They have no Sku and no `LEGACY —` prefix; 428 still carry qty (~₦9.14M), so a bookkeeper could pick them. `item_guard` treats any October line on them as an ALERT. Owner to decide: a W5 follow-up rename (chat yes) or accept. List: `outputs/item_guard_firstrun/report.json` → `legacy_not_renamed`.
+- Equity: `300100` −₦531,210,337.71, `300150` ₦427,977,166.81; full clean-up deferred to year end.
 
 - 492 final NonInventory products. The owner may later turn frozen food, eggs and rice into tracked EPOS masters (one master per family in grams/each, children deduct); any such EPOS change requires a fresh pull and map rebuild before posting.
 - Pack multipliers are no longer inferred from blank `VolumeOfSale`: all 2,212 non-owner products were checked against EPOS Master Products evidence. Five name-suffix and 14 cost-ratio disagreements remain flagged for review, but the map follows EPOS and the 1 Oct stock proof is 100% for comparable families.
@@ -105,7 +126,7 @@ Open items that do **not** block go-live (tracked in the runbook):
 
 **Allowed without asking:** read-only QBO/EPOS queries and reports; code and tests; mapping/workbook files on disk; dry-runs.
 
-**Needs a chat yes for the specific action:** sales backfills; journals (Sep close, GRNI, IA offset); W5 renames; W7 creates; installing the mapping; turning the pipeline/scheduler on; any InventoryAdjustment; inactivating any item; Undeposited Funds deposits/transfers; any Bill Payment on `66251`; creating accounts (e.g. the GRNI liability); changing QBO settings.
+**Needs a chat yes for the specific action:** sales backfills; journals (Sep close, GRNI, IA offset); W5 renames; W7 creates; installing the mapping; `catalogue_sync apply`; `bills_sync post`; turning on any automated mode (`OIAT_COMPANY_A_CATALOGUE_AUTO_CREATE`, `OIAT_COMPANY_A_BILLS_AUTO_POST`, the before-sales hook) or the pipeline/scheduler; any InventoryAdjustment; inactivating any item; Undeposited Funds deposits/transfers; any Bill Payment on `66251`; creating accounts (e.g. the GRNI liability); changing QBO settings.
 
 **Forbidden:** InventoryAdjustment on the sales path; bulk inactivation or deletion of products; legacy qty edits to match EPOS; January-style qty-10 import; catch-all or legacy items as October targets.
 

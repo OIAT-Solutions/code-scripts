@@ -42,6 +42,30 @@ JS = r"""() => {
 }"""
 
 
+def scrape_product(page, cfg, pid: str, extra_js: str | None = None) -> dict | None:
+    """GET one product's Advanced Edit page (view only) and read it; None after 3 failed attempts.
+
+    ``extra_js`` is evaluated on the same page and stored under ``"extra"``.
+    """
+    for _attempt in range(3):
+        try:
+            page.goto(PAGE_URL.format(pid=pid), wait_until="domcontentloaded", timeout=60000)
+            if "login" in page.url.lower() or "identity" in page.url.lower():
+                epos_login(page, cfg)
+                continue
+            page.wait_for_selector("#stock-master-products", timeout=30000)
+            d = page.evaluate(JS)
+            if extra_js:
+                d["extra"] = page.evaluate(extra_js)
+            d["product_id"] = pid
+            d["scraped_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            return d
+        except Exception as exc:  # noqa: BLE001
+            print("retry", pid, exc, flush=True)
+            time.sleep(3)
+    return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ids-file", type=Path, required=True, help="text file, one EPOS ProductID per line")
@@ -64,23 +88,10 @@ def main(argv=None) -> int:
             if f.exists():
                 continue
             t0 = time.time()
-            for _attempt in range(3):
-                try:
-                    page.goto(PAGE_URL.format(pid=pid), wait_until="domcontentloaded", timeout=60000)
-                    if "login" in page.url.lower() or "identity" in page.url.lower():
-                        epos_login(page, cfg)
-                        continue
-                    page.wait_for_selector("#stock-master-products", timeout=30000)
-                    d = page.evaluate(JS)
-                    break
-                except Exception as exc:  # noqa: BLE001
-                    print("retry", pid, exc, flush=True)
-                    time.sleep(3)
-            else:
+            d = scrape_product(page, cfg, pid)
+            if d is None:
                 print("FAILED", pid, flush=True)
                 continue
-            d["product_id"] = pid
-            d["scraped_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             f.write_text(json.dumps(d, indent=1))
             print(n, pid, d["current"], [(r["master_id"], r["cells"][2:4]) for r in (d["master_rows"] or [])], flush=True)
             time.sleep(max(0, a.min_seconds - (time.time() - t0)))

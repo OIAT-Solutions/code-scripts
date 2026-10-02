@@ -2,6 +2,8 @@
 
 Reusable versions of the September 2026 cutover scripts. Read [`AGENTS.md`](../../../AGENTS.md) before any QBO write, inventory change or Company A pipeline change.
 
+**Cutover is done (1–2 Oct 2026).** Day-to-day work (new products, bills from POs, item guard) lives in [`code_scripts/akponora_ops/`](../../akponora_ops/) — see [`docs/AKPONORA_DAILY_OPERATIONS.md`](../../../docs/AKPONORA_DAILY_OPERATIONS.md). The tools below stay for evidence re-runs, W10 and incident recovery.
+
 - Run every tool from the repo root as `.venv/bin/python -m code_scripts.scripts.akponora_cutover.<tool> --help`.
 - `OIAT_COMPANIES_DIR` defaults to `code_scripts/companies`. QBO tokens come from `code_scripts.token_manager.get_access_token` and are never printed.
 - Outputs go to `outputs/<tool>_<timestamp>/` unless you pass `--out`.

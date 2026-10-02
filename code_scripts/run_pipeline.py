@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 import logging
 from datetime import datetime, timedelta, timezone
 
+from code_scripts.akponora_ops.common import run_dir
 from code_scripts.load_env import load_env_file
 from code_scripts.slack_notify import (
     notify_pipeline_success,
@@ -23,6 +24,7 @@ from code_scripts.company_config import (
     get_available_companies,
     load_company_config,
 )
+from code_scripts.product_conversion import ProductConversionRegistry, canonical_product_id
 from code_scripts.token_manager import verify_realm_match
 from code_scripts.run_lock import hold_global_lock
 import pandas as pd
@@ -1095,6 +1097,51 @@ def reconcile_company(company_key: str, target_date: str, config, repo_root: Pat
 
 
 APPROVAL_FILE_ENV = "COMPANY_A_POSTING_APPROVAL_FILE"
+CATALOGUE_SYNC_BEFORE_SALES_ENV = "OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES"
+_RAW_PRODUCT_ID_COLUMNS = ("ProductId", "ProductID", "Product ID", "EPOS Product ID")
+
+
+def unmapped_raw_product_ids(raw_file: str, config) -> set[str]:
+    """EPOS Product IDs in a raw BookKeeping file that the installed mapping does not cover."""
+    registry = ProductConversionRegistry.from_csv(config.product_conversion_file, allow_name_fallback=False)
+    frame = pd.read_csv(raw_file, dtype=str, keep_default_na=False)
+    column = next((c for c in _RAW_PRODUCT_ID_COLUMNS if c in frame.columns), None)
+    if column is None:
+        return set()
+    ids = {canonical_product_id(v) for v in frame[column] if str(v).strip()}
+    return {pid for pid in ids if pid and pid not in registry.by_product_id}
+
+
+def catalogue_sync_before_transform(company_key: str, business_date: str, config, raw_file: str) -> None:
+    """Company A: map (and, when automated creates are on, create) new EPOS products sold today.
+
+    Opt-in via OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES=1. Never raises: if a product
+    stays unmapped, the transform fails the day closed exactly as it would without this hook.
+    """
+    if company_key != "company_a" or not bool(getattr(config, "product_conversion_enabled", False)):
+        return
+    if os.getenv(CATALOGUE_SYNC_BEFORE_SALES_ENV, "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        missing = unmapped_raw_product_ids(raw_file, config)
+        if not missing:
+            logging.info(f"Catalogue sync: every product sold on {business_date} is mapped")
+            return
+        logging.info(f"Catalogue sync: {len(missing)} unmapped product id(s) on {business_date}: {sorted(missing)}")
+        from code_scripts.akponora_ops.catalogue_sync import ensure_products_mapped
+
+        out_dir = run_dir(f"catalogue_sync_presales_{business_date}")
+        result = ensure_products_mapped(missing, out_dir=out_dir)
+        unresolved = sorted(result.get("unresolved") or [])
+        if unresolved:
+            logging.warning(
+                f"Catalogue sync left {len(unresolved)} product id(s) unmapped for {business_date}: {unresolved}. "
+                f"The transform will fail the day closed; review {out_dir}"
+            )
+        else:
+            logging.info(f"[OK] Catalogue sync mapped all {len(missing)} new product id(s) for {business_date}")
+    except Exception as exc:
+        logging.error(f"Catalogue sync before transform failed for {business_date}: {exc}")
 
 
 def standing_approval_for_day(company_key: str, business_date: str, config) -> Optional[dict]:
@@ -1601,6 +1648,8 @@ def main(
                     used_raw_spill_for_day.append(raw_spill_path)
                     warnings.append(f"{day_date}: merged target split ({merge_stats['base_rows']} rows) + raw spill ({merge_stats['extra_rows']} rows) -> final ({merge_stats['total_rows']} rows)")
                 
+                catalogue_sync_before_transform(company_key, day_date, config, raw_file_to_use)
+
                 # Phase 2: Transform using raw file (combined or original)
                 run_step(
                     f"Phase 2: Transform to single CSV (transform) - {day_date}",
@@ -1938,6 +1987,8 @@ def main(
                 notify_pipeline_update(pipeline_name, log_file, watchdog_summary, config.slack_webhook_url)
                 watchdog_sent = True
             
+            catalogue_sync_before_transform(company_key, target_date, config, raw_file_to_use)
+
             # Phase 2: Transform using raw file (combined or original)
             run_step(
                 "Phase 2: Transform to single CSV (transform)",

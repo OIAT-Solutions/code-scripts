@@ -1,5 +1,7 @@
 # Akponora (Company A) — 30 Sep close and 1 Oct go-live runbook
 
+> **Status (2 Oct 2026):** the cutover steps in this file are **done** (see [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md)). For daily running from October, use [`AKPONORA_DAILY_OPERATIONS.md`](AKPONORA_DAILY_OPERATIONS.md). Remaining: W9 server deploy (chat yes), QBO closing date in the UI, UF till-sheet deposits, owner decision on the 438 unrenamed legacy items.
+
 Step-by-step for the team. Rules and policy: [`AGENTS.md`](../AGENTS.md). History: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md). Tool details: [`code_scripts/scripts/akponora_cutover/README.md`](../code_scripts/scripts/akponora_cutover/README.md).
 
 **Every step marked ✋ is a production QBO write: get the chat yes for that step, run the dry-run first, and verify afterwards.** Stop at the first failed verification. Never retry a write blindly: read QBO first.
@@ -207,12 +209,15 @@ If anything fails in October, the posting hold stops later posts. Investigate, t
 
 ---
 
-## Open items (not blocking go-live)
+## Open items (post go-live)
 
 | Item | Owner | Action |
 | --- | --- | --- |
-| 536 EPOS-untracked products (frozen by kg, eggs, rice, bags) | Owner / team | Optional: make one tracked EPOS master per family (unit g or Each; children deduct grams/units; test-sale-and-void one family first). Then re-pull and rebuild the mapping; they become Inventory. List: `MISC/…/As of 25th September/AKPONORA_536_untracked_products_2026-09-26.xlsx` |
-| 109 pack-named children deducting 1 (e.g. EVA BAR SOAP150g*4) | Team | Check the EPOS Master Products amount; fix EPOS if it should deduct N, then rebuild the mapping |
-| Pricing anomalies | Team | `final_mapping_2026-09-26/pricing_review.csv` |
-| Staff questions | Ernest / store | 19 Sep stock adds; duplicate POs |
-| W10 legacy inactivation | Later | Only after stable October operation; lab → small batches, qty→0 to `300150`, chat yes per batch |
+| W9: deploy + standing approval on OIAT-SRV-01 | Owner | Push branch, copy mapping to server `STATE_ROOT`, set env, chat yes. Until then post each day by hand from this repo |
+| QBO closing date 30 Sep 2026 | Owner | Set in the QBO UI |
+| Undeposited Funds ₦29.23M (25 Sep–1 Oct) | Team | Till-sheet deposits (`uf_*`); blank sheets for 25/26/29 Sep; teammate's sheet→server→QBO flow later |
+| 11 items negative after 1 Oct sales | Bookkeeper / `bills_sync` | Post October received POs as Bills on the new items |
+| 438 legacy items never renamed | Owner | W5 follow-up rename (chat yes) or accept; list in `outputs/item_guard_firstrun/report.json` → `legacy_not_renamed` |
+| 492 NonInventory (frozen food, eggs, rice, …) | Owner / team | Optional: one tracked EPOS master per family, then `catalogue_sync` / map rebuild |
+| Duplicate POs `3828`/`3829`/`3855`/`3861` | Store | Confirm before bill entry |
+| W10 legacy inactivation | Later | Only after stable October; qty→0 to `300150`, chat yes per batch |

@@ -69,6 +69,16 @@ services:
       SCHEDULE_CRON: ${SCHEDULE_CRON:-0 18 * * *}
       SCHEDULE_TZ: ${SCHEDULE_TZ:-Africa/Lagos}
 
+  # Company A operations jobs (catalogue sync, bills sync, item guard). Opt-in profile:
+  # `docker compose --profile akponora-ops up -d akponora-ops`. Each job runs only when its
+  # OIAT_AKPONORA_<JOB>_CRON is set in .env, and writes to QBO only with its own approval env
+  # vars (see docs/AKPONORA_DAILY_OPERATIONS.md).
+  akponora-ops:
+    <<: *app-common
+    profiles: ["akponora-ops"]
+    container_name: ${COMPOSE_PROJECT_NAME:-oiat}-akponora-ops
+    command: ["python", "-m", "code_scripts.akponora_ops.ops_scheduler"]
+
   caddy:
     build:
       context: .
