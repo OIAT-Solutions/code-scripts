@@ -122,6 +122,28 @@ def aggregate_product_rows(out: pd.DataFrame, *, preserve_descriptions: bool = F
     return aggregated
 
 
+def drop_netted_zero_rows(out: pd.DataFrame) -> pd.DataFrame:
+    """Drop aggregated rows whose quantity and every money column sum to zero.
+
+    A sale and its same-tender refund/void (e.g. +1 and -1) carry no money and no
+    net stock movement, but the October Inventory path refuses non-positive
+    quantities. Any row with a non-zero quantity or amount is kept, so real
+    refunds still fail the day for reviewed handling.
+    """
+    sum_cols = [c for c in _AGG_SUM_COLS if c in out.columns]
+    if "ItemQuantity" not in sum_cols:
+        return out
+    numeric = out[sum_cols].apply(pd.to_numeric, errors="coerce")
+    zero = numeric["ItemQuantity"].abs().lt(1e-9)
+    for c in sum_cols:
+        if c != "ItemQuantity":
+            zero &= numeric[c].abs().lt(0.005)
+    if zero.any():
+        names = ", ".join(sorted(set(out.loc[zero, "Item(Product/Service)"].astype(str))))
+        print(f"[INFO] Dropped {int(zero.sum())} netted zero row(s) (sale and refund cancel out): {names}")
+    return out.loc[~zero]
+
+
 def parse_date(value: str) -> Optional[datetime]:
     """Parse common date/time strings into a naive datetime (local to EPOS export).
     Returns None if empty/unparseable.
@@ -561,6 +583,8 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
 
         # 2. Collapse duplicate product rows within each tender group
         out = aggregate_product_rows(out, preserve_descriptions=conversion_enabled)
+        if conversion_enabled:
+            out = drop_netted_zero_rows(out)
         out = out.reset_index(drop=True)
 
         post_count = len(out)

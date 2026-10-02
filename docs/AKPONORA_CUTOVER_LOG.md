@@ -76,4 +76,11 @@ Company: AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `934145
   - Account `210200 - Goods Received Not Invoiced` created (Id `87`, Other Current Liability / AccruedLiabilities).
   - `GRNI-2026-09` JE `76554`: Dr 200xxx ₦35,579,577.33 + Dr `300150` ₦11,654,130.30 / Cr `87` ₦47,233,707.63. Payload SHA `32ee13dd…`. Not auto-reversed: the real September bills are entered against `210200`.
 - Live check after the journals: IA `77` = **₦148,824,877.40 = V**; every 120xxx account ₦0.
-- **W5 rename** started: 10-item test `RENAMED`, balances unchanged; full 3,879-row run in progress (`w5_legacy_rename/results.csv`, `run_all_2026-10-01.log`).
+- **W5 rename done**: all 3,879 legacy items renamed `LEGACY — …` (3,878 `RENAMED` + 1 `ALREADY_RENAMED` from an interrupted first run). Balances unchanged at every 250-item check (`w5_legacy_rename/results.csv`, `run_all_2026-10-01.log`).
+
+## 2 Oct 2026, early hours (production writes, owner chat yes 22:28 EDT)
+
+- **W7 creates done**: post-W5 dry-run had zero collisions, V ₦148,824,877.40, payload SHA `9854f694…` unchanged. Pilot 3 (Ids `15032`–`15034`) verified, then all: **3,938 Inventory + 492 NonInventory created**, 0 failures. B ₦148,824,877.40; C ₦148,824,877.40 (C difference ₦0.00). Evidence `outputs/w7_2026-09-30_v3/` (`results.csv`, `register.csv`, `summary_execute.json`).
+- **IA offset** `INV-EQ-2026-10-01` JE `80493`: Dr `300150` / Cr IA `77` ₦148,824,877.40, `POSTED_VERIFIED`. IA `77` = **₦148,824,877.40** as of 30 Sep and 1 Oct.
+- **Mapping installed**: `runtime/mappings/company_a/approved.csv`, 6,150 rules → 4,430 Item Ids, sha256 `b4d8c640…`.
+- **1 Oct dry-run**: first run refused on a zero-quantity HENNESSY VS 70cl line (same-tender sale +1 and refund −1). The transform now drops aggregated rows whose quantity and all amounts are zero (October conversion path only; real refunds still fail the day). Re-run clean: EPOS gross ₦3,211,950.00 = processed, 6 receipts / 892 lines / 568 items, all on registered new items, nothing created or patched. **Not posted yet.**

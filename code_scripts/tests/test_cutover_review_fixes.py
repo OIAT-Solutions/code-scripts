@@ -302,6 +302,21 @@ class OctoberControlTests(CompanyAUploadHarness):
                                    approved_by="x", chat_approval_ref="y",
                                    expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
 
+    def test_october_same_tender_sale_and_refund_that_cancel_are_dropped(self):
+        voided = pd.concat([self.october_raw(qty=1, total=120000), self.october_raw(qty=-1, total=-120000)],
+                           ignore_index=True)
+        kept = self.october_raw()
+        kept.loc[:, "Tender"] = "Transfer"
+        csv_path = self.transform_to_csv(pd.concat([voided, kept], ignore_index=True), "2026-10-01")
+        frame = pd.read_csv(csv_path)
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(frame["Memo"].tolist(), ["Transfer"])
+        code, posts, _ = self.run_upload(csv_path, "2026-10-01", dry_run=True)
+        self.assertEqual((code, posts), (0, []))
+        evidence = json.loads(self.evidence_path().read_text())
+        self.assertTrue(evidence["complete"])
+        self.assertEqual(len(evidence["payloads"]), 1)
+
     def test_october_failure_writes_hold_and_blocks_until_cleared(self):
         raw = pd.concat([self.october_raw(), self.october_raw()], ignore_index=True)
         raw.loc[1, "Tender"] = "Transfer"
