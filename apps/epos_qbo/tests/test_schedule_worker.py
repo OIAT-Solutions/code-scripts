@@ -482,3 +482,76 @@ class ScheduleWorkerTests(TestCase):
         self.assertTrue(status["running"])
         self.assertEqual(status["last_seen"], now)
         self.assertIn("Worker is polling", status["message"])
+
+
+class CompanyAStandingApprovalSchedulerTests(TestCase):
+    """System fallback at 18:00 Lagos posts the previous business day, Company A included."""
+
+    STANDING_ENV = {
+        "OIAT_SCHEDULER_ENABLE_ENV_FALLBACK": "1",
+        "SCHEDULE_CRON": "0 18 * * *",
+        "SCHEDULE_TZ": "Africa/Lagos",
+        "OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "1",
+        "OIAT_COMPANY_A_STANDING_APPROVAL_REF": "owner standing approval (chat ref)",
+    }
+
+    def _fire_fallback_on_2_oct(self, env):
+        from datetime import timezone as dt_timezone
+
+        morning = datetime(2026, 10, 2, 8, 0, tzinfo=dt_timezone.utc)  # 09:00 Lagos
+        with mock.patch.dict("os.environ", env, clear=False), mock.patch(
+            "apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job"
+        ):
+            schedule_worker.process_schedule_cycle(now=morning)
+            schedule = RunSchedule.objects.get(is_system_managed=True)
+            # 18:00 Africa/Lagos (UTC+1) == 17:00 UTC.
+            self.assertEqual(schedule.next_fire_at, datetime(2026, 10, 2, 17, 0, tzinfo=dt_timezone.utc))
+            stats = schedule_worker.process_schedule_cycle(now=schedule.next_fire_at + timedelta(seconds=10))
+        self.assertEqual(stats["queued"], 1)
+        return RunJob.objects.get(scheduled_by=schedule)
+
+    def test_fallback_on_2_oct_posts_1_oct_including_company_a_and_passes_env(self):
+        from apps.epos_qbo.services import job_runner
+
+        job = self._fire_fallback_on_2_oct(self.STANDING_ENV)
+        self.assertEqual(job.target_date.isoformat(), "2026-10-01")
+        self.assertNotIn("exclude_companies", job.inventory_options_json)
+        command = job_runner.build_command_for_job(job)
+        self.assertTrue(command[1].endswith("run_all_companies.py"))
+        self.assertEqual(command[command.index("--target-date") + 1], "2026-10-01")
+        self.assertNotIn("--exclude-company", command)
+
+        popen = mock.MagicMock(pid=4242)
+        env = dict(self.STANDING_ENV)
+        with mock.patch.dict("os.environ", env, clear=False), \
+             mock.patch.object(job_runner.subprocess, "Popen", return_value=popen) as popen_cls, \
+             mock.patch.object(job_runner.threading, "Thread"):
+            import os as _os
+            _os.environ.pop("COMPANY_A_POSTING_APPROVAL_FILE", None)
+            job_runner.start_run_job(job, command)
+        child_env = popen_cls.call_args.kwargs["env"]
+        # run_pipeline (via run_all_companies) inherits both flags -> standing auto-approval mode.
+        self.assertEqual(child_env["OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED"], "1")
+        self.assertEqual(child_env["OIAT_COMPANY_A_STANDING_APPROVAL_REF"], "owner standing approval (chat ref)")
+        self.assertNotIn("COMPANY_A_POSTING_APPROVAL_FILE", child_env)
+
+    def test_fallback_without_opt_in_still_excludes_company_a(self):
+        from apps.epos_qbo.services import job_runner
+
+        env = dict(self.STANDING_ENV, OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED="0")
+        job = self._fire_fallback_on_2_oct(env)
+        self.assertEqual(job.target_date.isoformat(), "2026-10-01")
+        command = job_runner.build_command_for_job(job)
+        self.assertEqual(command[command.index("--exclude-company") + 1], "company_a")
+
+    def test_trading_date_before_cutoff_is_two_days_back(self):
+        from datetime import timezone as dt_timezone
+
+        from apps.epos_qbo.business_date import get_target_trading_date
+
+        # 04:30 Lagos on 2 Oct: business day 1 Oct is still open -> 30 Sep.
+        early = datetime(2026, 10, 2, 3, 30, tzinfo=dt_timezone.utc)
+        self.assertEqual(get_target_trading_date(now=early).isoformat(), "2026-09-30")
+        # 05:00 Lagos on 2 Oct onwards -> 1 Oct.
+        cutoff = datetime(2026, 10, 2, 4, 0, tzinfo=dt_timezone.utc)
+        self.assertEqual(get_target_trading_date(now=cutoff).isoformat(), "2026-10-01")

@@ -262,12 +262,21 @@ def require_reconciliation_match(company_key, result, business_date=None):
     """
     if company_key!='company_a' or (result or {}).get('status')=='MATCH':return
     if business_date is not None and not is_controlled_business_date(business_date):return
-    path=posting_hold_path();path.parent.mkdir(parents=True,exist_ok=True)
-    path.write_text(json.dumps({'at':datetime.now(timezone.utc).isoformat(),'business_date':str(business_date or ''),
-        'result':result,
-        'action':'PAUSE; reconcile QBO and source evidence; human approval before clearing hold'},indent=2))
+    write_posting_hold(business_date,result)
     raise RuntimeError('Company A reconciliation failed/not run; posting hold written, subsequent October uploads '
                        'blocked; ' + HOLD_CLEAR_HINT)
+
+
+def write_posting_hold(business_date, result, *, source='reconciliation', overwrite=True):
+    """Write the Company A posting hold. Returns the path, or None when a hold already
+    exists and ``overwrite`` is false (the first hold's reason is kept)."""
+    path=posting_hold_path();path.parent.mkdir(parents=True,exist_ok=True)
+    if path.exists() and not overwrite:
+        return None
+    path.write_text(json.dumps({'at':datetime.now(timezone.utc).isoformat(),'business_date':str(business_date or ''),
+        'source':source,'result':result,
+        'action':'PAUSE; reconcile QBO and source evidence; human approval before clearing hold'},indent=2))
+    return path
 
 
 def clear_posting_hold(*, approved_by, reason, now=None):

@@ -127,6 +127,8 @@ Company A October receipts require `COMPANY_A_POSTING_APPROVAL_FILE`: a restrict
 
 Conversion upload prebuilds every pending October payload and checks every approval before the first POST. A changed payload requires re-review.
 
+Unattended runs replace steps 2–4 with automatic gates and an auto-built manifest when the owner's standing approval is configured; see "Unattended daily operation (standing approval)" below.
+
 ### Retries and the proposal queue (October)
 
 `requestid` = hash of realm, entity, DocNumber:TxnDate, payload digest and the count of confirmed failures. So:
@@ -138,7 +140,40 @@ The local `ProposalQueue` (`STATE_ROOT/company_a_proposals.sqlite`) is an offlin
 
 ### Scheduler
 
-Until W9, `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED` is unset/0: every all-company schedule (system fallback and user-created) passes `--exclude-company company_a`, and any single-company Company A sales schedule is skipped with a recorded reason. Set it to `1` only after the W9 chat yes.
+Until W9, `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED` is unset/0: every all-company schedule (system fallback and user-created) passes `--exclude-company company_a`, and any single-company Company A sales schedule is skipped with a recorded reason. Set it to `1` only after the W9 chat yes. With the flag alone, scheduled Company A October days still need a hand-built manifest and therefore fail closed (nothing posted) every day; unattended posting needs the standing approval below.
+
+### Unattended daily operation (standing approval)
+
+The owner's standing approval replaces the per-day manifest **only** when every automatic gate passes. It is code in `code_scripts/standing_approval.py`, called from `run_pipeline.py`.
+
+**Turn on** (server `.env`, which `docker-compose.yml` loads into both `web` and `scheduler` via `env_file`; then `docker compose up -d scheduler web`):
+
+```sh
+OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1
+OIAT_COMPANY_A_STANDING_APPROVAL_REF=owner standing approval, 1 Oct 2026, <chat reference>
+# optional: refuse any day whose EPOS gross is above this (naira)
+OIAT_COMPANY_A_AUTO_APPROVAL_MAX_GROSS=15000000
+```
+
+Both of the first two must be set. Either missing means manual mode, exactly as before. `OIAT_COMPANY_A_STANDING_APPROVAL_REF` is deliberately not listed under the scheduler's `environment:` block, so a compose interpolation can never blank it. An invalid cap fails closed (hold written). The mode applies to every `run_pipeline` invocation that has both vars: scheduler runs, portal "Run now", and a CLI run on a machine whose `.env` has them. It applies only to Company A, conversion on, business date on/after 1 Oct (each day of a range). Explicit `--dry-run` runs never post. Other companies and pre-October days are unchanged. With the mode on, `run_all_companies` runs Company A last, so a refused Company A day cannot stop other companies in a sequential stop-on-failure run.
+
+**Per business day:** download → split → transform as normal. Then `qbo_upload --dry-run` (any `COMPANY_A_POSTING_APPROVAL_FILE` removed for that subprocess) writes `STATE_ROOT/conversion_preflight/company_a_sales_batch_<date>.json`. The gates, all evaluated and all reported:
+
+| Gate | Passes when |
+| --- | --- |
+| `evidence_complete` | Dry-run exited 0. The evidence is fresh (written by this run), Company A realm, `SalesReceipt`, target date = the day, and `complete: true`. Every payload digest recomputes, TxnDate = the day, Qty > 0. Every line's ItemRef is an Item Id in the installed approved mapping whose rule passes the October contract (Inventory `AKP-` / NonInventory `AKP-NS-`; never `15030` or legacy). |
+| `totals_match_epos` | Gross of the payloads to post, plus receipts already verified in QBO, = EPOS raw `TOTAL Sales` of the split raw file for the day (±₦1). Receipt count = transformed CSV receipts; line count = transformed CSV rows. |
+| `no_posting_hold` | `STATE_ROOT/company_a_posting_hold.json` does not exist. |
+| `mapping_sha_matches` | Mapping SHA-256 recorded in the evidence = installed mapping file SHA = every `_Conversion Proof` SHA in the CSV. |
+| `max_gross_cap` | Only if the cap is set: the day's EPOS raw gross ≤ the cap. |
+
+If all pass, the run builds the manifest with the same `build_posting_manifest` used by `make-manifest`: `approved_by: auto:scheduler`, `chat_approval_ref` = the standing ref, expiry 6 h, exact payload digests. It is written to `STATE_ROOT/approvals/company_a_auto_<date>_<timestamp>.json` (file 0600, directory 0700). `qbo_upload` then posts with `COMPANY_A_POSTING_APPROVAL_FILE` set **for that subprocess only**. The upload rebuilds every payload and checks each digest again, so anything that changed since the dry-run is refused with nothing posted. Then reconcile and archive as normal: a non-MATCH reconcile writes the hold, exactly as in manual mode. A day already fully in QBO (rerun) passes the gates with zero payloads to approve. No manifest is written, existing receipts are content-verified and skipped, nothing is posted, and the run succeeds.
+
+**Failure:** nothing is posted. The hold is written with `source: standing_auto_approval`, `result.status: AUTO_APPROVAL_REFUSED`, the failed gates and a summary (gross to post, gross already in QBO, EPOS gross, mapping SHA). An existing hold is never overwritten. The run exits 1 and the normal Slack failure notification carries the reason, e.g. `Company A standing auto-approval refused 2026-10-02; nothing posted. Failed gate(s): [totals_match_epos] payload gross ₦… != EPOS raw gross ₦…`. A failed preflight (unmapped line, missing item, refund line, QBO read error) counts as `evidence_complete`. Download/split failures happen before the gates; they post nothing and do not write the hold (the next run retries).
+
+**Clearing:** `python -m code_scripts.operations_controls show-hold`; fix the cause (mapping rebuild + install, EPOS late data, etc.); confirm in QBO what exists for the day; then `clear-hold --approved-by NAME --reason '...'`. The next scheduled run, or `python run_pipeline.py --company company_a --target-date <day>`, re-evaluates the gates from scratch. Days are independent: a refused day does not stop later days except through the hold. Once the hold is cleared, each missed day must be re-run explicitly (the scheduler only runs "yesterday"). **Turn off** by unsetting `OIAT_COMPANY_A_STANDING_APPROVAL_REF` (back to manual manifests) or `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED` (Company A out of schedules).
+
+**Timing:** the system schedule is `SCHEDULE_CRON` `0 18 * * *` in `SCHEDULE_TZ` `Africa/Lagos` (17:00 UTC). The job's target date is `get_target_trading_date`: the Lagos date minus 1, or minus 2 before the 05:00 cutoff. A run at 18:00 Lagos on **2 Oct** therefore posts business day **1 Oct** (05:00 1 Oct → 05:00 2 Oct), which closed 13 hours earlier. A manual run before 05:00 Lagos gets the day before that. CLI runs without `--target-date` use the machine's local "yesterday", so always pass `--target-date` by hand.
 
 ## Cutover order and acceptance
 
@@ -166,7 +201,7 @@ QBO perpetual FIFO COGS is primary. Item-based purchases/credits use the same ca
 
 ## Rollback / incident response
 
-For an **October-or-later** business date, a failed or not-run Company A reconciliation, or any failed/uncertain receipt POST, writes `STATE_ROOT/company_a_posting_hold.json` (before archiving). Later October posts refuse while that hold exists; a subsequent MATCH does not clear it automatically. Pre-October days never write or check the hold. Reconcile the evidence and obtain approval, then clear it (the file is archived next to it with who/why, never deleted):
+For an **October-or-later** business date, a failed or not-run Company A reconciliation, any failed/uncertain receipt POST, or (standing approval on) any failed automatic gate, writes `STATE_ROOT/company_a_posting_hold.json` (before archiving). Later October posts refuse while that hold exists; a subsequent MATCH does not clear it automatically. Pre-October days never write or check the hold. Reconcile the evidence and obtain approval, then clear it (the file is archived next to it with who/why, never deleted):
 
 ```sh
 python -m code_scripts.operations_controls show-hold

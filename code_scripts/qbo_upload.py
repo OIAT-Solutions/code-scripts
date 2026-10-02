@@ -2103,6 +2103,33 @@ def resolve_all_unique_items(
 COMPANY_A_REALM_ID = "9341455406194328"
 
 
+def _file_sha256(path) -> Optional[str]:
+    """SHA-256 of a file's bytes, or None when it cannot be read (evidence only)."""
+    if not path:
+        return None
+    try:
+        import hashlib
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _proof_mapping_shas(df) -> List[str]:
+    """Distinct mapping SHA-256 values recorded in the CSV's _Conversion Proof column."""
+    if "_Conversion Proof" not in getattr(df, "columns", []):
+        return []
+    shas: Set[str] = set()
+    for raw in df["_Conversion Proof"]:
+        try:
+            parts = json.loads(raw)
+        except (TypeError, ValueError):
+            shas.add("UNPARSEABLE")
+            continue
+        for part in parts if isinstance(parts, list) else []:
+            shas.add(str((part or {}).get("mapping_sha256") or "MISSING"))
+    return sorted(shas)
+
+
 def company_a_inventory_controlled(config, txn_date) -> bool:
     """True when a receipt falls under the Company A October Inventory controls.
 
@@ -3558,6 +3585,7 @@ def main():
         controlled_errors: List[Tuple[Any, str]] = []
         build_errors = False
         evidence_entries: List[Dict[str, Any]] = []
+        existing_verified_entries: List[Dict[str, Any]] = []
         for key, group in grouped:
             if config.trading_day_enabled and args.target_date:
                 receipt_date = str(args.target_date)
@@ -3593,6 +3621,10 @@ def main():
                     if len(receipts) != 1:
                         raise ValueError("Existing receipt is missing or duplicated")
                     assert_receipt_matches(payload, receipts[0])
+                    existing_verified_entries.append(
+                        {"doc_number": str(key), "txn_date": payload.get("TxnDate"), "payload": payload,
+                         "sha256": payload_digest(payload)}
+                    )
                     continue
                 evidence_entries.append(
                     {"doc_number": str(key), "txn_date": payload.get("TxnDate"), "requires_approval": True,
@@ -3621,6 +3653,13 @@ def main():
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "complete": not build_errors,
                 "payloads": evidence_entries,
+                # Context for automated gates (standing approval). Not used by make-manifest.
+                "existing_verified": existing_verified_entries,
+                "source_csv": str(csv_path),
+                "source_rows": int(len(df)),
+                "source_receipts": int(len(grouped)),
+                "mapping_sha256": _file_sha256(getattr(config, "product_conversion_file", None)),
+                "proof_mapping_sha256": _proof_mapping_shas(df),
             }
             evidence_path.write_text(json.dumps(evidence_doc, indent=2, allow_nan=False))
             print(f"[INFO] October approval evidence: {len(evidence_entries)} payload(s) written to {evidence_path}")

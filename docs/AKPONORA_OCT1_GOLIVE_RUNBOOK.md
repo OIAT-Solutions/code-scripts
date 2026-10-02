@@ -182,7 +182,25 @@ Sales for business day 1 Oct are posted on the 2nd (after 05:00).
    - `verify_backfill --from 2026-10-01 --to 2026-10-01 --bookkeeping <1 Oct CSV> --allowed-from-mapping` is ALL OK.
    - QBO item quantities moved by the expected units, FIFO COGS posted, IA decreased accordingly.
    - Re-running the day posts nothing.
-4. ✋ **W9:** after a clean day, set `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1` for the scheduler (Company A sales schedule only).
+4. ✋ **W9: unattended daily operation (standing approval).** After a clean day and the owner's chat yes, add to the server `.env` (loaded into the `scheduler` and `web` containers via `env_file`):
+   ```bash
+   OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1
+   OIAT_COMPANY_A_STANDING_APPROVAL_REF="owner standing approval, <date>, <chat ref>"
+   # optional cap on the day's EPOS gross, naira
+   OIAT_COMPANY_A_AUTO_APPROVAL_MAX_GROSS=15000000
+   ```
+   Then `docker compose up -d scheduler web`. Check with `docker compose exec scheduler env | grep OIAT_COMPANY_A`.
+   - **When it runs:** the system schedule fires at 18:00 Lagos (`SCHEDULE_CRON=0 18 * * *`, `SCHEDULE_TZ=Africa/Lagos`) and posts "yesterday's" business day. The run on **2 Oct posts 1 Oct**, the run on 3 Oct posts 2 Oct, and so on.
+   - **What it checks before posting (all must pass):**
+     - The dry-run preflight is complete: every line is on an approved `AKP-`/`AKP-NS-` item, with no catch-all or legacy items.
+     - Payload gross = EPOS raw gross for the day (±₦1), and the receipt/line counts match.
+     - There is no posting hold.
+     - The mapping SHA in the evidence = the installed mapping.
+     - The optional gross cap.
+   - **If it passes:** it writes a 6-hour manifest (`approved_by auto:scheduler`, your ref) in `/data/approvals/`, posts with it, then reconciles. A re-run posts nothing.
+   - **If anything fails:** nothing is posted. The posting hold is written with the failed gate(s), Slack gets the failure message with the reason, and the job exits 1. Fix the cause and check QBO. Then run `python -m code_scripts.operations_controls show-hold` / `clear-hold --approved-by NAME --reason '…'`. Re-run the missed day(s) with `python run_pipeline.py --company company_a --target-date <day>`.
+   - **To stop:** remove `OIAT_COMPANY_A_STANDING_APPROVAL_REF` (back to manual manifests) or set `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=0` (Company A out of the schedule).
+   - Details: the canonical runbook, section "Unattended daily operation (standing approval)".
 5. **Bookkeeper resumes:** bills as item lines on the **new** items, in their unit. Customer invoices on new items with the matching EPOS stock-out. September deliveries are billed against the GRNI account, not stock items. No `SR-` invoice numbers.
 
 If anything fails in October, the posting hold stops later posts. Investigate, then `python -m code_scripts.operations_controls show-hold` / `clear-hold` (see the controls doc). Never switch conversion off or use the catch-all.

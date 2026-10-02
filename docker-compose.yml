@@ -63,6 +63,9 @@ services:
       OIAT_SCHEDULER_ENABLE_ENV_FALLBACK: ${OIAT_SCHEDULER_ENABLE_ENV_FALLBACK:-1}
       # Company A remains excluded from the system fallback until W9 approval.
       OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED: ${OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED:-0}
+      # Standing auto-approval also needs OIAT_COMPANY_A_STANDING_APPROVAL_REF (and optionally
+      # OIAT_COMPANY_A_AUTO_APPROVAL_MAX_GROSS). They come from env_file (.env) on purpose:
+      # not listed here so an empty interpolation can never blank them.
       SCHEDULE_CRON: ${SCHEDULE_CRON:-0 18 * * *}
       SCHEDULE_TZ: ${SCHEDULE_TZ:-Africa/Lagos}
 

@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, List, Optional
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from code_scripts.load_env import load_env_file
 from code_scripts.slack_notify import (
@@ -51,7 +51,13 @@ def company_dir_name(display_name: str) -> str:
     return "_".join(word.capitalize() for word in name.split())
 
 
-def run_step(label: str, script_name: str, args: list = None) -> None:
+def run_step(
+    label: str,
+    script_name: str,
+    args: list = None,
+    env_overrides: Optional[dict] = None,
+    env_remove: Optional[list] = None,
+) -> None:
     """
     Run a Python script in this repo as a module so that code_scripts imports work.
     Uses repo root (parent of code_scripts) as cwd and runs python -m code_scripts.<script>.
@@ -61,6 +67,8 @@ def run_step(label: str, script_name: str, args: list = None) -> None:
         label: Human-readable label for logging
         script_name: Name of the script file to run (e.g. epos_playwright.py)
         args: Optional list of command-line arguments to pass to the script
+        env_overrides: Optional env vars set for this subprocess only
+        env_remove: Optional env var names removed for this subprocess only
     """
     code_scripts_dir = Path(__file__).resolve().parent
     script_path = code_scripts_dir / script_name
@@ -80,6 +88,14 @@ def run_step(label: str, script_name: str, args: list = None) -> None:
     logging.info(f"\n=== {label} ===")
     logging.info(f"Running: {' '.join(cmd)}")
 
+    popen_kwargs = {}
+    if env_overrides or env_remove:
+        child_env = dict(os.environ)
+        for name in env_remove or []:
+            child_env.pop(name, None)
+        child_env.update({str(k): str(v) for k, v in (env_overrides or {}).items()})
+        popen_kwargs["env"] = child_env
+
     process = subprocess.Popen(
         cmd,
         cwd=str(actual_repo_root),
@@ -87,6 +103,7 @@ def run_step(label: str, script_name: str, args: list = None) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        **popen_kwargs,
     )
     if process.stdout is not None:
         for line in process.stdout:
@@ -1077,6 +1094,126 @@ def reconcile_company(company_key: str, target_date: str, config, repo_root: Pat
     return reconcile_result
 
 
+APPROVAL_FILE_ENV = "COMPANY_A_POSTING_APPROVAL_FILE"
+
+
+def standing_approval_for_day(company_key: str, business_date: str, config) -> Optional[dict]:
+    """Standing auto-approval settings when they apply to this Company A business day.
+
+    Applies only to Company A, product conversion on, business date on/after the
+    cutover, and both env vars set (see code_scripts/standing_approval.py).
+    Otherwise None: the day follows the manual-manifest path exactly as before.
+    """
+    if company_key != "company_a" or not bool(getattr(config, "product_conversion_enabled", False)):
+        return None
+    from code_scripts.operations_controls import is_controlled_business_date
+    if not is_controlled_business_date(business_date, getattr(config, "product_conversion_fail_closed_from", None)):
+        return None
+    from code_scripts.standing_approval import (
+        GATE_CAP,
+        StandingApprovalConfigError,
+        standing_approval_settings,
+    )
+    try:
+        return standing_approval_settings()
+    except StandingApprovalConfigError as exc:
+        _refuse_standing_approval(business_date, [{"gate": GATE_CAP, "detail": str(exc)}], {})
+    return None
+
+
+def _refuse_standing_approval(business_date: str, failures: list, summary: dict) -> None:
+    """Nothing is posted: write the posting hold (first hold kept) and fail the run."""
+    from code_scripts.operations_controls import HOLD_CLEAR_HINT, write_posting_hold
+    from code_scripts.standing_approval import format_failures
+    write_posting_hold(
+        business_date,
+        {"status": "AUTO_APPROVAL_REFUSED", "failed_gates": failures, "summary": summary},
+        source="standing_auto_approval",
+        overwrite=False,
+    )
+    message = (
+        f"[ERROR] Company A standing auto-approval refused {business_date}; nothing posted. "
+        f"Failed gate(s): {format_failures(failures)}. Posting hold in place; {HOLD_CLEAR_HINT}"
+    )
+    logging.error(message)
+    raise SystemExit(message)
+
+
+def run_standing_approval_upload(
+    label: str,
+    business_date: str,
+    config,
+    raw_file: str,
+    qbo_upload_args: list,
+    settings: dict,
+) -> dict:
+    """Dry-run, evaluate the automatic gates, then post with a per-subprocess manifest.
+
+    Any failed gate (including a failed dry-run preflight) writes the posting hold and
+    raises SystemExit before anything is posted.
+    """
+    from code_scripts.standing_approval import (
+        GATE_EVIDENCE,
+        evaluate_gates,
+        evidence_path,
+        write_auto_manifest,
+    )
+
+    logging.info(
+        f"Company A standing auto-approval ON for {business_date} (ref: {settings['ref']}); "
+        "dry-run preflight, then automatic gates"
+    )
+    started_at = datetime.now(timezone.utc)
+    try:
+        run_step(
+            f"{label} - standing approval dry-run",
+            "qbo_upload.py",
+            list(qbo_upload_args) + ["--dry-run"],
+            env_remove=[APPROVAL_FILE_ENV],
+        )
+    except SystemExit as exc:
+        _refuse_standing_approval(
+            business_date,
+            [{"gate": GATE_EVIDENCE, "detail": f"qbo_upload --dry-run preflight failed ({exc})"}],
+            {"business_date": business_date},
+        )
+
+    path = evidence_path(business_date, config.company_key)
+    try:
+        evidence = json.loads(path.read_text())
+    except (OSError, ValueError):
+        evidence = None
+    try:
+        raw_totals = _compute_raw_totals(Path(raw_file))
+    except Exception as exc:
+        logging.warning(f"Could not total raw EPOS file {raw_file}: {exc}")
+        raw_totals = None
+
+    result = evaluate_gates(
+        evidence,
+        business_date=business_date,
+        config=config,
+        raw_totals=raw_totals,
+        dry_run_started_at=started_at,
+        max_gross=settings.get("max_gross"),
+    )
+    if not result["passed"]:
+        _refuse_standing_approval(business_date, result["failures"], result["summary"])
+    logging.info(f"[OK] Standing auto-approval gates passed for {business_date}: {result['summary']}")
+
+    manifest = write_auto_manifest(
+        evidence, ref=settings["ref"], realm=str(config.realm_id), business_date=business_date
+    )
+    if manifest is None:
+        logging.info(f"No new receipts to approve for {business_date} (all already in QBO); posting nothing new")
+        run_step(label, "qbo_upload.py", qbo_upload_args, env_remove=[APPROVAL_FILE_ENV])
+    else:
+        logging.info(f"Auto-approval manifest written: {manifest}")
+        run_step(label, "qbo_upload.py", qbo_upload_args, env_overrides={APPROVAL_FILE_ENV: str(manifest)})
+    result["manifest"] = str(manifest) if manifest else None
+    return result
+
+
 def main(
     company_key: str,
     target_date: Optional[str] = None,
@@ -1494,11 +1631,22 @@ def main(
                     qbo_upload_args.extend(["--inventory-sync-mode", inventory_sync_mode])
                 if verbose_logs:
                     qbo_upload_args.append("--verbose-logs")
-                run_step(
-                    f"Phase 3: Upload to QBO (qbo_upload) - {day_date}",
-                    "qbo_upload.py",
-                    qbo_upload_args
-                )
+                standing = standing_approval_for_day(company_key, day_date, config)
+                if standing is not None:
+                    auto_result = run_standing_approval_upload(
+                        f"Phase 3: Upload to QBO (qbo_upload) - {day_date}",
+                        day_date, config, raw_file_to_use, qbo_upload_args, standing,
+                    )
+                    warnings.append(
+                        f"{day_date}: standing auto-approval posted "
+                        f"{auto_result['summary'].get('receipts_to_post', 0)} receipt(s)"
+                    )
+                else:
+                    run_step(
+                        f"Phase 3: Upload to QBO (qbo_upload) - {day_date}",
+                        "qbo_upload.py",
+                        qbo_upload_args
+                    )
                 
                 # Check upload stats after Phase 3
                 if metadata_path.exists():
@@ -1822,11 +1970,21 @@ def main(
                 qbo_upload_args.append("--verbose-logs")
             if upload_dry_run:
                 qbo_upload_args.append("--dry-run")
-            run_step(
-                "Phase 3: Upload to QBO (qbo_upload)",
-                "qbo_upload.py",
-                qbo_upload_args
-            )
+            standing = None if upload_dry_run else standing_approval_for_day(company_key, target_date, config)
+            if standing is not None:
+                auto_result = run_standing_approval_upload(
+                    "Phase 3: Upload to QBO (qbo_upload)",
+                    target_date, config, raw_file_to_use, qbo_upload_args, standing,
+                )
+                warnings.append(
+                    f"Standing auto-approval posted {auto_result['summary'].get('receipts_to_post', 0)} receipt(s)"
+                )
+            else:
+                run_step(
+                    "Phase 3: Upload to QBO (qbo_upload)",
+                    "qbo_upload.py",
+                    qbo_upload_args
+                )
             if upload_dry_run:
                 logging.info(
                     "Dry run: qbo_upload built payloads without posting; skipping reconcile and archive. "
