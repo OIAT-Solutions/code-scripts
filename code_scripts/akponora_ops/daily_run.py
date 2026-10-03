@@ -17,7 +17,11 @@ Default business date = the last CLOSED Lagos business day (05:00 cutoff): run a
    the day waits for review. Runs after bills so stock arrives before it is sold. Skipped when
    the posting hold is already in place.
 4. ``guard``      item_guard read-only scan (report only).
-5. ``uf``         Undeposited Funds deposits from the till sheet (``uf_deposits``), off unless
+5. ``stock``      stock_snapshot ``run`` (READ-ONLY): EPOS stock report vs QBO QtyOnHand per family,
+   written to ``STATE_ROOT/ops/company_a/stock_snapshot/latest.json`` for the portal's Products &
+   Stock page. Report only: differences never make the run wait for review; a failure is reported
+   and never affects the other steps.
+6. ``uf``         Undeposited Funds deposits from the till sheet (``uf_deposits``), off unless
    ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``. For each business day since 25 Sep not yet deposited:
    the day's SalesReceipts still in Undeposited Funds are deposited (LinkedTxn) into the banks the
    "Nora Mart Daily Sales Account Breakdown" sheet names, plus Bank->Bank true-up transfers so each
@@ -58,7 +62,7 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
-STEPS = ("catalogue", "bills", "sales", "guard", "uf")
+STEPS = ("catalogue", "bills", "sales", "guard", "stock", "uf")
 ENABLED_ENV = "OIAT_COMPANY_A_DAILY_RUN_ENABLED"
 CRON_ENV = "OIAT_COMPANY_A_DAILY_RUN_CRON"
 DEFAULT_CRON = "0 6 * * *"
@@ -334,6 +338,25 @@ class DailyRun:
             res.status = FAILED
             res.detail = f"item_guard exited {rc}; see {out / 'log.txt'}"
 
+    def step_stock(self, res: StepResult) -> None:
+        """Read-only stock snapshot (EPOS vs QBO); report only."""
+        out = Path(res.out)
+        rc = self.run_step("stock", [self.python, "-m", "code_scripts.akponora_ops.stock_snapshot", "run",
+                                     "--out", str(out)], out)
+        res.exit_code = rc
+        summary = read_json(out / "summary.json", {}) or {}
+        s = summary.get("summary") or {}
+        res.counts = {"by_status": s.get("by_status") or {}, "likely_timing": s.get("different_likely_timing", 0),
+                      "unmapped_tracked": s.get("unmapped_tracked", 0), "text": summary.get("summary_text", ""),
+                      "latest": summary.get("latest", "")}
+        if rc == 0:
+            res.status = OK
+        else:
+            res.status = FAILED
+            res.detail = (f"stock_snapshot exited {rc}"
+                          + (f" ({summary['error'][:200]})" if summary.get("error") else "")
+                          + f"; see {out / 'log.txt'}")
+
     def step_uf(self, res: StepResult) -> None:
         """Undeposited Funds deposits from the till sheet (uf_deposits ``scheduled``, in-process)."""
         from code_scripts.akponora_ops import uf_deposits as ufd
@@ -455,6 +478,8 @@ def step_line(r: dict) -> str:
         body = "; ".join(b for b in bits if b)
     elif name == "guard":
         body = f"ALERT {c.get('alert', 0)}, WARN {c.get('warn', 0)} (read-only)"
+    elif name == "stock":
+        body = c.get("text") or ""
     elif name == "uf":
         bits = [c.get("mode", "")]
         dep = c.get("deposited") or []

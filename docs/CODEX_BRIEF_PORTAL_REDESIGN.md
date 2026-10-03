@@ -56,6 +56,31 @@ You are improving the **OIAT Portal**, the Django admin and monitoring UI for ou
 3. **Products & Stock** (EPOS product ↔ mapping ↔ QuickBooks item, EPOS vs QuickBooks quantity, negative stock; repurposes the old inventory review page), **Suppliers** (`vendors.csv` view and edit with audit), **Deposits** (per-day till sheet vs sales, per-bank split, status; till-sheet "last day entered / missing days"), and the **settings/mapping editors** (till accounts, deposit tolerance toggle) with audit.
 4. Move Tools under Admin; split Settings.
 
+## Stock snapshot contract (for Products & Stock)
+
+Claude owns the producer (`code_scripts/akponora_ops/stock_snapshot.py`); the portal only reads the file and starts the job.
+
+- **File:** `STATE_ROOT/ops/company_a/stock_snapshot/latest.json` (on the server `/data/ops/company_a/stock_snapshot/latest.json`). Replaced atomically; a failed run leaves the previous file. Dated copies: `history/stock_snapshot_<YYYY-MM-DD>.json`. Ignore `epos_side.json` / `qbo_side.json` / `work/` (internal caches).
+- **Written by:** the daily run (`stock` step, after `guard`) and by hand. **"Update products/stock" button:** run `python -m code_scripts.akponora_ops.stock_snapshot run` as a background `RunJob` (never in the request); optional `--no-epos` ("QuickBooks only", fast) / `--no-qbo` ("EPOS only"). Exit 0 = written, 2 = failed (show the job log), 5 = another snapshot is already running. It is read-only on EPOS and QBO, so `can_trigger_runs` is enough; it does not take the global run lock.
+- **Top level:** `schema_version` (1), `company`, `generated_at` (UTC ISO), `tolerance`, `summary_text` (one sentence, e.g. "Stock check: 3,812 match, 41 different, 11 negative in QuickBooks"), `sources`, `business_context`, `timing_evidence`, `summary`, `rows`, `unmapped_epos_products`, `unassigned_stock_rows`, `qbo_akp_items_not_in_mapping`.
+- **`sources`:** `epos_stock_report {path, at, refreshed_this_run}`, `catalogue {path, at}`, `qbo {read_at, refreshed_this_run}`, `mapping {path, at}`. Show "EPOS stock as of … · QuickBooks as of …"; the two can differ after a partial refresh.
+- **`business_context`:** `current_business_date`, `last_posted_sales_date` (may be null), `unposted_sales_days` (list), `note` (plain-English explanation of why EPOS and QuickBooks differ: EPOS is live, QuickBooks has sales up to the last posted day and only posted bills). Show the note above the table.
+- **`summary`:** `rows`, `by_status` (every status below as a key), `inventory_rows`, `noninventory_rows`, `different_likely_timing`, `unmapped_epos_products`, `unmapped_tracked`, `unassigned_stock_rows`, `qbo_akp_items_not_in_mapping`.
+- **`rows[]`** (one per QBO item / canonical family in the installed mapping, sorted by status then SKU):
+  `family_sku` (`AKP-<master id>` or `AKP-NS-<id>`), `qbo_item_id`, `qbo_name`, `type` (`Inventory` / `NonInventory`), `qbo_active`, `canonical_unit`, `epos_master_id`, `epos_master_name`, `epos_product_ids` (all EPOS products mapped to it, master and pack children), `epos_volume_of_sale`, `epos_qty_canonical` (number or null when unknown), `qbo_qty_on_hand` (number; null for NonInventory or a missing item), `difference` (= EPOS − QuickBooks; null when either side is unknown), `status`, `likely_timing` (true/false on `DIFFERENT` rows, null otherwise), `timing_reasons` (sentences), `flags` (technical, for a Details toggle: e.g. `AMBIGUOUS_EPOS_NAME`, `QBO_ITEM_INACTIVE`, `MULTIPLE_STOCK_ROWS(2)`, `STOCK_VOS_INCONSISTENT(...)`, `NONINVENTORY_BUT_EPOS_TRACKED`, `MASTER_NOT_IN_CATALOGUE`), `tolerance`.
+- **`status`** (plain words for the UI):
+  - `MATCH`: same quantity (within `tolerance`, default 0.001 units).
+  - `DIFFERENT`: quantities differ; if `likely_timing`, say "probably today's sales / a delivery not yet billed".
+  - `NEGATIVE_QBO`: QuickBooks below zero (usually a delivery not billed yet). Show first, in red.
+  - `NEGATIVE_EPOS`: EPOS below zero (a count/receiving problem in EPOS).
+  - `NOT_IN_EPOS_REPORT`: tracked in EPOS but no row in the stock report could be matched by name.
+  - `NOT_TRACKED_IN_EPOS`: NonInventory item, or EPOS no longer stock-tracks the master; no quantity comparison.
+  - `NO_QBO_ITEM`: the mapping points to a QuickBooks item that does not exist.
+- **`unmapped_epos_products[]`:** `epos_product_id`, `name`, `tracked`, `category`, `epos_qty` — EPOS catalogue products with no mapping row (catalogue_sync handles them; show as "new in EPOS, not yet set up").
+- **`unassigned_stock_rows[]`:** stock-report rows not matched to one tracked product (`Name`, `reason` = `AMBIGUOUS_TRACKED_NAME` / `UNTRACKED_PRODUCT` / `NOT_IN_CATALOGUE`, `TotalStock`, `TotalCost`).
+- **`qbo_akp_items_not_in_mapping[]`:** `AKP-` items in QuickBooks the mapping does not use (`qbo_item_id`, `sku`, `name`, `type`, `active`, `qbo_qty_on_hand`).
+- The page never offers to change QuickBooks quantities (no "make QuickBooks match EPOS"): AGENTS.md forbids patching QtyOnHand or posting InventoryAdjustments.
+
 ## Done means
 - Full suites green: `python -m unittest discover -s code_scripts/tests -q` and `python manage.py test apps.epos_qbo apps.dashboard apps.core`.
 - Tailwind rebuilt if you add classes (`npm run build:css`).

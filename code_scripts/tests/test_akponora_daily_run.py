@@ -31,7 +31,7 @@ def _out(cmd):
 def step_of(cmd) -> str:
     joined = " ".join(cmd)
     for needle, name in (("catalogue_sync", "catalogue"), ("bills_sync", "bills"), ("run_pipeline.py", "sales"),
-                         ("item_guard", "guard")):
+                         ("item_guard", "guard"), ("stock_snapshot", "stock")):
         if needle in joined:
             return name
     raise AssertionError(cmd)
@@ -78,6 +78,15 @@ class FakeRunner:
                                                       "business_date": "2026-10-02"}))
         elif name == "guard":
             (out / "report.json").write_text(json.dumps({"counts": {"ALERT": 1 if rc == 4 else 0, "WARN": 2}}))
+        elif name == "stock":
+            if rc == 0:
+                (out / "summary.json").write_text(json.dumps({
+                    "summary": {"by_status": {"MATCH": 3812, "DIFFERENT": 41, "NEGATIVE_QBO": 11},
+                                "different_likely_timing": 30, "unmapped_tracked": 0},
+                    "summary_text": "Stock check: 3,812 match, 41 different, 11 negative in QuickBooks",
+                    "latest": "/state/ops/company_a/stock_snapshot/latest.json"}))
+            else:
+                (out / "summary.json").write_text(json.dumps({"error": "SnapshotError: no catalogue"}))
         log_path.write_text("fake\n")
         return rc
 
@@ -108,7 +117,7 @@ class DailyRunTests(unittest.TestCase):
     def test_steps_run_in_order_with_their_own_folders(self):
         runner = FakeRunner()
         summary = self.make(runner).execute()
-        self.assertEqual([c[0] for c in runner.calls], ["catalogue", "bills", "sales", "guard"])
+        self.assertEqual([c[0] for c in runner.calls], ["catalogue", "bills", "sales", "guard", "stock"])
         self.assertEqual(summary["exit_code"], 0)
         self.assertEqual([s["name"] for s in summary["steps"]], list(dr.STEPS))
         self.assertEqual(summary["steps"][-1]["status"], dr.DISABLED)  # UF placeholder off by default
@@ -130,7 +139,7 @@ class DailyRunTests(unittest.TestCase):
     def test_catalogue_crash_still_runs_bills_and_sales(self):
         runner = FakeRunner(raise_on={"catalogue"})
         summary = self.make(runner).execute()
-        self.assertEqual([c[0] for c in runner.calls], ["catalogue", "bills", "sales", "guard"])
+        self.assertEqual([c[0] for c in runner.calls], ["catalogue", "bills", "sales", "guard", "stock"])
         self.assertEqual(summary["steps"][0]["status"], dr.FAILED)
         self.assertIn("exploded", summary["steps"][0]["detail"])
         self.assertEqual(summary["exit_code"], 2)
@@ -192,7 +201,7 @@ class DailyRunTests(unittest.TestCase):
                 mock.patch.object(dr, "acquire_lock", return_value=SimpleNamespace(release=lambda: None)):
             rc = dr.main(["--date", "2026-10-02", "--dry-run"], runner=runner, slack=slack.append)
         self.assertEqual(rc, 3)  # the fake bills plan has a HOLD: a dry run shows it as waiting
-        self.assertEqual([c[0] for c in runner.calls], ["catalogue", "bills", "sales", "guard"])
+        self.assertEqual([c[0] for c in runner.calls], ["catalogue", "bills", "sales", "guard", "stock"])
         self.assertEqual(slack, [])
 
     def test_only_runs_selected_steps(self):
@@ -229,11 +238,42 @@ class DailyRunTests(unittest.TestCase):
 
         with mock.patch.object(dr.DailyRun, "step_uf", fake_uf):
             summary = self.make(FakeRunner(), env={**STANDING, dr.UF_ENV: "1"}).execute()
-        self.assertEqual(seen, [["catalogue", "bills", "sales", "guard"]])
+        self.assertEqual(seen, [["catalogue", "bills", "sales", "guard", "stock"]])
         step = {s["name"]: s for s in summary["steps"]}["uf"]
         self.assertEqual(step["status"], dr.FAILED)
         self.assertIn("sheet unreachable", step["detail"])
         self.assertEqual({s["name"]: s["status"] for s in summary["steps"]}["sales"], dr.OK)
+
+    def test_stock_step_runs_after_guard_and_reports_in_slack(self):
+        runner = FakeRunner()
+        summary = self.make(runner).execute()
+        cmds = {name: cmd for name, cmd in runner.calls}
+        self.assertEqual(cmds["stock"][1:5], ["-m", "code_scripts.akponora_ops.stock_snapshot", "run", "--out"])
+        self.assertEqual(_out(cmds["stock"]).name, "stock")
+        step = {s["name"]: s for s in summary["steps"]}["stock"]
+        self.assertEqual(step["status"], dr.OK)
+        self.assertEqual(step["counts"]["by_status"]["DIFFERENT"], 41)
+        self.assertEqual(summary["exit_code"], 0)
+        self.assertIn("*stock* [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks", self.slack[0])
+
+    def test_stock_step_is_read_only_in_dry_run_too(self):
+        runner = FakeRunner()
+        self.make(runner, dry=True).execute()
+        cmds = {name: cmd for name, cmd in runner.calls}
+        self.assertEqual(cmds["stock"][3:5], ["run", "--out"])
+
+    def test_stock_failure_is_isolated(self):
+        runner = FakeRunner(codes={"stock": 2})
+        summary = self.make(runner, env={**STANDING, dr.UF_ENV: "1"})
+        with mock.patch.object(dr.DailyRun, "step_uf", lambda _self, res: setattr(res, "status", dr.OK)):
+            summary = summary.execute()
+        steps = {s["name"]: s for s in summary["steps"]}
+        self.assertEqual(steps["stock"]["status"], dr.FAILED)
+        self.assertIn("no catalogue", steps["stock"]["detail"])
+        self.assertEqual(steps["uf"]["status"], dr.OK)  # later step still ran
+        self.assertEqual(steps["sales"]["status"], dr.OK)
+        crashed = self.make(FakeRunner(raise_on={"stock"})).execute()
+        self.assertEqual({s["name"]: s["status"] for s in crashed["steps"]}["stock"], dr.FAILED)
 
     def test_business_date_is_last_closed_lagos_day(self):
         tz = ZoneInfo("Africa/Lagos")
