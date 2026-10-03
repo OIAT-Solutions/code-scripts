@@ -602,7 +602,15 @@ def link(url: str, label: str) -> str:
 
 
 def previous_guard_alert(daily_root: Path, day: str) -> int | None:
-    """Item-check ALERT count of the last real (not dry) run before ``day``; None when there is none."""
+    """Item-check ALERT count of the last real (not dry) run before ``day``; None when there is none
+    (or when anything about the old evidence can't be read - this must never break a run)."""
+    try:
+        return _previous_guard_alert(daily_root, day)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _previous_guard_alert(daily_root: Path, day: str) -> int | None:
     try:
         days = sorted((p for p in Path(daily_root).iterdir() if p.is_dir() and p.name < day), reverse=True)
     except OSError:
