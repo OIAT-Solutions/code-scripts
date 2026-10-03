@@ -1,7 +1,7 @@
 """Inbox safety, exact approvals and operational failure visibility."""
 import csv
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
@@ -194,6 +194,23 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         CompanyConfigRecord.objects.create(company_key="company_a",display_name="Akponora",is_active=True)
         (self.folder/"summary.json").write_text(json.dumps(_summary("2026-10-02",steps=[_step("sales",counts={"mode":"post","reconcile_status":"MATCH"})])))
         self.assertTrue(attention.blockers(now=datetime(2026,10,3,12,tzinfo=ZoneInfo("UTC"))))
+
+    def test_banners_use_the_same_confirmation_rule_as_home(self):
+        from apps.epos_qbo.models import RunArtifact
+        now = datetime(2026,10,3,12,tzinfo=ZoneInfo("UTC"))
+        CompanyConfigRecord.objects.create(company_key="company_a",display_name="Akponora",is_active=True)
+        (self.folder/"summary.json").write_text(json.dumps(_summary("2026-10-02",steps=[_step("sales",counts={"mode":"post","reconcile_status":"MATCH"})])))
+        reason = attention.blockers(now=now)[0]["reason"]
+        self.assertIn("1 day has no confirmed sales record (1 Oct)", reason)  # not "behind": 2 Oct is the latest day
+        RunArtifact.objects.create(company_key="company_a", target_date=date(2026,10,1), source_path="a.json", source_hash="a",
+                                   reconcile_status="MATCH", reconcile_qbo_total=3211950, upload_stats_json={})
+        self.assertEqual(attention.blockers(now=now), [])
+        # Goldplates: an old failed job is superseded by later confirmed days
+        CompanyConfigRecord.objects.create(company_key="company_b", display_name="Goldplates", is_active=True)
+        RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key="company_b", status="failed", target_date=date(2026,8,20))
+        RunArtifact.objects.create(company_key="company_b", target_date=date(2026,10,2), source_path="b.json", source_hash="b",
+                                   reconcile_status="MATCH", reconcile_qbo_total=9665900, upload_stats_json={})
+        self.assertEqual(attention.blockers(now=now), [])
 
     def test_background_command_records_result_and_respects_global_lock(self):
         from django.core.management import call_command, CommandError

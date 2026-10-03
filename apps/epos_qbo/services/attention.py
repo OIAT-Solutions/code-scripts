@@ -350,11 +350,19 @@ def blockers(now=None):
             hold = ops.posting_hold()
             runs = [r for r in ops.list_runs() if not r.dry_run]
             successful = [date.fromisoformat(r.business_date) for r in runs if ops.DATE_RE.fullmatch(r.business_date) and r.step("sales") and r.step("sales").status == "ok" and r.step("sales").counts.get("mode") == "post" and r.step("sales").counts.get("reconcile_status") == "MATCH"]
-            latest = max(successful, default=None)
+            # Same evidence rule as Home: daily-run evidence, or a matching sales record (days posted
+            # before the daily run existed, e.g. 1 Oct 2026).
+            from .experience import artifact_confirmation
+
+            confirmed = set(successful) | set(artifact_confirmation(company.company_key, date(2026, 10, 1), expected)[0])
+            latest = max(confirmed, default=None)
             reason = "Sales posting is paused. Review the hold and fix its cause." if hold["active"] else ""
-            missing = [date(2026, 10, 1) + timedelta(days=i) for i in range(max(0, min((expected-date(2026, 10, 1)).days+1, 366))) if date(2026, 10, 1) + timedelta(days=i) not in successful]
-            if not reason and (not latest or latest < expected or missing):
-                reason = f"Sales are behind. Last verified sales day: {latest or 'not available'}. Review the daily runs and run missing days oldest first."
+            missing = [date(2026, 10, 1) + timedelta(days=i) for i in range(max(0, min((expected-date(2026, 10, 1)).days+1, 366))) if date(2026, 10, 1) + timedelta(days=i) not in confirmed]
+            if not reason and (not latest or latest < expected):
+                reason = f"Sales are behind. Last confirmed sales day: {latest or 'not available'}. Review the daily runs and run missing days oldest first."
+            elif not reason and missing:
+                days = ", ".join(f"{d.day} {d:%b}" for d in missing[:6]) + (" ..." if len(missing) > 6 else "")
+                reason = f"{len(missing)} {'day has' if len(missing) == 1 else 'days have'} no confirmed sales record ({days}). Open the daily runs."
         else:
             jobs = RunJob.objects.filter(company_key=company.company_key, scope=RunJob.SCOPE_SINGLE).order_by("-created_at")
             job = jobs.first()
@@ -363,7 +371,7 @@ def blockers(now=None):
             artifact = RunArtifact.objects.filter(company_key=company.company_key, kind=RunArtifact.KIND_SALES_UPLOAD, reconcile_status="MATCH").order_by("-target_date").first()
             latest = artifact.target_date if artifact else None
             reason = ""
-            if job and job.status == RunJob.STATUS_FAILED:
+            if job and job.status == RunJob.STATUS_FAILED and (not latest or not job.target_date or job.target_date > latest):
                 reason = "Sales did not post. Open the failed run, fix the cause, then retry the day."
             elif job and job.status == RunJob.STATUS_RUNNING and job.started_at and now - job.started_at > timedelta(hours=2):
                 reason = "The sales run has been stuck for over two hours. Open its details and investigate before retrying."
