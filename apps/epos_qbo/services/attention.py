@@ -322,7 +322,11 @@ def inbox():
                     items.append(make_item("bill", identity, f"Bill for PO {identity} · {row.get('EPOS Supplier', '')}",
                         row.get("Reasons") or row.get("Warnings") or "Waiting for approval. The bill will remain unpaid.", run, "bills",
                         approve=row.get("Status") == "READY" and bool(summary.get("payloads_sha256")), skip=True, exclude=True,
-                        extra={"row": row, "sha": summary.get("payloads_sha256", "")}))
+                        extra={"row": row, "sha": summary.get("payloads_sha256", ""),
+                               # Approve + add the supplier to the routine repeat orders list
+                               "routine": bool(row.get("Status") == "READY" and summary.get("payloads_sha256")
+                                               and "possible duplicate" in (row.get("Warnings") or "")
+                                               and (row.get("EPOS Supplier") or "").strip())}))
                 for vendor in summary.get("vendor_actions", []):
                     identity = str(vendor.get("supplier_id") or vendor.get("epos_name"))
                     if ("vendor", identity) in seen:

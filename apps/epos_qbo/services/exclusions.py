@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import company_a_ops as ops
 
-KIND_LABELS = {"product": "Product", "vendor": "Supplier", "bill": "Bill"}
+KIND_LABELS = {"product": "Product", "vendor": "Supplier", "bill": "Bill", "routine_repeat": "Routine repeat orders"}
 
 
 def path() -> Path:

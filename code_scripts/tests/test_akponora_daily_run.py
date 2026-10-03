@@ -634,6 +634,15 @@ class SlackMessageTests(unittest.TestCase):
         self.assertNotIn("exited", text)
         self.assertNotIn("DocNumber", dr.slack_text(self.summary()))
 
+    def test_days_not_banked_for_a_week_are_escalated(self):
+        s = self.summary()
+        text = dr.slack_text(s)
+        self.assertNotIn("not banked after", text)  # 25 Sep is exactly 7 days before 2 Oct: still quiet
+        text = dr.slack_text(self.summary(business_date="2026-10-03"))
+        self.assertIn(":hammer_and_wrench: *OIAT* · Fri 25 Sep still not banked after 8 days. Follow up with the store", text)
+        text = dr.slack_text(self.summary(business_date="2026-10-05", uf_aged_days=7))
+        self.assertIn("*OIAT* · 3 days still not banked after more than 7 days (25, 26, 27 Sep; oldest 10 days)", text)
+
     def test_start_message(self):
         text = dr.start_text("2026-10-02", banking_on=True,
                              links=dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_x"))

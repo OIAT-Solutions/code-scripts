@@ -70,6 +70,7 @@ DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
 UF_ENV = "OIAT_COMPANY_A_UF_DEPOSIT_ENABLED"
+AGED_ENV = "OIAT_COMPANY_A_UF_AGED_DAYS"  # a day not banked for this many days is escalated (default 7)
 
 OK, REVIEW, FAILED, SKIPPED, DISABLED = "ok", "review", "failed", "skipped", "disabled"
 EXIT_OK, EXIT_FAILED, EXIT_REVIEW = 0, 2, 3
@@ -248,6 +249,7 @@ class DailyRun:
                                        "detail": v.get("detail") or ""} for v in vendors
                                       if str(v.get("state", "")).startswith("HOLD") or v.get("state") == "FAILED"]
         res.counts.update(bills_waiting(out, summary, vendors))
+        res.counts["routine_repeats"] = len(summary.get("routine_repeats") or [])
         res.counts["vendors"] = [f"{v.get('state')}: {v.get('display_name')}"
                                  + (f" -> QBO {v['vendor_id']}" if v.get("vendor_id") else "") for v in vendors]
         if sched.get("stopped"):
@@ -455,6 +457,7 @@ class DailyRun:
                    "exit_code": code, "status": {0: "clean", 2: "failed", 3: "review"}[code],
                    "run_dir": str(self.run_dir), "started_at": self.started_at, "finished_at": _now_utc(),
                    "previous_guard_alert": previous_guard_alert(self.day_dir.parent, self.date),
+                   "uf_aged_days": aged_days(self.base_env),
                    "links": self.links(),
                    "steps": [asdict(r) for r in self.results],
                    "waiting_for_review": [line for r in self.results for line in r.review]}
@@ -708,6 +711,20 @@ def _bank_reason(reason: str) -> str:
     return "see the run"
 
 
+def aged_days(env: dict) -> int:
+    try:
+        return max(1, int(str(env.get(AGED_ENV) or "").strip() or 7))
+    except ValueError:
+        return 7
+
+
+def days_waiting(day: str, business_date: str) -> int:
+    try:
+        return (date.fromisoformat(business_date) - date.fromisoformat(day)).days
+    except ValueError:
+        return 0
+
+
 def _lagos_time(iso: str | None) -> str:
     try:
         return datetime.fromisoformat(str(iso)).astimezone(TZ).strftime("%H:%M")
@@ -785,6 +802,9 @@ def slack_text(summary: dict) -> str:
                 text = f"{posted} posted" + (f" · {naira_text(total)}" if total not in (None, "") else "")
             else:
                 text = "nothing new to post" if not waiting else "nothing posted"
+            if c.get("routine_repeats"):
+                n = c["routine_repeats"]
+                text += f" · {n} routine repeat order{'s' if n != 1 else ''}"
             if waiting:
                 text += f" · {len(waiting)} waiting for you"
             if c.get("vendors_created"):
@@ -844,6 +864,16 @@ def slack_text(summary: dict) -> str:
                     store.append(f"fill in the cash box on the till sheet for {day_list(days)} → {sheet}")
                 else:
                     store.append(f"check the till sheet for {day_list(days)} ({reason}) → {sheet}")
+            # Escalate money that has sat in Undeposited Funds too long (normal waits stay quiet).
+            limit = summary.get("uf_aged_days") or 7
+            old = sorted((d for d in held if days_waiting(d["day"], summary["business_date"]) > limit),
+                         key=lambda d: d["day"])
+            if len(old) == 1:
+                oiat.append(f"{short_day(old[0]['day'])} still not banked after "
+                            f"{days_waiting(old[0]['day'], summary['business_date'])} days. Follow up with the store → {sheet}")
+            elif old:
+                oiat.append(f"{len(old)} days still not banked after more than {limit} days ({day_list(d['day'] for d in old)}; "
+                            f"oldest {days_waiting(old[0]['day'], summary['business_date'])} days). Follow up with the store → {sheet}")
 
     # Checks (products, item check, stock): one line, detail only when something changed
     check_bits, broken = [], []

@@ -7,6 +7,9 @@ State file ``STATE_ROOT/mappings/company_a/review_exclusions.csv`` (next to ``ap
   and reports it as ``excluded`` (its till sales still fail the day while it is unmapped).
 * ``vendor``  - key = EPOS supplier name (stored normalized, as ``vendors.vendor_key``). Never
   auto-created; ``bills_sync`` HOLDs its bills with reason ``supplier excluded``.
+* ``routine_repeat`` - key = EPOS supplier name (normalized like ``vendor``). A supplier whose repeat
+  orders are routine (daily bread, water): ``bills_sync`` posts its below-threshold "possible duplicate"
+  POs automatically instead of waiting for a person. Repeats at or above the threshold still HOLD.
 * ``bill``    - key = EPOS PO OrderRef (``EPOS-PO-`` prefix accepted). The PO was resolved outside
   the tool: it is planned ``EXCLUDED`` (never posted, counts as done for the cursor) and a post
   skips it as ``RESOLVED`` even when it was approved in an older review.csv.
@@ -43,7 +46,7 @@ FILE_NAME = "review_exclusions.csv"
 HISTORY_NAME = "review_exclusions_history.csv"
 COLUMNS = ["kind", "key", "reason", "added_by", "added_at", "expires_at"]
 HISTORY_COLUMNS = ["ts", "action", "kind", "key", "reason", "actor", "expires_at", "previous", "file_sha256_after"]
-KINDS = ("product", "vendor", "bill")
+KINDS = ("product", "vendor", "bill", "routine_repeat")
 PO_PREFIX = "EPOS-PO-"
 TZ = ZoneInfo("Africa/Lagos")
 
@@ -77,8 +80,11 @@ def normalize_key(kind: str, key) -> str:
         raise ExclusionError("key is empty")
     if kind == "product":
         return canonical_product_id(text)
-    if kind == "vendor":
+    if kind in ("vendor", "routine_repeat"):
         out = norm(text)
+        if kind == "routine_repeat":
+            # Apostrophe variants are the same supplier: UNCLE SAM'S / UNCLE'S SAM -> UNCLE SAM
+            out = " ".join(w for w in out.split() if len(w) > 1)
         if not out:
             raise ExclusionError(f"supplier name {text!r} is empty after normalizing")
         return out

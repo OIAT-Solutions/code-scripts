@@ -780,7 +780,13 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
                                          doc=doc)
         holds, dwarns = duplicate_of(po, history, days=dup_days, min_value=dup_min_value)
         reasons += holds
-        warns += dwarns
+        routine = (exclusions.describe("routine_repeat", po["supplier"])
+                   if dwarns and exclusions is not None and clean(po["supplier"]) else "")
+        if routine:
+            # A routine supplier (owner's "routine repeat orders" list): the repeat is noted, not blocking.
+            e["routine_repeat"] = dwarns
+        else:
+            warns += dwarns
         if reasons:
             e["status"] = "HOLD"
             continue
@@ -924,6 +930,8 @@ def write_plan(out: Path, entries: list[dict], meta: dict) -> dict:
         "hold_reason_counts": dict(hold_reasons.most_common()),
         "holds": [{"po": e["po"]["ref"], "supplier": e["po"]["supplier"], "total_inc": money(e["po"]["total_inc"]),
                    "reasons": e["reasons"]} for e in entries if e["status"] == "HOLD"],
+        "routine_repeats": [{"po": e["po"]["ref"], "supplier": e["po"]["supplier"], "note": e["routine_repeat"][0]}
+                            for e in entries if e.get("routine_repeat")],
         "payloads_sha256": sha256_file(out / "payloads.jsonl"), "payload_count": len(payload_lines(entries)),
     }
     summary["post_command"] = (f".venv/bin/python -m code_scripts.akponora_ops.{TOOL} post --review "

@@ -163,16 +163,25 @@ def execute(action_record):
             raise ReviewChanged("This product is no longer listed as new in EPOS. Refresh the page.")
         return subprocess.call(exclusion_command("product", data["exclusion_key"], ref, reason))
     item = current_item(data["key"], data["snapshot"])
-    if not item.get(action_record.action):
+    action = action_record.action
+    if action == "routine":
+        if item["kind"] != "bill" or not item["extra"].get("routine"):
+            raise ValueError("This action is no longer available for this item. Refresh the inbox.")
+        supplier = item["extra"]["row"].get("EPOS Supplier", "")
+        rc = subprocess.call(exclusion_command("routine_repeat", supplier, ref, reason or "routine repeat orders"))
+        if rc != 0:
+            return rc
+        action = "approve"  # then post this bill exactly like Approve bill (the record keeps "routine")
+    if not item.get(action):
         raise ValueError("This action is no longer available for this item. Refresh the inbox.")
-    if action_record.action == "skip" and item["kind"] != "bill":
+    if action == "skip" and item["kind"] != "bill":
         # Deferral records a human decision only; it never advances a financial cursor.
         return 0
-    if action_record.action == "exclude":
+    if action == "exclude":
         kind, key = exclusion_key(item)
         return subprocess.call(exclusion_command(kind, key, ref, reason))
     if item["kind"] == "vendor":
-        if action_record.action == "preview":
+        if action == "preview":
             return record_vendor_check(item, data["choice"], ref, action_record.job_id)
         check = item["extra"].get("check") or {}
         result = check.get("result") or {}
@@ -189,11 +198,11 @@ def execute(action_record):
         review = attention.rows(path)
         # Clear every other approval so this job authorizes exactly the selected PO.
         for row in review:
-            row["Approve"] = ("yes" if action_record.action == "approve" else "skip") if row["PO"] == item["identity"] else ""
+            row["Approve"] = ("yes" if action == "approve" else "skip") if row["PO"] == item["identity"] else ""
         temporary = path.with_suffix(".portal.tmp")
         with temporary.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(review[0]))
             writer.writeheader()
             writer.writerows(review)
         temporary.replace(path)
-    return subprocess.call(tool_command(item, action_record.action, ref))
+    return subprocess.call(tool_command(item, action, ref))

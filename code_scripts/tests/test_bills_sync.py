@@ -298,6 +298,29 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(e["3981"]["status"], "HOLD")
         self.assertTrue(any("possible duplicate receipt of EPOS PO 3980" in r for r in e["3981"]["reasons"]))
 
+    def test_small_repeat_waits_unless_the_supplier_is_routine(self):
+        """3 Oct 2026: daily bread (PO 3969 repeats 3967) would otherwise wait for a person every day."""
+        bread = ("100", "COKE CAN*24", 5, 5, 4800.0, 5160.0)  # small: under the N50,000 hold threshold
+        orders = [order(3967, [bread], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
+                  order(3969, [bread], received="2026-10-02T09:00:00", supplier="UNCLE SAM'S BAKERY")]
+        out, summary, e, _ = self.f.plan(orders)
+        self.assertEqual(e["3969"]["status"], "READY")
+        self.assertTrue(any("possible duplicate" in w for w in e["3969"]["warnings"]))  # waits in auto mode
+        self.assertEqual(summary["routine_repeats"], [])
+        from code_scripts.akponora_ops import review_exclusions as rx
+        path = rx.path_near(self.f.tmp / "vendors.csv")
+        # the other EPOS spelling of the same supplier matches too (3967 vs 3969 on 3 Oct 2026)
+        rx.add("routine_repeat", "UNCLE'S SAM BAKERY", reason="daily bread", added_by="owner", path=path)
+        out, summary, e, _ = self.f.plan(orders)
+        self.assertEqual(e["3969"]["status"], "READY")
+        self.assertEqual(e["3969"]["warnings"], [])  # posts automatically
+        self.assertEqual([r["po"] for r in summary["routine_repeats"]], ["3969"])
+        # a large repeat from a routine supplier still holds
+        big = ("100", "COKE CAN*24", 600, 600, 4800.0, 5160.0)
+        _, _, e, _ = self.f.plan([order(3980, [big], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
+                                  order(3981, [big], received="2026-10-02T10:00:00", supplier="UNCLE SAM'S BAKERY")])
+        self.assertEqual(e["3981"]["status"], "HOLD")
+
     def test_receipt_on_non_master_child_holds(self):
         _, _, e, _ = self.f.plan([order(3977, [("101", "COKE CAN", 24, 24, 200.0, 215.0)])])
         self.assertEqual(e["3977"]["status"], "HOLD")

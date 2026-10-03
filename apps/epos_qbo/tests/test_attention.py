@@ -195,6 +195,36 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         (self.folder/"summary.json").write_text(json.dumps(_summary("2026-10-02",steps=[_step("sales",counts={"mode":"post","reconcile_status":"MATCH"})])))
         self.assertTrue(attention.blockers(now=datetime(2026,10,3,12,tzinfo=ZoneInfo("UTC"))))
 
+    def test_routine_supplier_marks_the_supplier_then_approves_only_this_bill(self):
+        (self.folder / "bills/review.csv").write_text(
+            "PO,EPOS Supplier,Status,Reasons,Warnings,Approve\n"
+            "123,UNCLE'S SAM BAKERY AND CAFE,READY,,possible duplicate receipt of EPOS PO 120,\n"
+            "124,Other Supplier,HOLD,Possible duplicate,,\n")
+        items = attention.inbox()[0]
+        bill = next(i for i in items if i["identity"] == "123")
+        self.assertTrue(bill["extra"]["routine"])
+        self.assertFalse(next(i for i in items if i["identity"] == "124")["extra"]["routine"])
+        page = self.client.get(reverse("epos_qbo:attention"))
+        self.assertContains(page, "Approve · routine supplier")
+        self.assertContains(page, "Handled outside, never post")
+        response = self.client.get(self.url, {"key": bill["key"], "action": "routine"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "a repeat order under ₦50,000 posts automatically")
+        job = RunJob.objects.create(scope=RunJob.SCOPE_PORTAL_REVIEW, status=RunJob.STATUS_RUNNING)
+        record = PortalReviewAction.objects.create(job=job, actor="reviewer", action="routine", reason="daily bread",
+                                                   confirmation_id="routine1",
+                                                   payload={"key": bill["key"], "snapshot": bill["snapshot"]})
+        with mock.patch("apps.epos_qbo.services.attention_actions.subprocess.call", return_value=0) as call:
+            self.assertEqual(attention_actions.execute(record), 0)
+        first, second = call.call_args_list[0][0][0], call.call_args_list[1][0][0]
+        self.assertIn("routine_repeat", first)
+        self.assertIn("UNCLE'S SAM BAKERY AND CAFE", first)
+        self.assertIn("post", second)
+        approve = {r["PO"]: r["Approve"] for r in attention.rows(self.folder / "bills/review.csv")}
+        self.assertEqual(approve, {"123": "yes", "124": ""})
+        record.refresh_from_db()
+        self.assertEqual(record.action, "routine")
+
     def test_banners_use_the_same_confirmation_rule_as_home(self):
         from apps.epos_qbo.models import RunArtifact
         now = datetime(2026,10,3,12,tzinfo=ZoneInfo("UTC"))
