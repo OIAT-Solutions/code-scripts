@@ -13,6 +13,7 @@ from apps.epos_qbo.business_date import get_target_trading_date
 
 from ..models import RunJob, RunLock, RunSchedule, RunScheduleEvent, SchedulerWorkerHeartbeat
 from .job_runner import dispatch_next_queued_job
+from .run_reconciler import describe_run, describe_run_short, reconcile_stale_running_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -124,17 +125,82 @@ def _create_event(
     )
 
 
+def _active_scheduled_run(schedule: RunSchedule) -> RunJob | None:
+    return (
+        RunJob.objects.filter(
+            scheduled_by=schedule,
+            status__in=[RunJob.STATUS_QUEUED, RunJob.STATUS_RUNNING],
+        )
+        .order_by("created_at")
+        .first()
+    )
+
+
 def _active_scheduled_run_exists(schedule: RunSchedule) -> bool:
-    return RunJob.objects.filter(
-        scheduled_by=schedule,
-        status__in=[RunJob.STATUS_QUEUED, RunJob.STATUS_RUNNING],
-    ).exists()
+    return _active_scheduled_run(schedule) is not None
+
+
+def _active_global_run() -> tuple[bool, RunJob | None, str]:
+    """(active, blocking job if known, lock holder) for the global run check."""
+    lock = RunLock.objects.filter(active=True).select_related("owner_run_job").first()
+    if lock is not None:
+        return True, lock.owner_run_job, lock.holder or ""
+    job = RunJob.objects.filter(status=RunJob.STATUS_RUNNING).order_by("created_at").first()
+    return job is not None, job, ""
 
 
 def _active_global_run_exists() -> bool:
-    if RunLock.objects.filter(active=True).exists():
-        return True
-    return RunJob.objects.filter(status=RunJob.STATUS_RUNNING).exists()
+    return _active_global_run()[0]
+
+
+def _skip_overlap(
+    schedule: RunSchedule,
+    *,
+    current: datetime,
+    blocking_job: RunJob | None,
+    holder: str = "",
+) -> tuple[None, str]:
+    """Record an overlap skip that names the blocking run and how long it has run."""
+    payload: dict[str, Any] = {}
+    if blocking_job is not None:
+        blocking = describe_run(blocking_job, now=current)
+        message = f"Skipped because another run is active: {blocking}."
+        last_error = describe_run_short(blocking_job, now=current)
+        payload = {
+            "blocking_run_id": str(blocking_job.id),
+            "blocking_run_status": blocking_job.status,
+            "blocking_run_company": blocking_job.company_key,
+        }
+    elif holder:
+        message = f"Skipped because another run is active: run lock held by {holder}."
+        last_error = f"Blocked by run lock holder {holder}"
+        payload = {"blocking_lock_holder": holder}
+    else:
+        message = "Skipped because another run is active."
+        last_error = ""
+    schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_OVERLAP
+    schedule.last_error = last_error
+    schedule.last_fired_at = current
+    schedule.save(update_fields=["last_result", "last_error", "last_fired_at", "updated_at"])
+    # The blocking run is named in the message/payload, not linked as run_job: the
+    # schedules page reads an event's run_job as "this schedule's run".
+    _create_event(
+        schedule=schedule,
+        event_type=RunScheduleEvent.TYPE_SKIPPED_OVERLAP,
+        message=message,
+        payload=payload,
+    )
+    return None, RunScheduleEvent.TYPE_SKIPPED_OVERLAP
+
+
+def _reconcile_stale_runs(now: datetime) -> int:
+    """Close runs stuck in 'running' so they cannot block schedules forever."""
+    try:
+        closed = reconcile_stale_running_jobs(now=now)
+    except Exception:
+        logger.exception("Stale run reconciliation failed")
+        return 0
+    return len(closed)
 
 
 def _schedule_requires_company(schedule: RunSchedule) -> bool:
@@ -303,6 +369,9 @@ def enqueue_run_for_schedule(
     source: str = "manual",
 ) -> tuple[RunJob | None, str]:
     current = now or timezone.now()
+    if source != "worker":
+        # The worker reconciles once per cycle; manual "Run now" does it here.
+        _reconcile_stale_runs(current)
     if _schedule_requires_company(schedule) and not (schedule.company_key or "").strip():
         _create_event(
             schedule=schedule,
@@ -355,28 +424,13 @@ def enqueue_run_for_schedule(
                 message=message,
             )
             return None, RunScheduleEvent.TYPE_SKIPPED_INVALID
-        if _active_scheduled_run_exists(schedule):
-            schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_OVERLAP
-            schedule.last_error = ""
-            schedule.last_fired_at = current
-            schedule.save(update_fields=["last_result", "last_error", "last_fired_at", "updated_at"])
-            _create_event(
-                schedule=schedule,
-                event_type=RunScheduleEvent.TYPE_SKIPPED_OVERLAP,
-                message="Skipped because another run is active.",
-            )
-            return None, RunScheduleEvent.TYPE_SKIPPED_OVERLAP
-        if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE and _active_global_run_exists():
-            schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_OVERLAP
-            schedule.last_error = ""
-            schedule.last_fired_at = current
-            schedule.save(update_fields=["last_result", "last_error", "last_fired_at", "updated_at"])
-            _create_event(
-                schedule=schedule,
-                event_type=RunScheduleEvent.TYPE_SKIPPED_OVERLAP,
-                message="Skipped because another run is active.",
-            )
-            return None, RunScheduleEvent.TYPE_SKIPPED_OVERLAP
+        own_active = _active_scheduled_run(schedule)
+        if own_active is not None:
+            return _skip_overlap(schedule, current=current, blocking_job=own_active)
+        if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
+            global_active, blocking_job, holder = _active_global_run()
+            if global_active:
+                return _skip_overlap(schedule, current=current, blocking_job=blocking_job, holder=holder)
 
         payload = _job_payload_from_schedule(schedule, now=current)
         job = RunJob.objects.create(**payload)
@@ -468,7 +522,12 @@ def process_schedule_cycle(*, now: datetime | None = None, max_due: int = 25) ->
         "errors": 0,
         "fallback_enabled": 0,
         "fallback_disabled": 0,
+        "reconciled": 0,
     }
+
+    # Runs left 'running' by a dead process (e.g. container restart) would make every
+    # later schedule skip as "another run is active"; close them before deciding.
+    stats["reconciled"] = _reconcile_stale_runs(current)
 
     fallback_stats = _upsert_env_fallback_schedule(now=current)
     stats.update(fallback_stats)
@@ -505,7 +564,7 @@ def process_schedule_cycle(*, now: datetime | None = None, max_due: int = 25) ->
             elif result == RunScheduleEvent.TYPE_SKIPPED_INVALID:
                 stats["skipped_invalid"] += 1
 
-    if stats["queued"] > 0:
+    if stats["queued"] > 0 or stats["reconciled"] > 0:
         dispatch_next_queued_job()
 
     _record_heartbeat(current)

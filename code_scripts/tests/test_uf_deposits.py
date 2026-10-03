@@ -263,10 +263,17 @@ class NoNetwork(unittest.TestCase):
         self.accounts_file = self.tmp / "till_accounts.csv"
         shutil.copy(TEMPLATE, self.accounts_file)
         self.cursor = self.tmp / "cursor.json"
-        p = mock.patch.object(ufd, "cursor_path", lambda: self.cursor)
-        p.start()
-        self.addCleanup(p.stop)
+        self.days_file = self.tmp / "days.json"
+        self.overrides = self.tmp / "settings.env"
+        for name, target in (("cursor_path", self.cursor), ("days_path", self.days_file),
+                             ("overrides_path", self.overrides)):
+            p = mock.patch.object(ufd, name, lambda t=target: t)
+            p.start()
+            self.addCleanup(p.stop)
         self.n = 0
+
+    def day_states(self) -> dict:
+        return {d: v["status"] for d, v in json.loads(self.days_file.read_text())["days"].items()}
 
     def settings(self, **env):
         return ufd.settings({ufd.ACCOUNTS_ENV: str(self.accounts_file), **env})
@@ -389,7 +396,7 @@ class GateTests(NoNetwork):
                       **{ufd.TOL_ENV: "100", ufd.TOL_PCT_ENV: "0.001"})["days"][0]
         self.assertEqual(d["status"], ufd.HOLD)
 
-    def test_blank_or_unfinished_day_holds_and_later_days_wait(self):
+    def test_blank_or_unfinished_day_holds_alone_and_later_day_is_ready(self):
         rows = month_rows({"2026-09-25": {}, "2026-09-26": {**DAY1, "system": 3199500}})
         receipts = [sr(701, "2026-09-25", 1000.0, "Cash")] + [
             {**r, "Id": str(int(r["Id"]) + 300), "TxnDate": "2026-09-26"} for r in DAY1_RECEIPTS]
@@ -397,10 +404,11 @@ class GateTests(NoNetwork):
                             ["2026-09-25", "2026-09-26"])
         d25, d26 = summary["days"]
         self.assertEqual(d25["status"], ufd.HOLD)
+        self.assertEqual(d25["state"], ufd.WAITING_SHEET)
         self.assertTrue(any("blank" in r for r in d25["reasons"]), d25["reasons"])
-        self.assertEqual(d26["status"], ufd.WAITING)
-        self.assertIn("waits for 2026-09-25", d26["reasons"][0])
-        self.assertEqual((Path(d26["dir"]) / "payloads.jsonl").read_text(), "")
+        self.assertEqual(d26["status"], ufd.READY, d26["reasons"])
+        self.assertNotEqual((Path(d26["dir"]) / "payloads.jsonl").read_text(), "")
+        self.assertEqual((Path(d25["dir"]) / "payloads.jsonl").read_text(), "")
         # SYSTEM blank = unfinished day
         d = self.plan(FakeQBO(DAY1_RECEIPTS), google({"Oct 2026": block("2026-10-01", {**DAY1, "system": None})}),
                       ["2026-10-01"])["days"][0]
@@ -409,7 +417,27 @@ class GateTests(NoNetwork):
     def test_no_receipts_yet_holds(self):
         d = self.plan(FakeQBO([]), google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])["days"][0]
         self.assertEqual(d["status"], ufd.HOLD)
+        self.assertEqual(d["state"], ufd.NO_SALES)
         self.assertIn("no SalesReceipts", d["reasons"][0])
+
+    def test_tolerance_read_fresh_each_run_from_settings_file(self):
+        sheet = google({"Oct 2026": block("2026-10-01", DAY1)})  # N500 off the receipts
+        self.assertEqual(self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"])["days"][0]["status"], ufd.READY)
+        self.overrides.write_text(f"# owner toggle\n{ufd.TOL_ENV}=100\n{ufd.TOL_PCT_ENV}=0.001 # tight\n"
+                                  f"{ufd.AUTO_ENV}=1\n")
+        s = self.settings()
+        self.assertEqual((s["tol_abs"], s["tol_pct"]), (Decimal("100"), Decimal("0.001")))
+        self.assertFalse(s["auto_flag"])  # only the tolerance keys are honoured from the file
+        d = self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.HOLD)
+        self.assertEqual(d["state"], ufd.HELD)
+        self.assertTrue(any("over the tolerance" in r for r in d["reasons"]))
+        self.overrides.unlink()  # back to the env defaults on the next run, no restart
+        self.assertEqual(self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"])["days"][0]["status"], ufd.READY)
+        with mock.patch.dict(os.environ, {ufd.TOL_ENV: "50"}):
+            self.assertEqual(ufd.settings()["tol_abs"], Decimal("50"))
+        with self.assertRaises(StopRun):
+            ufd.settings({ufd.TOL_ENV: "abc"})
 
     def test_closed_period_and_wrong_account_hold(self):
         d = self.plan(FakeQBO(DAY1_RECEIPTS, book_close="2026-10-01"), google({"Oct 2026": block("2026-10-01", DAY1)}),
@@ -600,48 +628,90 @@ class ScheduledTests(NoNetwork):
             self.assertEqual(fake.posts(), [])
             self.assertEqual([d["status"] for d in res["days"]], [ufd.READY, ufd.READY])
             self.assertEqual(res["waiting"], 2)
-        self.assertIsNone(ufd.read_cursor().get("last_complete_business_date"))
+        self.assertEqual(self.day_states(), {"2026-10-01": ufd.READY, "2026-10-02": ufd.READY})
 
-    def test_auto_posts_in_order_and_cursor_moves_over_done_days_only(self):
-        receipts = DAY1_RECEIPTS + [{**r, "Id": str(int(r["Id"]) + 100), "TxnDate": "2026-10-02"} for r in DAY1_RECEIPTS]
-        fake = FakeQBO(receipts)
-        self.cursor.write_text(json.dumps({"last_complete_business_date": "2026-09-30"}))
-        source = google({"Oct 2026": month_rows({"2026-10-01": DAY1, "2026-10-02": {**DAY1, "system": None}})})
-        res = self.scheduled(fake, source, **AUTO)
-        self.assertTrue(res["auto_post"])
-        self.assertEqual([d["status"] for d in res["days"]], ["DEPOSITED", ufd.HOLD])
-        self.assertEqual(res["cursor"], "2026-10-01")
-        self.assertEqual(ufd.read_cursor()["last_complete_business_date"], "2026-10-01")
-        self.assertEqual({d["TxnDate"] for d in fake.deposits.values()}, {"2026-10-01"})
-        self.assertEqual(Decimal(res["uf_balance"]), Decimal("3199500.00"))
-        self.assertIn("2026-10-01 deposited N3,199,500.00", ufd.slack_text(res))
-        # staff finish the sheet; next run picks up 2 Oct only (from the cursor)
-        source = google({"Oct 2026": month_rows({"2026-10-01": DAY1, "2026-10-02": DAY1})})
-        res = self.scheduled(fake, source, from_day=None, **AUTO)
-        self.assertEqual(res["window"], ["2026-10-02", "2026-10-02"])
-        self.assertEqual([d["status"] for d in res["days"]], ["DEPOSITED"])
-        self.assertEqual(ufd.read_cursor()["last_complete_business_date"], "2026-10-02")
+    def test_later_complete_day_posts_while_earlier_day_is_missing_then_held_day_posts(self):
+        # 29 Sep has sales but no sheet block yet; 1 and 2 Oct are complete
+        sep29 = [{**r, "Id": str(int(r["Id"]) + 600), "TxnDate": "2026-09-29"} for r in DAY1_RECEIPTS]
+        oct_ = [{**r, "Id": str(int(r["Id"]) + 100 * k), "TxnDate": f"2026-10-0{k}"} for k in (1, 2) for r in DAY1_RECEIPTS]
+        fake = FakeQBO(sep29 + oct_, book_close="2026-08-31")
+        oct_tab = month_rows({"2026-10-01": DAY1, "2026-10-02": DAY1})
+        res = self.scheduled(fake, google({"Oct 2026": oct_tab}), from_day=None, **AUTO)
+        status = {d["day"]: d["status"] for d in res["days"]}
+        self.assertEqual(res["window"], ["2026-09-25", "2026-10-02"])
+        self.assertEqual(status["2026-09-29"], ufd.WAITING_SHEET)
+        self.assertEqual(status["2026-09-25"], ufd.NO_SALES)
+        self.assertEqual((status["2026-10-01"], status["2026-10-02"]), (ufd.DEPOSITED, ufd.DEPOSITED))
+        self.assertEqual({d["TxnDate"] for d in fake.deposits.values()}, {"2026-10-01", "2026-10-02"})
+        self.assertEqual(self.day_states()["2026-09-29"], ufd.WAITING_SHEET)
+        self.assertEqual(self.day_states()["2026-10-01"], ufd.DEPOSITED)
+        self.assertEqual(res["waiting"], 6)  # 25-30 Sep
+        rep = res["till_sheet"]
+        self.assertEqual(rep["last_complete_day"], "2026-10-02")
+        self.assertIn("2026-09-29", rep["missing"])
+        self.assertEqual(rep["deposited"], ["2026-10-01", "2026-10-02"])
+        self.assertEqual(json.loads((Path(res["run_dir"]) / "summary.json").read_text())["till_sheet"]["text"],
+                         rep["text"])
+        # staff add 29 Sep; the next run re-evaluates only the open days and posts 29 Sep
+        deposits_before = {k: dict(v) for k, v in fake.deposits.items()}
+        sep_tab = block("2026-09-29", DAY1)
+        res = self.scheduled(fake, google({"Oct 2026": oct_tab, "Sep 2026": sep_tab}), from_day=None, **AUTO)
+        self.assertEqual(res["window"], ["2026-09-25", "2026-09-30"])
+        self.assertNotIn("2026-10-01", [d["day"] for d in res["days"]])  # DEPOSITED days are never re-planned
+        self.assertEqual({d["day"]: d["status"] for d in res["days"]}["2026-09-29"], ufd.DEPOSITED)
+        self.assertEqual(self.day_states()["2026-09-29"], ufd.DEPOSITED)
+        # idempotency: earlier deposits untouched, every receipt linked exactly once
+        for k, v in deposits_before.items():
+            self.assertEqual(fake.deposits[k], v)
+        linked = Counter(ln["LinkedTxn"][0]["TxnId"] for d in fake.deposits.values() for ln in d["Line"])
+        self.assertEqual(set(linked.values()), {1})
+        self.assertEqual(len(linked), 12)
         self.assertEqual(Decimal(res["uf_balance"]), 0)
+        # a third run posts nothing
+        n = len(fake.posts())
+        self.scheduled(fake, google({"Oct 2026": oct_tab, "Sep 2026": sep_tab}), from_day=None, **AUTO)
+        self.assertEqual(len(fake.posts()), n)
 
-    def test_cursor_never_skips_a_gap(self):
-        fake, source = self.two_days()
-        res = self.scheduled(fake, source, **AUTO)  # 25-30 Sep not done; window forced to start 1 Oct
-        self.assertEqual([d["status"] for d in res["days"]], ["DEPOSITED", "DEPOSITED"])
-        self.assertIsNone(res["cursor"])
-        self.assertFalse(self.cursor.exists())
-
-    def test_held_first_day_blocks_later_days(self):
+    def test_held_first_day_does_not_block_later_days(self):
         fake, _ = self.two_days()
         source = google({"Oct 2026": month_rows({"2026-10-01": {}, "2026-10-02": DAY1})})
         res = self.scheduled(fake, source, **AUTO)
-        self.assertEqual([d["status"] for d in res["days"]], [ufd.HOLD, ufd.WAITING])
-        self.assertEqual(fake.posts(), [])
-        self.assertIsNone(ufd.read_cursor().get("last_complete_business_date"))
+        self.assertEqual([d["status"] for d in res["days"]], [ufd.WAITING_SHEET, ufd.DEPOSITED])
+        self.assertEqual({d["TxnDate"] for d in fake.deposits.values()}, {"2026-10-02"})
+        self.assertEqual(self.day_states(), {"2026-10-01": ufd.WAITING_SHEET, "2026-10-02": ufd.DEPOSITED})
+        text = ufd.slack_text(res)
+        self.assertIn("2026-10-01 WAITING_SHEET: CASH (System 1) box is blank", text)
+        self.assertIn("2026-10-02 deposited N3,199,500.00", text)
+
+    def test_non_sheet_hold_is_held_and_later_day_posts(self):
+        fake, source = self.two_days()
+        fake.receipts["501"]["TotalAmt"] = 10.0  # 1 Oct receipts far below the sheet
+        res = self.scheduled(fake, source, **AUTO)
+        self.assertEqual([d["status"] for d in res["days"]], [ufd.HELD, ufd.DEPOSITED])
+        self.assertTrue(any("over the tolerance" in r for r in res["days"][0]["reasons"]))
+
+    def test_old_cursor_is_migrated(self):
+        fake, source = self.two_days()
+        self.cursor.write_text(json.dumps({"last_complete_business_date": "2026-09-30"}))
+        state = ufd.read_state()
+        self.assertEqual({d for d, v in state["days"].items() if v["status"] == ufd.DEPOSITED},
+                         set(ufd.day_range("2026-09-25", "2026-09-30")))
+        self.assertEqual(ufd.default_from(state), "2026-10-01")
+        res = self.scheduled(fake, source, from_day=None, **AUTO)
+        self.assertEqual(res["window"], ["2026-10-01", "2026-10-02"])
+        self.assertEqual([d["status"] for d in res["days"]], [ufd.DEPOSITED, ufd.DEPOSITED])
+        saved = json.loads(self.days_file.read_text())
+        self.assertEqual(saved["migrated_from_cursor"]["last_complete_business_date"], "2026-09-30")
+        self.assertEqual(len([v for v in saved["days"].values() if v["status"] == ufd.DEPOSITED]), 8)
+        # cursor.json is left alone and no longer drives anything
+        self.assertEqual(json.loads(self.cursor.read_text())["last_complete_business_date"], "2026-09-30")
+        self.cursor.write_text(json.dumps({"last_complete_business_date": "2026-09-26"}))
+        self.assertTrue(ufd.is_deposited(ufd.read_state(), "2026-09-30"))
 
     def test_cap_holds_automatic_posting(self):
         fake, source = self.two_days()
         res = self.scheduled(fake, source, **AUTO, **{ufd.CAP_ENV: "1000000"})
-        self.assertEqual(res["days"][0]["status"], ufd.HOLD)
+        self.assertEqual(res["days"][0]["status"], ufd.HELD)
         self.assertTrue(any("automatic cap" in r for r in res["days"][0]["reasons"]))
         self.assertEqual(fake.posts(), [])
         with self.assertRaises(StopRun):  # post --auto re-checks the cap too
@@ -649,17 +719,85 @@ class ScheduledTests(NoNetwork):
             ufd.post_day(Path(d["dir"]), client=client(fake, True), approval_ref="x", expect_sha=d["payloads_sha256"],
                          auto=True, s=self.settings(**AUTO, **{ufd.CAP_ENV: "1000000"}))
 
-    def test_dry_run_never_posts_or_moves_the_cursor(self):
+    def test_post_stop_ends_posting_and_day_is_held(self):
+        fake, source = self.two_days()
+        fake.fail_post.add("/transfer")
+        res = self.scheduled(fake, source, **AUTO)
+        self.assertTrue(res["stopped"].startswith("2026-10-01"))
+        self.assertEqual([d["status"] for d in res["days"]], [ufd.HELD, ufd.READY])
+        self.assertIn("post stopped", res["days"][0]["reasons"][0])
+        fake.fail_post.clear()
+        res = self.scheduled(fake, source, **AUTO)  # resumes: nothing re-linked
+        self.assertEqual([d["status"] for d in res["days"]], [ufd.DEPOSITED, ufd.DEPOSITED])
+        linked = Counter(ln["LinkedTxn"][0]["TxnId"] for d in fake.deposits.values() for ln in d["Line"])
+        self.assertEqual(set(linked.values()), {1})
+
+    def test_dry_run_never_posts_or_writes_state(self):
         fake, source = self.two_days()
         res = self.scheduled(fake, source, dry_run=True, **AUTO)
         self.assertFalse(res["auto_post"])
         self.assertEqual(fake.posts(), [])
-        self.assertFalse(self.cursor.exists())
+        self.assertFalse(self.days_file.exists())
+        self.assertIn("till_sheet", res)
 
     def test_floor_and_default_window(self):
         self.assertEqual(ufd.default_from(), "2026-09-25")
-        self.cursor.write_text(json.dumps({"last_complete_business_date": "2026-10-01"}))
-        self.assertEqual(ufd.default_from(), "2026-10-02")
+        state = {"days": {d: {"status": ufd.DEPOSITED} for d in ufd.day_range("2026-09-25", "2026-10-01")}}
+        state["days"]["2026-09-27"] = {"status": ufd.HELD}
+        self.assertEqual(ufd.default_from(state), "2026-09-27")
+        self.assertEqual(ufd.open_days(state, ufd.FLOOR, "2026-10-03"), ["2026-09-27", "2026-10-02", "2026-10-03"])
+
+
+# ---------------------------------------------------------------- till-sheet status report
+class StatusReportTests(NoNetwork):
+    def source(self):
+        sep = month_rows({"2026-09-27": DAY1, "2026-09-28": DAY1, "2026-09-29": {**DAY1, "system": None},
+                          "2026-09-30": DAY1})
+        oct_ = month_rows({"2026-10-01": DAY1, "2026-10-02": {}})
+        return google({"Sep 2026": sep, "Oct 2026": oct_})
+
+    def test_report_content_and_text(self):
+        state = {"days": {"2026-09-27": {"status": ufd.DEPOSITED}, "2026-09-28": {"status": ufd.DEPOSITED},
+                          "2026-09-30": {"status": ufd.HELD, "reason": "sheet total vs receipts"}}}
+        rep = ufd.sheet_report(self.source(), upto="2026-10-02", state=state)
+        self.assertEqual(rep["last_complete_day"], "2026-10-01")
+        self.assertEqual(rep["missing"], ["2026-09-25", "2026-09-26"])
+        self.assertEqual([x["day"] for x in rep["incomplete"]], ["2026-09-29", "2026-10-02"])
+        self.assertIn("SYSTEM", rep["incomplete"][0]["reason"])
+        self.assertEqual([(x["day"], x["status"]) for x in rep["complete_not_deposited"]],
+                         [("2026-09-30", ufd.HELD), ("2026-10-01", "NOT RUN")])
+        self.assertEqual(rep["deposited"], ["2026-09-27", "2026-09-28"])
+        self.assertEqual(rep["text"], "Till sheet: last day entered 1 Oct. Missing: 25, 26 Sep. "
+                                      "Incomplete: 29 Sep; 2 Oct. Waiting to deposit: 30 Sep; 1 Oct. "
+                                      "Deposited: 27, 28 Sep.")
+
+    def test_fmt_days(self):
+        self.assertEqual(ufd.fmt_days([]), "none")
+        self.assertEqual(ufd.fmt_days(["2026-09-29", "2026-09-25", "2026-09-26"]), "25, 26, 29 Sep")
+        self.assertEqual(ufd.fmt_days(ufd.day_range("2026-09-25", "2026-10-03")), "25-30 Sep; 1-3 Oct")
+
+    def test_nothing_entered(self):
+        rep = ufd.sheet_report(google({}), upto="2026-09-26", state={"days": {}})
+        self.assertEqual(rep["text"], "Till sheet: last day entered none since 25 Sep. Missing: 25, 26 Sep. "
+                                      "Waiting to deposit: none. Deposited: none.")
+
+    def test_status_subcommand_prints_report_and_states(self):
+        path = xlsx(self.tmp / "nora.xlsx", {"Sep 2026": month_rows({"2026-09-25": DAY1})})
+        self.days_file.write_text(json.dumps({"days": {"2026-09-25": {"status": ufd.DEPOSITED, "reason": ""},
+                                                       "2026-09-26": {"status": ufd.WAITING_SHEET,
+                                                                      "reason": "no block"}}}))
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), \
+                mock.patch.object(ufd.QBOClient, "for_company_a", side_effect=AssertionError("no QBO in status")):
+            rc = ufd.main(["status", "--date", "2026-09-26", "--sheet-xlsx", str(path)])
+        self.assertEqual(rc, 0)
+        out = buf.getvalue()
+        self.assertIn("Till sheet: last day entered 25 Sep. Missing: 26 Sep. Waiting to deposit: none. "
+                      "Deposited: 25 Sep.", out)
+        self.assertIn("2026-09-26 WAITING_SHEET", out)
 
 
 # ---------------------------------------------------------------- daily_run integration
@@ -674,7 +812,7 @@ class DailyRunUFTests(NoNetwork):
     def run_uf(self, env, fake, source, *, dry=False):
         env = {ufd.ACCOUNTS_ENV: str(self.accounts_file), **env}
         cur = {"last_complete_business_date": "2026-09-30"}
-        self.cursor.write_text(json.dumps(cur))
+        self.cursor.write_text(json.dumps(cur))  # old cursor: migrated on first read
         run = dr.DailyRun("2026-10-02", dry_run=dry, only=["uf"], root=self.tmp / "daily", runner=None,
                           slack=self.slack.append, env=env, uf_client=client(fake),
                           uf_write_client=client(fake, True), uf_sheet=source, python="py")
@@ -691,20 +829,24 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual({s["name"]: s["status"] for s in summary["steps"]}["uf"], dr.DISABLED)
         self.assertEqual(fake.calls, [])
 
-    def test_auto_post_summary_lists_banks_holds_and_balance(self):
+    def test_auto_post_summary_lists_banks_holds_balance_and_till_sheet(self):
         fake, source = self.sources()
         summary = self.run_uf(AUTO, fake, source)
         step = {s["name"]: s for s in summary["steps"]}["uf"]
-        self.assertEqual(step["status"], dr.REVIEW)  # 2 Oct is held (blank CASH box)
+        self.assertEqual(step["status"], dr.REVIEW)  # 2 Oct waits for the sheet (blank CASH box)
         self.assertEqual(summary["exit_code"], 3)
         self.assertEqual([d["day"] for d in step["counts"]["deposited"]], ["2026-10-01"])
         text = self.slack[0]
         self.assertIn("*uf* [review] auto-post; deposited 1 day(s): 2026-10-01 N3199500.00 (100100 N", text)
         self.assertIn("100202 N", text)
-        self.assertIn("held 1 day(s) from 2026-10-02: CASH (System 1) box is blank", text)
-        self.assertIn("Undeposited Funds N3199500.00", text)
-        self.assertTrue(any(line.startswith("uf 2026-10-02 HOLD") for line in summary["waiting_for_review"]))
-        self.assertEqual(ufd.read_cursor()["last_complete_business_date"], "2026-10-01")
+        self.assertIn("not deposited 1 day(s) (2026-10-02); first 2026-10-02: CASH (System 1) box is blank", text)
+        self.assertIn("Undeposited Funds N3199500.00. Till sheet: last day entered 1 Oct. Missing: 25-30 Sep. "
+                      "Incomplete: 2 Oct. Waiting to deposit: none. Deposited: 25-30 Sep; 1 Oct.", text)
+        self.assertEqual(step["counts"]["till_sheet_last_day"], "2026-10-01")
+        self.assertIn("2026-10-02", step["counts"]["till_sheet_missing"])
+        self.assertTrue(any(line.startswith("uf 2026-10-02 WAITING_SHEET") for line in summary["waiting_for_review"]))
+        self.assertEqual(self.day_states()["2026-10-01"], ufd.DEPOSITED)
+        self.assertEqual(self.day_states()["2026-10-02"], ufd.WAITING_SHEET)
 
     def test_plan_only_and_dry_run(self):
         fake, source = self.sources()
@@ -714,6 +856,7 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(step["counts"]["mode"], "plan only")
         self.assertEqual(fake.posts(), [])
         self.assertTrue(any("READY" in line and "post --plan-dir" in line for line in summary["waiting_for_review"]))
+        self.assertIn("Waiting to deposit: 1 Oct.", self.slack[0])
         summary = self.run_uf(AUTO, fake, source, dry=True)
         self.assertEqual({s["name"]: s for s in summary["steps"]}["uf"]["counts"]["mode"], "dry-run (plan only)")
         self.assertEqual(fake.posts(), [])

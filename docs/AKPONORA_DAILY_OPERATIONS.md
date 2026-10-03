@@ -12,7 +12,7 @@
 One routine runs everything, in order, for the last closed business day. On the server it runs at 06:00 Lagos (setup, env, holds and approvals: [`SERVER_SETUP.md`](SERVER_SETUP.md)):
 
 ```bash
-.venv/bin/python -m code_scripts.akponora_ops.daily_run [--date YYYY-MM-DD] [--dry-run] [--only catalogue,bills,sales,guard,uf]
+.venv/bin/python -m code_scripts.akponora_ops.daily_run [--date YYYY-MM-DD] [--dry-run] [--only catalogue,bills,sales,guard,stock,uf]
 ```
 
 | Order | Step | What |
@@ -21,7 +21,8 @@ One routine runs everything, in order, for the last closed business day. On the 
 | 2 | **bills** | `bills_sync scheduled`: received POs (that day + earlier pending days) → **unpaid** Bills. New suppliers → QBO vendor (gated); near matches HOLD. PO payment mode → Bill memo hint |
 | 3 | **sales** | `run_pipeline --target-date <day>` via the standing auto-approval; without it, a dry-run and exit 3. Skipped while the posting hold is in place |
 | 4 | **guard** | `item_guard`: read-only, report only |
-| 5 | **uf** | `uf_deposits scheduled`: each day's receipts in Undeposited Funds → Bank Deposits by the till sheet + true-up transfers (below). Off unless `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`; posts only with `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref |
+| 5 | **stock** | `stock_snapshot run`: read-only EPOS stock vs QBO QtyOnHand per item → `STATE_ROOT/ops/company_a/stock_snapshot/latest.json` (portal Products & Stock). Report only; a failure never affects the other steps |
+| 6 | **uf** | `uf_deposits scheduled`: each day's receipts in Undeposited Funds → Bank Deposits by the till sheet + true-up transfers (below). Off unless `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`; posts only with `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref |
 
 Exit 0 = clean, 3 = waits for review, 2 = a step failed. One Slack summary; evidence under `STATE_ROOT/ops/company_a/daily/<day>/`. It holds the global run lock. While `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`, the portal scheduler never schedules Company A, and the individual job crons below are ignored. Each job below can still be run on its own.
 
@@ -38,6 +39,8 @@ The OIAT Portal shows Company A without any new write action (phase 1). It reads
 - **Overview** and the **Company A company page**: a Company A card (last real run, what posted, what is waiting, Undeposited Funds step) and a red banner when the posting hold is in place. The company page also has a Holds & alerts panel (posting hold details, latest item-guard alerts by check).
 
 Approvals, clearing the hold and "Run now" are not in the portal yet (see the roadmap §4/§5). Do them as described below.
+
+**Stuck portal runs.** A portal run left "running" by a dead process (e.g. a container restart; found 3 Oct 2026: a Company B run stuck since 21 Aug blocked every Company B schedule) is now closed automatically by the scheduler every cycle and before a manual "Run now". It is marked failed with "Marked failed: the run stopped without reporting back (detected …)" plus the reason, and a "Run failed" event, when: the global run lock (`STATE_ROOT/logs/.oiat_global_run.lock`) is free for a sales run older than 5 minutes; or its PID is gone / now belongs to a newer process and its log has been quiet 15 minutes; or it has run longer than `OIAT_RUNJOB_MAX_HOURS` (default 6). A skip now names the blocking run and how long it has run. Manual check: `python manage.py reconcile_run_jobs`. The lock is shared with the `akponora-ops` daily run, so the daily run holding it never makes a portal run look stale.
 
 ---
 
@@ -96,8 +99,11 @@ Approvals, clearing the hold and "Run now" are not in the portal yet (see the ro
 
 - Source: the Google Sheet "Nora Mart Daily Sales Account Breakdown", read live by a read-only service account (`OIAT_COMPANY_A_TILL_SHEET_SA_KEY`, default `STATE_ROOT/secrets/google_service_account.json`; setup in [`SERVER_SETUP.md`](SERVER_SETUP.md) §12). Box → bank map: `STATE_ROOT/mappings/company_a/till_accounts.csv` (seeded from `templates/till_accounts_company_a.csv`).
 - Method (same as 26 Sep): whole receipts are deposited by tender (Cash → 100100, Card → card banks, Transfer → transfer banks, mixed → both) with LinkedTxn (minorversion 65, `TxnLineId 0`); then Bank→Bank true-up transfers make each bank's day total = sheet amount × receipts total / sheet total. Deposits follow the receipts; the mix follows the sheet. DocNumber `UF<yymmdd><bank no>`; transfer memo tag `UFTU <day> <from>><to>`; every memo `UF deposit <day> from till sheet; approval <ref>`.
-- Holds (and later days wait): blank or unfinished sheet day (a CASH box or SYSTEM empty), unmapped / inactive till line, sheet vs receipts beyond max(₦1,000, 0.5 %) (`OIAT_COMPANY_A_UF_TOLERANCE`, `OIAT_COMPANY_A_UF_TOLERANCE_PCT`), receipts deposited by hand, closed period, missing bank, or above `OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL` (₦15M) in automatic mode.
-- Cursor `STATE_ROOT/ops/company_a/uf_deposits/cursor.json` (floor 2026-09-25) moves only over fully deposited days.
+- Days are independent (owner, 3 Oct 2026): every run re-evaluates each day since 2026-09-25 that is not yet deposited and posts every day whose gates pass; a held or missing day never blocks a later one.
+- Holds (that day only): blank or unfinished sheet day (a CASH box or SYSTEM empty), unmapped / inactive till line, sheet vs receipts beyond max(₦1,000, 0.5 %), receipts deposited by hand, closed period, missing bank, or above `OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL` (₦15M) in automatic mode.
+- Tolerance toggle: `OIAT_COMPANY_A_UF_TOLERANCE` (₦) and `OIAT_COMPANY_A_UF_TOLERANCE_PCT` (%), read every run. In `.env` (then `docker compose up -d akponora-ops`), or without a restart in `STATE_ROOT/ops/company_a/uf_deposits/settings.env` (wins over `.env`; only these two keys).
+- Per-day state `STATE_ROOT/ops/company_a/uf_deposits/days.json` (floor 2026-09-25): `DEPOSITED` (final) / `READY` / `HELD` (reason) / `WAITING_SHEET` / `NO_SALES`. An old `cursor.json` is migrated on first read (days up to it = `DEPOSITED`).
+- Till-sheet status every run (step `summary.json` and the daily Slack): "Till sheet: last day entered 1 Oct. Missing: 25, 26, 29 Sep. Waiting to deposit: none. Deposited: …". Same on demand, read-only: `.venv/bin/python -m code_scripts.akponora_ops.uf_deposits status`.
 - Automatic (chat yes to enable): `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + `OIAT_COMPANY_A_UF_APPROVAL_REF`. Enabled alone = plan every day, nothing posted.
 - The old cutover scripts (`akponora_cutover/uf_*`) are history (26 Sep); `uf_allocation_draft` now uses the same sheet parser (`akponora_ops/till_sheet.py`).
 
@@ -115,6 +121,38 @@ Approvals, clearing the hold and "Run now" are not in the portal yet (see the ro
 Read-only. Alerts on non-`AKP-` items, October lines on `LEGACY —` / `15030` / unmapped items, 120xxx activity, wrong asset account, near-duplicate names. Negative stock and approved journals are WARN. Slack when there is an ALERT or WARN (unless `--no-slack`).
 
 First live run (2 Oct): October sales clean; 11 negative items pending bills; **438 legacy items never renamed** (owner decision — see AGENTS.md open items).
+
+---
+
+## Stock snapshot (EPOS vs QuickBooks quantities)
+
+```bash
+.venv/bin/python -m code_scripts.akponora_ops.stock_snapshot run            # EPOS stock report + QBO
+.venv/bin/python -m code_scripts.akponora_ops.stock_snapshot run --no-epos  # refresh QBO only
+.venv/bin/python -m code_scripts.akponora_ops.stock_snapshot run --no-qbo   # refresh EPOS only
+#   --stock-report <StockReport.csv> (no download), --catalogue <file>, --tolerance 0.001, --out <dir>, --slack
+```
+
+Read-only on both sides (EPOS StockReport download; QBO `select * from Item`). Writes
+`STATE_ROOT/ops/company_a/stock_snapshot/latest.json` (atomic) and `history/stock_snapshot_<Lagos day>.json`.
+One row per QBO item in the installed mapping:
+
+- **EPOS quantity** = the family's EPOS **master** count in canonical units: full × VolumeOfSale + loose (or
+  TotalStock when the master has no VolumeOfSale), as for the 30 Sep opening counts. Pack children are
+  never added (their EPOS stock is the master's). The StockReport has no ProductID, so rows are matched to
+  the stock-tracked catalogue product by exact name; a name shared by two tracked products is not used
+  (`AMBIGUOUS_EPOS_NAME`). Catalogue = catalogue_sync's `catalogue_snapshot.json`.
+- **Status**: `MATCH` (within 0.001 units, `OIAT_COMPANY_A_STOCK_TOLERANCE`), `DIFFERENT`, `NEGATIVE_QBO`,
+  `NEGATIVE_EPOS`, `NOT_IN_EPOS_REPORT`, `NOT_TRACKED_IN_EPOS` (NonInventory or an untracked master),
+  `NO_QBO_ITEM`. Also lists EPOS products not in the mapping.
+- **Timing.** EPOS is live; QuickBooks has sales only up to the last posted day and only posted bills. The file
+  records `last_posted_sales_date` and the unposted days. A `DIFFERENT` row gets `likely_timing` when one of
+  its products sold on the last posted day (archived BookKeeping CSV) or is on an EPOS PO received since
+  yesterday / whose bill is held (latest daily-run bills review). This is a hint, not proof.
+- **Never** "fix" a difference by patching QtyOnHand or posting an InventoryAdjustment (AGENTS.md). Differences
+  that remain after the day's sales and bills post go to the month-end count variance.
+
+Exit 0 written, 2 failed (previous `latest.json` kept), 5 another snapshot running.
 
 ---
 

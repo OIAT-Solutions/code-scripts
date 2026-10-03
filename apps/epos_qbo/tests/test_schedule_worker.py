@@ -229,7 +229,9 @@ class ScheduleWorkerTests(TestCase):
             schedule=schedule,
             event_type=RunScheduleEvent.TYPE_SKIPPED_OVERLAP,
         )
-        self.assertEqual(event.message, "Skipped because another run is active.")
+        self.assertTrue(event.message.startswith("Skipped because another run is active: "))
+        self.assertIn(active_sales.friendly_id, event.message)
+        self.assertEqual(event.payload_json.get("blocking_run_id"), str(active_sales.id))
         self.assertEqual(event.friendly_message, "Skipped because another run is active")
 
     @mock.patch("apps.epos_qbo.services.schedule_worker.dispatch_next_queued_job")
