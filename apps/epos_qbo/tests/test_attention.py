@@ -81,10 +81,14 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         client.force_login(self.user)
         self.assertEqual(client.post(self.url, {"token": token}).status_code, 403)
 
-    def test_tampered_token_and_missing_approval_ref(self):
+    @mock.patch("apps.epos_qbo.services.job_runner.dispatch_next_queued_job")
+    def test_tampered_token_and_automatic_signed_in_approval_ref(self, dispatch):
         token = self.token(attention.inbox()[0][0])
         self.assertEqual(self.post(token + "tampered").status_code, 400)
-        self.assertEqual(self.client.post(self.url, {"token": token, "reason": "checked", "confirmed": "yes"}).status_code, 400)
+        self.assertEqual(self.client.post(self.url, {"token": token, "reason": "checked", "confirmed": "yes", "approval_ref":"spoofed user"}).status_code, 302)
+        record = PortalReviewAction.objects.latest("created_at")
+        self.assertIn(f"Approved by {self.user.get_username()} in the portal,", record.payload["approval_ref"])
+        self.assertNotIn("spoofed", record.payload["approval_ref"])
 
     def test_ready_bill_adapter_passes_hash_and_only_selected_row(self):
         item = attention.inbox()[0][0]

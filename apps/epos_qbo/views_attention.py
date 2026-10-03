@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import date
+from zoneinfo import ZoneInfo
+from django.utils import timezone
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -24,8 +26,9 @@ def permission(user, action):
     return user.has_perm("epos_qbo.can_trigger_runs" if action == "daily" else "epos_qbo.can_approve_company_a_reviews")
 
 
-def needs_approval_reference(data):
-    return not ((data["action"] == "daily" and data["dry_run"]) or (data["action"] == "skip" and data.get("kind") != "bill"))
+def approval_reference(user):
+    when = timezone.now().astimezone(ZoneInfo("Africa/Lagos")).strftime("%d %B %Y, %H:%M:%S %Z")
+    return f"Approved by {user.get_username()} in the portal, {when}"
 
 
 @login_required
@@ -85,9 +88,9 @@ def confirm(request):
             if data["user"] != request.user.pk or not permission(request.user, action):
                 return HttpResponseForbidden("You do not have permission for this confirmation.")
             reason = request.POST.get("reason", "").strip()
-            approval_ref = request.POST.get("approval_ref", "").strip()
-            if not reason or not request.POST.get("confirmed") or (needs_approval_reference(data) and not approval_ref):
-                return HttpResponseBadRequest("Confirm the action, enter a reason and the specific chat approval reference.")
+            approval_ref = approval_reference(request.user)
+            if not reason or not request.POST.get("confirmed"):
+                return HttpResponseBadRequest("Confirm the action and enter what you checked.")
             if action != "daily":
                 item = attention_actions.current_item(data["key"], data["snapshot"])
                 if not item[action]:
@@ -120,5 +123,5 @@ def confirm(request):
         return redirect("epos_qbo:run-detail", job_id=job.id)
     context = _shell_context([{"label": "Confirm action", "url": None}])
     context.update(title=title, description=description, item=item, token=token, action=action,
-                   needs_approval_ref=needs_approval_reference(data))
+                   approval_actor=request.user.get_username())
     return render(request, "epos_qbo/attention_confirm.html", context)

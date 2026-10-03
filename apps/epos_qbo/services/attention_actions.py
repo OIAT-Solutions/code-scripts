@@ -37,7 +37,7 @@ def tool_command(item, action, approval_ref):
 def execute(action_record):
     """Called with the shared pipeline lock held. Revalidate at execution, not just enqueue."""
     data = action_record.payload
-    ref = f"{action_record.actor} via portal {action_record.created_at.isoformat()}; chat approval {data.get('approval_ref', '')}; {action_record.reason}"
+    ref = f"{data.get('approval_ref') or f'Approved by {action_record.actor} in the portal, {action_record.created_at.isoformat()}'}; {action_record.reason}"
     if action_record.action == "daily":
         target = date.fromisoformat(data["date"])
         from code_scripts.akponora_ops.daily_run import last_closed_business_date

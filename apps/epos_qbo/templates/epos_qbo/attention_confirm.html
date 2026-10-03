@@ -14,7 +14,7 @@
 <input type="hidden" name="token" value="{{ token }}">
 {% if item.kind == 'vendor' and action == 'approve' %}<label class="block text-sm">Existing supplier<select required name="vendor_id" class="block w-full border rounded p-3 bg-transparent mt-2"><option value="">Choose a verified match</option>{% for candidate in item.extra.candidates %}<option value="{{ candidate.id }}">{{ candidate.name }} · {{ candidate.id }}</option>{% endfor %}</select></label>{% endif %}
 <label class="block text-sm font-medium">Reason · what you checked<textarea required name="reason" rows="3" class="block w-full border rounded p-3 bg-transparent mt-2"></textarea></label>
-{% if needs_approval_ref %}<label class="block text-sm font-medium">Specific chat approval reference<input required name="approval_ref" class="block w-full border rounded p-3 bg-transparent mt-2" placeholder="Owner's yes for this action, date and chat reference"></label>{% endif %}
+<p class="portal-muted">Your decision will be recorded with your signed-in name ({{ approval_actor }}) and the time you confirm it.</p>
 <label class="flex items-start gap-3 text-sm"><input required type="checkbox" name="confirmed" value="yes" class="mt-1"><span>I reviewed the evidence and confirm the action described above.</span></label>
 <div class="flex flex-wrap gap-3"><button type="submit" class="btn btn-primary">Confirm and queue</button><a class="btn btn-secondary" href="{% url 'epos_qbo:attention' %}">Cancel</a></div>
 </form></div>
