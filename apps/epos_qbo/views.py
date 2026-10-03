@@ -1702,12 +1702,14 @@ def overview(request):
     _ensure_company_records()
     revenue_period_param = request.GET.get("revenue_period")
     company_param = request.GET.get("company")
-    if (revenue_period_param or "").strip() or (company_param or "").strip():
+    if "company" in request.GET or (revenue_period_param or "").strip():
         revenue_period = _normalize_revenue_period(revenue_period_param)
         company_key = (company_param or "").strip() or None
     else:
         company_key, revenue_period = _get_user_overview_defaults(request)
     context = _overview_context(revenue_period, company_key=company_key)
+    from .services.experience import home_context
+    context.update(home_context(company_key or "", token_health={c["company_key"]: c.get("token_status", {}) for c in context["companies"]}))
     from .services.attention import blockers
     context["blockers"] = blockers()
     context["quick_sync_target_date"] = _quick_sync_default_target_date()
@@ -1718,10 +1720,9 @@ def overview(request):
     context.update(
         _breadcrumb_context(
             [
-                {"label": "Dashboard", "url": reverse("epos_qbo:overview")},
-                {"label": "Overview", "url": None},
+                {"label": "Home", "url": None},
             ],
-            show_overview_actions=True,
+            show_overview_actions=False,
         )
     )
     return render(request, "dashboard/overview.html", context)
@@ -1733,12 +1734,14 @@ def overview_panels(request):
     _ensure_company_records()
     revenue_period_param = request.GET.get("revenue_period")
     company_param = request.GET.get("company")
-    if (revenue_period_param or "").strip() or (company_param or "").strip():
+    if "company" in request.GET or (revenue_period_param or "").strip():
         revenue_period = _normalize_revenue_period(revenue_period_param)
         company_key = (company_param or "").strip() or None
     else:
         company_key, revenue_period = _get_user_overview_defaults(request)
     context = _overview_context(revenue_period, company_key=company_key)
+    from .services.experience import home_context
+    context.update(home_context(company_key or "", token_health={c["company_key"]: c.get("token_status", {}) for c in context["companies"]}))
     from .services.attention import blockers
     context["blockers"] = blockers()
     response = render(request, "components/overview_refresh.html", context)
@@ -2644,6 +2647,31 @@ def runs_list(request):
             back_label="Overview",
         )
     )
+    from .services.experience import daily_rows, date_value, other_activity
+    from django.core.paginator import Paginator
+    selected = request.GET.get("company", "").strip()
+    start, end = date_value(request.GET.get("from")), date_value(request.GET.get("to"))
+    filter_error = ""
+    if (request.GET.get("from") and not start) or (request.GET.get("to") and not end) or (start and end and start > end):
+        filter_error = "Choose valid dates, with the start date before the end date."
+    rows = [] if filter_error else daily_rows(selected, start, end, request.GET.get("previews") == "1")
+    status_filter = request.GET.get("status", "")
+    if status_filter == "attention":
+        rows = [r for r in rows if r["tone"] in {"danger", "warning"} or r["latest_issue"]]
+    elif status_filter == "confirmed":
+        rows = [r for r in rows if r["confirmed"]]
+    elif status_filter == "pending":
+        rows = [r for r in rows if any(a["state"] in {"queued", "running"} for a in r["attempts"])]
+    elif status_filter in {"failed", "succeeded", "cancelled", "queued", "running"}:
+        rows = [r for r in rows if any(a["state"] == status_filter for a in r["attempts"])]
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    from urllib.parse import urlencode
+    filters = {k: request.GET[k] for k in ("company", "from", "to", "previews", "status") if request.GET.get(k)}
+    context.update(daily_page=page, daily_filter_company=selected, daily_filter_start=request.GET.get("from", ""),
+        daily_filter_end=request.GET.get("to", ""), daily_show_previews=request.GET.get("previews") == "1",
+        daily_query=urlencode(filters), daily_filter_error=filter_error, daily_status_filter=status_filter, other_activity=other_activity(selected))
+    context["breadcrumbs"] = [{"label": "Home", "url": reverse("epos_qbo:overview")}, {"label": "Daily runs", "url": None}]
+    context["back_label"] = "Home"
     return render(request, "epos_qbo/runs.html", context)
 
 

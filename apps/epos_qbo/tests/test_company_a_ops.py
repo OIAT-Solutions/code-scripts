@@ -356,18 +356,18 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         response = self.client.get(reverse("epos_qbo:overview"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="company-a-card"')
-        self.assertContains(response, "Last real run:")
+        self.assertContains(response, 'data-company-a-row="true"')
+        self.assertContains(response, "Last confirmed sales:")
         self.assertContains(response, "₦812,345.50")
-        self.assertNotContains(response, 'data-company-a-hold="active"')
+        self.assertNotContains(response, "Sales are paused")
 
     def test_overview_card_with_hold(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         self.make_hold()
         response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertContains(response, 'data-company-a-hold="active"')
-        self.assertContains(response, "posting hold is in place")
-        self.assertContains(response, "MISMATCH")
+        self.assertContains(response, "Sales are paused")
+        self.assertContains(response, "Review the reason")
+        self.assertNotContains(response, "MISMATCH")
 
     def test_overview_without_any_company_a_evidence_hides_card(self):
         response = self.client.get(reverse("epos_qbo:overview"))
@@ -387,5 +387,6 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         response = self.client.get(reverse("epos_qbo:runs"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="company-a-daily-runs-panel"')
+        self.assertContains(response, 'id="daily-history"')
+        self.assertContains(response, "Sales confirmed")
         self.assertContains(response, reverse("epos_qbo:company-a-run-detail", args=["2026-10-02", "run_170000Z"]))

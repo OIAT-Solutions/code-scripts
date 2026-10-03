@@ -135,7 +135,7 @@ class TokenHealthViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
         self.assertNotRegex(html, r'text-emerald-600">\s*Unknown')
-        self.assertIn("QBO re-authentication required", html)
+        self.assertIn("QuickBooks connection needs attention", html)
 
     def test_companies_page_never_shows_valid_0d(self):
         tokens = self._token_payload(

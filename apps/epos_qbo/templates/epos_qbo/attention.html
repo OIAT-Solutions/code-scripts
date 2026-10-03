@@ -5,22 +5,10 @@
 {% include "components/attention_banners.html" %}
 <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
   <div><h1 class="text-2xl font-semibold">Needs your attention</h1><p class="text-sm text-slate-500 mt-2">Review what is waiting for a person, then follow its next step.</p></div>
-  <a href="{% url 'epos_qbo:company-a-runs' %}" class="btn btn-secondary">Akponora daily runs</a>
+  <a href="{% url 'epos_qbo:runs' %}?company=company_a" class="btn btn-secondary">View daily runs</a>
 </div>
 {% for error in errors %}<p role="alert" class="border border-red-300 bg-red-50 text-red-900 rounded-lg p-4 mb-4">{{ error }}</p>{% endfor %}
-{% if can_run %}
-<section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-5 mb-6">
-<h2 class="font-semibold">Run Akponora now or for a past date</h2>
-<p class="text-sm text-slate-500 mt-1 mb-4">Start with a preview. Leave the date blank for the last closed business day.</p>
-<form method="get" action="{% url 'epos_qbo:attention-confirm' %}" class="flex flex-wrap items-end gap-4">
-<input type="hidden" name="action" value="daily">
-<label class="text-sm">Business date<input class="block border rounded p-2 bg-transparent mt-1" type="date" name="date" min="2026-10-01"></label>
-<label class="text-sm">Steps<select class="block border rounded p-2 bg-transparent mt-1" name="only"><option value="">Whole day</option><option value="catalogue">Products</option><option value="bills">Suppliers and bills</option><option value="sales">Sales</option><option value="guard">Health check</option><option value="uf">Deposits</option></select></label>
-<label class="text-sm">Mode<select class="block border rounded p-2 bg-transparent mt-1" name="mode"><option value="dry">Preview · no posting</option><option value="post">Post · specific chat approval required</option></select></label>
-<button class="btn btn-primary" type="submit">Review run</button>
-</form>
-</section>
-{% endif %}
+
 <div class="space-y-4">
 {% for item in items %}
 <article class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-5">

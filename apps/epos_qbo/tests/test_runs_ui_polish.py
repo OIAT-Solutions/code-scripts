@@ -51,15 +51,16 @@ class RunsAndRunDetailRenderingTests(TestCase):
         self.user = User.objects.create_user(username="operator", password="pw12345")
         self.client.login(username="operator", password="pw12345")
 
-    def test_runs_table_shows_workflow_and_friendly_id(self):
+    def test_daily_history_uses_business_outcome_and_preserves_detail_link(self):
         started = datetime(2026, 4, 28, 18, 0, tzinfo=dt_timezone.utc)
         job = RunJob.objects.create(scope=RunJob.SCOPE_ALL, started_at=started, status=RunJob.STATUS_SUCCEEDED)
         response = self.client.get(reverse("epos_qbo:runs"))
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn(job.friendly_id, html)
-        self.assertIn("Workflow", html)
-        self.assertIn("Sales", html)
+        self.assertNotIn(job.friendly_id, html)
+        self.assertIn("Date not recorded", html)
+        self.assertIn("Finished · check outcome", html)
+        self.assertIn(reverse('epos_qbo:run-detail', args=[job.id]), html)
 
     def test_run_detail_shows_friendly_title_and_internal_id(self):
         started = datetime(2026, 4, 29, 14, 52, tzinfo=dt_timezone.utc)

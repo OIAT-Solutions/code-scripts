@@ -1,6 +1,1 @@
-<div data-latest-run-id="{{ latest_run_id|default:'' }}">
-<div id="metric-basis-line-data" style="display: none;">{{ metric_basis_line|default:"" }}</div>
-<template id="attention-banners-data">{% include "components/attention_banners.html" %}</template>
-{% include "components/kpi_cards.html" %}
-{% include "components/overview_panels.html" %}
-</div>
+<div data-latest-run-id="{{ latest_run_id|default:'' }}">{% include "components/home_summary.html" %}</div>
