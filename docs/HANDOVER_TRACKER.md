@@ -64,7 +64,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 ## 4. Next steps (in order)
 
-1. [ ] **After 18:00 Lagos:** check Company A's first automatic run (Slack + `/data/ops/company_a/daily/2026-10-02/run_*/summary.json`). Approve PO 3969 if it is genuine (`bills_sync post` with `Approve=yes`), or let the inbox do it after deploy.
+1. [x] **After 18:00 Lagos:** checked 3 Oct (see the cutover log: sales MATCH, 7 bills, Deposit 80514 then the deposit stop, fixed in `6bef54a`, which deploys with the clean-up rebuild after 19:30 Lagos). Was: check Company A's first automatic run (Slack + `/data/ops/company_a/daily/2026-10-02/run_*/summary.json`). Approve PO 3969 if it is genuine (`bills_sync post` with `Approve=yes`), or let the inbox do it after deploy.
 2. [ ] **After 19:00 Lagos:** check that Goldplates 2 Oct posted (portal Daily runs, or a QBO read on the server).
 3. [x] **Combine and deploy** (done 3 Oct ~15:57 Lagos; dry-run smoke test of 2 Oct in progress) (after both runs, about 14:30 New York or later):
    1. ✅ Portal branch merged (`a2322b3`); screenshots in `outputs/portal_phase1_review/claude-*.png`.

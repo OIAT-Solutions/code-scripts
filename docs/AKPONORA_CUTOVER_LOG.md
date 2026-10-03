@@ -112,3 +112,20 @@ Company: AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `934145
 - Smoke tests: the first found the missing `openpyxl` in the image and a false "deposit mismatch" on re-runs of posted October days (fixed in `0ad7a1f`). The second dry-run on 1 Oct was clean: catalogue OK, 2 POs READY (₦34,650), 6 posted receipts skipped, 0 failures. Guard showed 437 `legacy_renamed` alerts from the pre-rename snapshot (expected).
 - Server `.env` (backup `.env.bak_20261003`): Company A daily run on at **18:00 Lagos** (owner changed it from the 06:00 default to give staff the day to correct EPOS first; same time as the portal schedule) with standing approvals and caps for sales, catalogue (25), vendors (5) and bills (₦2M/bill, 20/run). `COMPOSE_PROFILES=akponora-ops`. The `akponora-ops` container logs `Scheduled daily_run at '0 18 * * *' (Africa/Lagos)`.
 - Docker builds over SSH fail on Windows (credential store needs a desktop session): run `docker compose build` from an interactive PowerShell on the server.
+
+## 3 Oct 2026: first unattended daily run (server, 18:00 Lagos, business date 2 Oct)
+
+Evidence: `/data/ops/company_a/daily/2026-10-02/run_170000Z/`. The Slack start and summary messages were sent.
+
+- **Sales 2 Oct posted:** 6 SalesReceipts, ₦4,857,550.00, reconcile MATCH.
+- **Bills posted (unpaid):** 7 bills, 80501–80507, for EPOS POs 3967, 3968, 3971, 3972, 3973, 3974 and 3975 (`results.csv`).
+- **Bills waiting:**
+  - PO 3969 (₦27,000, bread): warning "possible duplicate of 3967". Marvin confirmed it is genuine; approve it in the Inbox.
+  - PO 3970 (₦20,000): supplier "FLOURISH COOL WATER, ALPINE FRESH WATER" is HOLD_NEAR_MATCH (FLOURISH).
+- **Deposits:**
+  - Deposit **80514** posted: 27 Sep, ₦178,750, cash receipt 76531 → 100100 Petty Cash (Id 29). It is correct.
+  - The read-back verification then stopped the step because QBO keeps no DocNumber on Deposits here (the 26 Sep deposits read back the same way).
+  - Fixed in `6bef54a`: the tool now recognises its deposits by the memo tag. 27 Sep is HELD in days.json and is re-planned on the next run, which keeps 80514 and posts the remaining banks plus the true-ups.
+  - 28 and 30 Sep were planned READY but not posted (posting stops for the run after a stop).
+  - Undeposited Funds after the run: ₦33,912,599.99.
+
