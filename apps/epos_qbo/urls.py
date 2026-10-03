@@ -1,10 +1,15 @@
 from django.urls import path
 
-from . import views, views_company_a, webhooks
+from . import views, views_company_a, views_attention, views_experience, views_workspace, webhooks
 
 app_name = "epos_qbo"
 
 urlpatterns = [
+    path("companies/<slug:company_key>/records/update/", views_workspace.update, name="workspace-update"),
+    path("companies/<slug:company_key>/deposit-settings/", views_workspace.deposit_settings, name="deposit-settings"),
+    path("admin/", views_experience.admin_home, name="admin-home"),
+    path("attention/", views_attention.inbox, name="attention"),
+    path("attention/confirm/", views_attention.confirm, name="attention-confirm"),
     path("", views.overview, name="overview-root"),
     path("dashboard/", views.overview, name="overview"),
     path("dashboard/panels/", views.overview_panels, name="overview-panels"),
@@ -31,7 +36,7 @@ urlpatterns = [
         views_company_a.company_a_evidence,
         name="company-a-evidence",
     ),
-    path("logs/", views.logs_list, name="logs"),
+    path("logs/", views_experience.daily_activity, name="logs"),
     path("schedules/", views.schedules_page, name="schedules"),
     path("schedules/status/", views.schedule_status_api, name="schedule-status"),
     path("schedules/create", views.schedule_create, name="schedule-create"),

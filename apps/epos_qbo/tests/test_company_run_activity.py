@@ -355,11 +355,11 @@ class CompanyRunActivityTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Latest Sales Sync", html)
+        self.assertIn("Sales by day", html)
         self.assertNotIn("Records (24h)", html)
-        # Last successful run is this_run (target 1 day ago, total 75000)
-        self.assertIn("75,000", html)
-        self.assertIn("Target:", html)
+        # A successful process without MATCH evidence must not display confirmed money.
+        self.assertNotIn("75,000", html)
+        self.assertIn("No confirmed sales record yet", html)
 
     def test_warning_filter_excludes_running_when_health_is_otherwise_healthy(self):
         run = RunJob.objects.create(

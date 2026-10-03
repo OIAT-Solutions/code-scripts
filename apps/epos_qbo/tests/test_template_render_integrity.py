@@ -68,7 +68,7 @@ class TemplateRenderIntegrityTests(TestCase):
             mock.patch("apps.epos_qbo.views.load_tokens", return_value=self._token_payload()),
         ):
             for url in urls:
-                response = self.client.get(url)
+                response = self.client.get(url, follow=True)
                 self.assertEqual(response.status_code, 200, msg=f"unexpected status for {url}")
                 self._assert_no_unresolved_template_tokens(response.content.decode("utf-8"))
 
@@ -82,7 +82,7 @@ class TemplateRenderIntegrityTests(TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
 
-        self.assertIn(">1</span>", html)
+        self.assertIn("Main navigation", html)
         self.assertIn("Marvin Operator", html)
         self.assertNotIn("{{ company_count", html)
         self.assertNotIn("request.user.get_full_name", html)

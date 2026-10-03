@@ -1,66 +1,10 @@
-{# System-managed Company A daily-run row on the Schedules page (read-only). Var: row #}
 {% with sched=row.schedule last=row.last_run %}
-<section class="rounded-xl border border-slate-200 dark:border-slate-600 bg-white/60 dark:bg-slate-900/20 overflow-hidden" id="company-a-schedule-row">
-    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-600 bg-slate-50/70 dark:bg-slate-800/40">
-        <h3 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Company A daily run</h3>
-        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Managed by environment on the server (akponora-ops container); not editable here.</p>
-    </div>
-    <div class="overflow-x-auto">
-        <table class="w-full table-fixed text-sm">
-            <colgroup>
-                <col class="w-[34%]">
-                <col class="w-[14%]">
-                <col class="w-[24%]">
-                <col class="w-[18%]">
-                <col class="w-[10%]">
-            </colgroup>
-            <thead class="bg-slate-50 dark:bg-slate-700/50 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600">
-                <tr>
-                    <th class="text-left px-4 py-3 font-medium whitespace-nowrap">Workflow</th>
-                    <th class="text-left px-4 py-3 font-medium whitespace-nowrap">Status</th>
-                    <th class="text-left px-4 py-3 font-medium whitespace-nowrap">Timing</th>
-                    <th class="text-left px-4 py-3 font-medium whitespace-nowrap">Next Run</th>
-                    <th class="text-center px-4 py-3 font-medium w-20">Details</th>
-                </tr>
-            </thead>
-            <tbody class="text-slate-900 dark:text-slate-200">
-                <tr>
-                    <td class="px-4 py-3 align-top">
-                        <div class="font-medium text-slate-900 dark:text-slate-100 break-words">Company A daily run (products → bills → sales → health check → deposits)</div>
-                        <div class="text-xs leading-snug text-slate-500 dark:text-slate-400 mt-1 break-words">Runs in the {{ sched.container }} container · system-managed · {{ sched.enabled_env }}</div>
-                        {% if last %}
-                        <div class="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-1">
-                            Last run: {{ last.business_date }}{% if last.finished_at %} (finished {{ last.finished_at|date:"Y-m-d H:i" }}){% endif %}
-                            {% if last.dry_run %}{% include "components/company_a_badge.html" with status='skipped' text='dry-run' %}{% endif %}
-                            {% include "components/company_a_badge.html" with status=last.status text=last.status_label icon=last.icon %}
-                        </div>
-                        {% else %}
-                        <div class="text-[11px] text-slate-400 dark:text-slate-500 mt-1">Never run (no evidence found)</div>
-                        {% endif %}
-                        {% if row.hold.active %}<div class="text-[11px] text-red-700 dark:text-red-400 mt-1 font-medium">Posting hold in place — sales will not post</div>{% endif %}
-                    </td>
-                    <td class="px-4 py-3 align-top">
-                        {% if sched.enabled %}
-                        <span class="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700">Enabled</span>
-                        {% else %}
-                        <span class="inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">Disabled</span>
-                        {% endif %}
-                    </td>
-                    <td class="px-4 py-3 align-top">
-                        {% if sched.time_label %}<div>{{ sched.time_label }}</div>{% endif %}
-                        <div class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ sched.cron }}{% if not sched.cron_valid %} (invalid){% endif %}</div>
-                        <div class="text-xs text-slate-500 dark:text-slate-400">{{ sched.timezone }}</div>
-                    </td>
-                    <td class="px-4 py-3 align-top">
-                        {% if sched.next_run %}{{ sched.next_run|date:"Y-m-d H:i" }}{% else %}<span class="text-slate-400">—</span>{% endif %}
-                    </td>
-                    <td class="px-4 py-3 align-top text-center">
-                        {% if last %}<a class="text-emerald-700 dark:text-emerald-400 hover:underline text-xs" href="{% url 'epos_qbo:company-a-run-detail' last.business_date last.run_id %}">Last run</a><br>{% endif %}
-                        <a class="text-emerald-700 dark:text-emerald-400 hover:underline text-xs" href="{% url 'epos_qbo:company-a-runs' %}">History</a>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
+<section class="portal-panel p-6 space-y-5" id="company-a-schedule-row">
+<div class="flex flex-wrap justify-between gap-4"><div><h2 class="text-lg font-semibold">Akponora · Daily routine</h2><p class="portal-muted mt-2">Products, bills, sales, stock checks and deposits.</p></div><span class="text-sm font-medium">{% if sched.enabled %}Scheduled{% else %}Turned off{% endif %}</span></div>
+<div class="grid md:grid-cols-3 gap-5 text-sm"><div><p class="portal-eyebrow">Run time</p><p class="mt-2">{{ sched.time_label|default:"Time needs checking" }}</p><p class="portal-muted mt-1">{% if sched.timezone == 'Africa/Lagos' %}Lagos time{% else %}{{ sched.timezone }}{% endif %}</p></div><div><p class="portal-eyebrow">Next planned run</p><p class="mt-2">{% if sched.next_run %}{{ sched.next_run|date:"j F Y, H:i T" }}{% else %}No active run time recorded{% endif %}</p></div><div><p class="portal-eyebrow">Last recorded attempt</p><p class="mt-2">{% if last %}{{ last.business_date }}{% if last.dry_run %} · preview{% endif %}{% else %}No run record yet{% endif %}</p></div></div>
+{% if row.hold.active %}<p class="text-sm text-red-800 dark:text-red-200">Sales are paused. Review the reason in Needs your attention.</p>{% endif %}
+<div class="flex flex-wrap gap-3">{% if last %}<a class="btn btn-secondary" href="{% url 'epos_qbo:company-a-run-detail' last.business_date last.run_id %}">Open last run</a>{% endif %}<a class="btn btn-secondary" href="{% url 'epos_qbo:runs' %}?company=company_a">View daily runs</a></div>
+<p class="portal-muted">This routine is managed separately. Review changes to its run time or posting controls before applying them.</p>
+<details><summary class="portal-link cursor-pointer">Schedule support details</summary><p class="portal-muted mt-3">Company A daily run · Managed by environment on the server (akponora-ops container); not editable here.</p><p class="portal-muted mt-2">{{ sched.container }} · {{ sched.enabled_env }} · {% if sched.enabled %}Enabled{% else %}Disabled{% endif %}</p><p class="portal-muted mt-2">{{ sched.cron }}{% if not sched.cron_valid %} (invalid){% endif %} · {{ sched.timezone }}</p>{% if last %}<p class="portal-muted mt-2">Recorded outcome: {{ last.status_label }}</p>{% endif %}</details>
 </section>
 {% endwith %}

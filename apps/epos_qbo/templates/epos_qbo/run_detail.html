@@ -8,11 +8,15 @@
 
 {% block content %}
 <div class="space-y-6" data-run-id="{{ job.id }}" data-run-status="{{ job.status }}">
-    <div>
-        <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">{{ job.friendly_title }}</h1>
-        <p class="mt-1 text-sm font-mono text-slate-500 dark:text-slate-400">Internal ID: {{ job.id }}</p>
-    </div>
-
+    <div><p class="portal-eyebrow">Run details</p><h1 class="text-3xl font-semibold tracking-tight mt-2">{{ business_company }}</h1><p class="portal-muted mt-3">{% if job.target_date %}Work for {{ job.target_date|date:"j F Y" }}{% else %}Business date not recorded{% endif %}</p></div>
+    <section class="portal-panel p-6 space-y-4">
+        {% include "components/business_status.html" with label=business_outcome.label tone=business_outcome.tone %}
+        <p class="text-sm leading-relaxed">{{ business_outcome.sentence }}</p>
+        <p class="portal-muted">A finished run does not by itself confirm that sales were posted. Check the recorded results before retrying.</p>
+        <a href="{% url 'epos_qbo:runs' %}{% if job.company_key %}?company={{ job.company_key|urlencode }}{% endif %}" class="btn btn-secondary">View daily runs</a>
+    </section>
+    <details class="portal-panel p-6"><summary class="font-semibold cursor-pointer">Supporting records and technical details</summary><div class="space-y-6 mt-5">
+    <p class="portal-muted">Internal reference: {{ job.id }}</p>
     {% if inventory_review_action %}
     <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm space-y-4">
         <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Inventory Review Action</h2>
@@ -201,7 +205,7 @@
     </section>
 
     <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm">
-        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">Artifacts</h2>
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">Supporting records</h2>
         {% if run_upload_summary_message %}
         <div class="mb-3 rounded-md border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
             {{ run_upload_summary_message }}
@@ -315,6 +319,7 @@
             </table>
         </div>
     </section>
+    </div></details>
 </div>
 {% endblock %}
 

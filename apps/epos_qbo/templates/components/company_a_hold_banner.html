@@ -1,9 +1,9 @@
 {# Red banner when the Company A posting hold is in place. Var: hold #}
 {% if hold.active %}
 <div class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-200 px-4 py-3 text-sm" role="alert" data-company-a-hold="active">
-    <p class="font-semibold">❌ Company A posting hold is in place — sales posting is paused.</p>
-    <p class="mt-1">Since {% if hold.at %}{{ hold.at|date:"Y-m-d H:i" }}{% else %}{{ hold.at_raw|default:"?" }}{% endif %} · business date {{ hold.business_date|default:"?" }} · source {{ hold.source|default:"?" }}</p>
-    {% if hold.reason %}<p class="mt-1">Reason: {{ hold.reason }}</p>{% endif %}
-    <p class="mt-1 text-xs">Clearing needs a human approval: <code class="font-mono">python -m code_scripts.operations_controls clear-hold --approved-by NAME --reason TEXT</code> (clearing from the portal comes in phase 2).</p>
+    <p class="font-semibold">Akponora sales are paused.</p>
+    <p class="mt-2">Check what stopped the run and reconcile existing sales before allowing another attempt.</p>
+    <a class="inline-block mt-3 underline underline-offset-4 font-medium" href="{% url 'epos_qbo:attention' %}">Review sales pause →</a>
+    <details class="mt-3"><summary class="cursor-pointer">Recorded reason</summary><p class="mt-2">Since {% if hold.at %}{{ hold.at|date:"j F Y, H:i T" }}{% else %}{{ hold.at_raw|default:"Time not recorded" }}{% endif %} · {{ hold.business_date|default:"Date not recorded" }}</p>{% if hold.reason %}<p class="mt-2">{{ hold.reason }}</p>{% endif %}<p class="mt-2">Source: {{ hold.source|default:"Not recorded" }}</p></details>
 </div>
 {% endif %}

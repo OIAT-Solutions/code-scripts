@@ -355,7 +355,7 @@ class OverviewUserPrefsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         # Context should have company filtered to company_a and revenue_period 30d
         self.assertIn(b"Company A", response.content)
-        self.assertIn(b"30d", response.content)
+        self.assertEqual(response.context["revenue_period"], "30d")
 
     def test_overview_uses_get_params_when_provided(self):
         DashboardUserPreference.objects.create(
@@ -368,7 +368,7 @@ class OverviewUserPrefsTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"company_b", response.content)
-        self.assertIn(b"7d", response.content)
+        self.assertEqual(response.context["revenue_period"], "7d")
 
     def test_overview_defaults_fallback_when_user_prefs_lookup_errors(self):
         request = mock.Mock(user=self.user)

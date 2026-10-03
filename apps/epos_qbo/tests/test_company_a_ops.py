@@ -282,7 +282,7 @@ class CompanyAPortalPageTests(CompanyAOpsFixtureMixin, TestCase):
     def test_run_detail_page(self):
         response = self.client.get(reverse("epos_qbo:company-a-run-detail", args=["2026-10-02", "run_170000Z"]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Waiting for review (2)")
+        self.assertContains(response, "Waiting for review · 2")
         self.assertContains(response, "standing auto-approval is off")
         self.assertContains(response, "Bills posted")
         self.assertContains(response, "&lt;b&gt;done&lt;/b&gt;")  # log tail escaped
@@ -335,14 +335,14 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "1", ops.CRON_ENV: "0 18 * * *"}):
             response = self.client.get(reverse("epos_qbo:schedules"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Company A daily run (products → bills → sales → health check → deposits)")
-        self.assertContains(response, "Runs in the akponora-ops container")
+        self.assertContains(response, "Products, bills, sales, stock checks and deposits.")
+        self.assertContains(response, "managed separately")
         self.assertContains(response, "Daily at 18:00")
         self.assertContains(response, "Africa/Lagos")
         self.assertContains(response, reverse("epos_qbo:company-a-run-detail", args=["2026-10-02", "run_170000Z"]))
         row = response.content.decode().split('id="company-a-schedule-row"')[1].split("</section>")[0]
         self.assertIn("Enabled", row)
-        self.assertIn("✅", row)
+        self.assertIn("Scheduled", row)
         self.assertNotIn("<form", row)
 
     def test_schedules_row_env_off(self):
@@ -350,24 +350,24 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         row = response.content.decode().split('id="company-a-schedule-row"')[1].split("</section>")[0]
         self.assertIn("Disabled", row)
-        self.assertIn("Never run", row)
+        self.assertIn("No run record yet", row)
 
     def test_overview_card_without_hold(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         response = self.client.get(reverse("epos_qbo:overview"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="company-a-card"')
-        self.assertContains(response, "Last real run:")
+        self.assertContains(response, 'data-company-a-row="true"')
+        self.assertContains(response, "Last confirmed sales:")
         self.assertContains(response, "₦812,345.50")
-        self.assertNotContains(response, 'data-company-a-hold="active"')
+        self.assertNotContains(response, "Sales are paused")
 
     def test_overview_card_with_hold(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         self.make_hold()
         response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertContains(response, 'data-company-a-hold="active"')
-        self.assertContains(response, "posting hold is in place")
-        self.assertContains(response, "MISMATCH")
+        self.assertContains(response, "Sales are paused")
+        self.assertContains(response, "Review the reason")
+        self.assertNotContains(response, "MISMATCH")
 
     def test_overview_without_any_company_a_evidence_hides_card(self):
         response = self.client.get(reverse("epos_qbo:overview"))
@@ -379,7 +379,9 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
                       files={"guard/alerts.csv": ALERTS_CSV})
         response = self.client.get(reverse("epos_qbo:company-detail", args=["company_a"]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="company-a-card"')
+        self.assertContains(response, "Company sections")
+        self.assertContains(response, "Review stock checks")
+        response = self.client.get(reverse("epos_qbo:company-detail", args=["company_a"]), {"tab": "products"})
         self.assertContains(response, 'id="company-a-holds-alerts"')
         self.assertContains(response, "akp_mapping_mismatch")
 
@@ -387,5 +389,6 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         response = self.client.get(reverse("epos_qbo:runs"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="company-a-daily-runs-panel"')
+        self.assertContains(response, 'id="daily-history"')
+        self.assertContains(response, "Sales confirmed")
         self.assertContains(response, reverse("epos_qbo:company-a-run-detail", args=["2026-10-02", "run_170000Z"]))

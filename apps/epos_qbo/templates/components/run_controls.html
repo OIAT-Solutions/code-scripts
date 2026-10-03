@@ -1,0 +1,158 @@
+    {% if perms.epos_qbo.can_trigger_runs %}
+    {% comment %}
+    Tabbed trigger panel — keeps the two operator workflows visually separated
+    without exposing low-level inventory remediation tools as separate actions.
+    {% endcomment %}
+    <div x-data="{ tab: 'sales' }">
+        <div role="tablist" aria-label="Run trigger" class="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-900 p-1 mb-4">
+            <button type="button" role="tab" aria-controls="sales-run-panel" :aria-selected="tab === 'sales'" :aria-current="tab === 'sales' ? 'page' : null" @click="tab = 'sales'"
+                :class="tab === 'sales' ? 'bg-white dark:bg-slate-800 text-slate-950 dark:text-slate-100 shadow-sm border border-slate-200 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-slate-100 border border-transparent'"
+                class="min-w-24 rounded-md px-4 py-2 text-sm font-medium transition-colors">
+                Sales
+            </button>
+            <button type="button" role="tab" aria-controls="inventory-run-panel" :aria-selected="tab === 'inventory'" :aria-current="tab === 'inventory' ? 'page' : null" @click="tab = 'inventory'"
+                :class="tab === 'inventory' ? 'bg-white dark:bg-slate-800 text-slate-950 dark:text-slate-100 shadow-sm border border-slate-200 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-slate-100 border border-transparent'"
+                class="min-w-24 rounded-md px-4 py-2 text-sm font-medium transition-colors">
+                Inventory
+            </button>
+        </div>
+
+    <section id="sales-run-panel" role="tabpanel" x-show="tab === 'sales'" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm" x-data="runTriggerForm()">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">Run sales for another company</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">Send sales to QuickBooks and check the totals. Akponora uses its separate daily run above.</p>
+        <form method="post" action="{% url 'epos_qbo:run-trigger' %}" class="space-y-4" onsubmit="return confirm('This will send sales for the selected company and dates to QuickBooks. Continue?');">
+            {% csrf_token %}
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    Scope
+                    <select name="scope" x-model="scope" class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                        <option value="single_company">One company</option>
+                    </select>
+                </label>
+                <label class="text-xs text-slate-600 dark:text-slate-400" x-show="scope === 'single_company'" x-cloak>
+                    Company
+                    <select name="company_key" :required="scope === 'single_company'" :disabled="scope !== 'single_company'" class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                        <option value="">Select company</option>
+                        {% for company in companies %}
+                        {% if company.company_key != "company_a" %}<option value="{{ company.company_key }}">{{ company.display_name }}</option>{% endif %}
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    Dates
+                    <select name="date_mode" x-model="dateMode" class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                        <option value="yesterday">Yesterday</option>
+                        <option value="target_date">One day</option>
+                        <option value="range">Past dates</option>
+                    </select>
+                </label>
+                <div class="flex items-end">
+                    <button type="submit" class="btn btn-primary w-full justify-center">
+                        Review and run
+                    </button>
+                </div>
+            </div>
+
+            <p class="text-xs text-slate-500 dark:text-slate-400" x-text="summaryText"></p>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4" x-show="dateMode === 'target_date'" x-cloak>
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    One day
+                    <input type="date" name="target_date" :required="dateMode === 'target_date'" :disabled="dateMode !== 'target_date'"
+                        class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                </label>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4" x-show="dateMode === 'range'" x-cloak>
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    From Date
+                    <input type="date" name="from_date" :required="dateMode === 'range'" :disabled="dateMode !== 'range'"
+                        class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                </label>
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    To Date
+                    <input type="date" name="to_date" :required="dateMode === 'range'" :disabled="dateMode !== 'range'"
+                        class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                </label>
+                <label class="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2 mt-6">
+                    <input type="checkbox" name="skip_download" :disabled="dateMode !== 'range'">
+                    Use saved sales files
+                </label>
+            </div>
+
+            <details class="border border-slate-200 dark:border-slate-600 rounded-lg p-3" x-show="scope === 'all_companies'" x-cloak>
+                <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300 select-none">Advanced options (all companies)</summary>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                    <label class="text-xs text-slate-600 dark:text-slate-400">
+                        Parallel workers
+                        <input type="number" name="parallel" min="1" value="{{ default_parallel }}" :disabled="scope !== 'all_companies'"
+                            class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                    </label>
+                    <label class="text-xs text-slate-600 dark:text-slate-400">
+                        Stagger seconds
+                        <input type="number" name="stagger_seconds" min="0" value="{{ default_stagger_seconds }}" :disabled="scope !== 'all_companies'"
+                            class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                    </label>
+                    <label class="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2 mt-6">
+                        <input type="checkbox" name="continue_on_failure" :disabled="scope !== 'all_companies'">
+                        Continue on failure
+                    </label>
+                </div>
+            </details>
+        </form>
+    </section>
+
+    <section id="inventory-run-panel" role="tabpanel" x-show="tab === 'inventory'" x-cloak class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm"
+             x-data="inventoryForm()">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">Inventory</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">
+            Run one read-only inventory review. Results are shown in the company Inventory Review page; no QBO inventory writes are made.
+        </p>
+        {% if inventory_companies %}
+        <form method="post" action="{% url 'epos_qbo:run-trigger-inventory' %}" class="space-y-4">
+            {% csrf_token %}
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    Company
+                    <select name="company_key" required x-model="companyKey" @change="category = ''" class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                        <option value="">Select company</option>
+                        {% for company in inventory_companies %}
+                        {% if company.company_key != "company_a" %}<option value="{{ company.company_key }}">{{ company.display_name }}</option>{% endif %}
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    Category
+                    <select name="category" x-model="category" class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 disabled:opacity-60">
+                        <option value="">All categories</option>
+                        <template x-for="c in availableCategories" :key="c">
+                            <option :value="c" x-text="c"></option>
+                        </template>
+                    </select>
+                    <span x-show="companyKey && availableCategories.length === 0" x-cloak class="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">
+                        No saved category list found for this company.
+                    </span>
+                </label>
+                <label class="text-xs text-slate-600 dark:text-slate-400">
+                    Product filter
+                    <input type="text" name="product_filter"
+                        class="mt-1 w-full border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-sm bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+                </label>
+            </div>
+
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
+                <button type="submit" name="mode" value="audit_only" class="btn btn-primary justify-center">
+                    <iconify-icon icon="solar:clipboard-check-linear" width="18"></iconify-icon>
+                    Run Inventory Review
+                </button>
+            </div>
+        </form>
+        {% else %}
+        <div class="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/40 px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+            No companies currently have inventory enabled.
+        </div>
+        {% endif %}
+    </section>
+    </div>
+    {% endif %}
+
