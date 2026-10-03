@@ -1,93 +1,21 @@
 {% extends "base.html" %}
-
-{% block title %}Company A run {{ run.business_date }} • EPOS → QBO{% endblock %}
-
-{% block topbar %}
-{% include "components/topbar.html" %}
-{% endblock %}
-
+{% block title %}{{ business_company }} · {{ business_day|date:"j F Y" }} · OIAT Portal{% endblock %}
+{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="space-y-6">
-    <div>
-        <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 flex flex-wrap items-center gap-2">
-            Company A daily run {{ run.business_date }}
-            {% include "components/company_a_badge.html" with status=run.status text=run.status_label icon=run.icon %}
-            {% if run.dry_run %}{% include "components/company_a_badge.html" with status='skipped' text='Dry run — nothing written to QBO' %}{% endif %}
-        </h1>
-        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">{{ run.run_id }}{% if run.finished_at %} · finished {{ run.finished_at|date:"Y-m-d H:i T" }}{% endif %}</p>
-        {% if run.error %}<p class="text-sm text-red-700 dark:text-red-400 mt-2">summary.json {{ run.error }}{% if run.status == 'incomplete' %} — the run may still be in progress or crashed before writing it.{% endif %}</p>{% endif %}
-    </div>
-
-    {% include "components/company_a_hold_banner.html" with hold=hold %}
-
-    <section id="waiting" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5">
-        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Waiting for review ({{ run.waiting|length }})</h2>
-        {% if run.waiting %}
-        <ul class="mt-3 space-y-1.5 text-sm text-amber-800 dark:text-amber-300 list-disc pl-5">
-            {% for line in run.waiting %}<li class="break-words">{{ line }}</li>{% endfor %}
-        </ul>
-        <p class="text-xs text-slate-500 dark:text-slate-400 mt-3">Review waiting decisions in Needs your attention. Held items may need their source records corrected first.</p>
-        {% else %}
-        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Nothing waiting.</p>
-        {% endif %}
-    </section>
-
-    {% for item in steps %}
-    {% with s=item.step %}
-    <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden" id="step-{{ s.name }}">
-        <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-600 flex flex-wrap items-center gap-2">
-            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">{{ forloop.counter }}. {{ s.label }}</h2>
-            <span class="text-xs font-mono text-slate-500 dark:text-slate-400">{{ s.name }}</span>
-            {% include "components/company_a_badge.html" with status=s.status text=s.status icon=s.icon %}
-            {% if s.exit_code is not None %}<span class="text-xs text-slate-500 dark:text-slate-400">exit {{ s.exit_code }}</span>{% endif %}
-        </div>
-        <div class="p-5 space-y-4">
-            {% if s.detail %}<p class="text-sm text-slate-700 dark:text-slate-200 break-words">{{ s.detail }}</p>{% endif %}
-            {% if s.key_facts %}
-            <dl class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                {% for label, value in s.key_facts %}
-                <div><dt class="text-xs text-slate-500 dark:text-slate-400">{{ label }}</dt><dd class="font-medium text-slate-900 dark:text-slate-100 break-words">{{ value }}</dd></div>
-                {% endfor %}
-            </dl>
-            {% endif %}
-            {% if s.extra_counts %}
-            <details>
-                <summary class="text-xs text-slate-500 dark:text-slate-400 cursor-pointer">Other fields ({{ s.extra_counts|length }})</summary>
-                <dl class="mt-2 space-y-1 text-xs">
-                    {% for key, value in s.extra_counts %}<div><dt class="inline font-mono text-slate-500 dark:text-slate-400">{{ key }}:</dt> <dd class="inline break-words">{{ value }}</dd></div>{% endfor %}
-                </dl>
-            </details>
-            {% endif %}
-            {% if s.review %}
-            <div>
-                <p class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Review items</p>
-                <ul class="space-y-1 text-sm text-amber-800 dark:text-amber-300 list-disc pl-5">{% for line in s.review %}<li class="break-words">{{ line }}</li>{% endfor %}</ul>
-            </div>
-            {% endif %}
-            {% if item.log_tail %}
-            <details>
-                <summary class="text-xs text-slate-500 dark:text-slate-400 cursor-pointer">log.txt (last lines)</summary>
-                <pre class="mt-2 text-xs bg-slate-50 dark:bg-slate-900 p-3 rounded-md overflow-x-auto max-h-96 whitespace-pre-wrap break-words">{{ item.log_tail }}</pre>
-            </details>
-            {% endif %}
-        </div>
-    </section>
-    {% endwith %}
-    {% empty %}
-    <p class="text-sm text-slate-500 dark:text-slate-400">No step results in this run.</p>
-    {% endfor %}
-
-    <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5" id="evidence">
-        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Evidence files</h2>
-        {% if files %}
-        <ul class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-1 text-sm">
-            {% for f in files %}
-            <li><a class="font-mono text-xs text-emerald-700 dark:text-emerald-400 hover:underline" href="{% url 'epos_qbo:company-a-evidence' run.business_date run.run_id %}?path={{ f.path|urlencode }}">{{ f.path }}</a> <span class="text-[11px] text-slate-400">{{ f.size|filesizeformat }}</span></li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No viewable files.</p>
-        {% endif %}
-    </section>
+<div><p class="portal-eyebrow">Daily run details</p><h1 class="text-3xl font-semibold tracking-tight mt-2">{{ business_company }}</h1><p class="portal-muted mt-3">Work for {{ business_day|date:"j F Y" }}{% if run.dry_run %} · Preview — nothing posted{% endif %}</p></div>
+<section class="portal-panel p-6 space-y-4">{% include "components/business_status.html" with label=business_outcome.label tone=business_outcome.tone %}<p class="text-sm leading-relaxed">{{ business_outcome.sentence }}</p>{% if other_confirmation %}<p class="text-sm">Sales for this day were confirmed in another attempt: <strong>{{ other_confirmation.amount_label }}</strong>. This does not confirm the outcome of the attempt shown here.</p>{% endif %}<div class="flex flex-wrap gap-3"><a class="btn btn-secondary" href="{% url 'epos_qbo:runs' %}?company=company_a">View daily runs</a>{% if run.waiting %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention' %}">Review waiting items</a>{% endif %}</div></section>
+{% include "components/company_a_hold_banner.html" with hold=hold %}
+{% if run.waiting %}<section id="waiting" class="portal-panel p-6"><h2 class="text-lg font-semibold">Waiting for review · {{ run.waiting|length }}</h2><p class="portal-muted mt-2">Open Needs your attention to review decisions. Some records need correcting before they can be approved.</p><details class="mt-4"><summary class="portal-link cursor-pointer">Recorded reasons</summary><ul class="mt-3 space-y-2 text-sm">{% for line in run.waiting %}<li class="break-words">{{ line }}</li>{% endfor %}</ul></details></section>{% endif %}
+{% for item in steps %}{% with s=item.step %}
+<section class="portal-panel overflow-hidden" id="step-{{ s.name }}">
+<div class="px-6 py-5 border-b border-slate-100 dark:border-slate-700 flex flex-wrap justify-between gap-3"><h2 class="text-lg font-semibold">{{ forloop.counter }}. {{ item.label }}</h2>{% include "components/business_status.html" with label=item.outcome.label tone=item.outcome.tone %}</div>
+<div class="p-6 space-y-4"><p class="portal-muted">{{ item.outcome.sentence }}</p>
+{% if item.facts %}<dl class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-sm">{% for label,value in item.facts %}<div><dt class="portal-muted">{{ label }}</dt><dd class="font-semibold mt-1 break-words">{{ value }}</dd></div>{% endfor %}</dl>{% endif %}
+{% if s.review %}<p class="text-sm text-amber-800 dark:text-amber-200">{{ s.review|length }} recorded issue{{ s.review|length|pluralize }} need checking.</p>{% endif %}
+<details><summary class="portal-link cursor-pointer">Supporting details</summary><div class="mt-4 space-y-3"><p class="portal-muted">Recorded status: {{ s.status }}{% if s.exit_code is not None %} · exit {{ s.exit_code }}{% endif %}</p>{% if s.detail %}<p class="text-sm break-words">{{ s.detail }}</p>{% endif %}{% if s.review %}<ul class="text-sm space-y-2">{% for line in s.review %}<li class="break-words">{{ line }}</li>{% endfor %}</ul>{% endif %}{% if s.counts %}<pre class="portal-code">{{ s.counts }}</pre>{% endif %}{% if item.log_tail %}<p class="portal-muted">log.txt (last lines)</p><pre class="portal-code max-h-96">{{ item.log_tail }}</pre>{% endif %}</div></details>
+</div></section>
+{% endwith %}{% empty %}<section class="portal-panel p-6"><h2 class="font-semibold">No step results available</h2><p class="portal-muted mt-2">The run record may be incomplete. Check the supporting details before trying again.</p></section>{% endfor %}
+<details class="portal-panel p-6" id="evidence"><summary class="font-semibold cursor-pointer">Supporting records and technical details</summary><p class="portal-muted mt-3">Internal reference: {{ run.run_id }}{% if run.finished_at %} · finished {{ run.finished_at|date:"j F Y, H:i T" }}{% endif %}</p>{% if run.error %}<p class="text-sm text-red-800 dark:text-red-200 mt-3">summary.json {{ run.error }}</p>{% endif %}{% if files %}<ul class="mt-4 space-y-3 text-sm">{% for f in files %}<li class="break-words"><a class="portal-link" href="{% url 'epos_qbo:company-a-evidence' run.business_date run.run_id %}?path={{ f.path|urlencode }}">{{ f.path }}</a> <span class="portal-muted">{{ f.size|filesizeformat }}</span></li>{% endfor %}</ul>{% else %}<p class="portal-muted mt-3">No supporting files available.</p>{% endif %}</details>
 </div>
 {% endblock %}

@@ -74,7 +74,7 @@ class RunsAndRunDetailRenderingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
         self.assertIn(job.friendly_title, html)
-        self.assertIn("Internal ID:", html)
+        self.assertIn("Internal reference:", html)
         self.assertIn(str(job.id), html)
         self.assertIn("Target", html)
 

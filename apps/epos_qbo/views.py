@@ -8,7 +8,7 @@ import sys
 
 import requests
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from math import ceil
 from pathlib import Path
@@ -2253,6 +2253,7 @@ def _schedule_rows(schedules: list[RunSchedule], company_map: dict[str, str]) ->
                 "schedule": schedule,
                 "display_name": _operator_schedule_name(schedule),
                 "subtitle": _schedule_subtitle(schedule, company_map),
+                "business_subtitle": _schedule_subtitle(schedule, company_map).replace("Sales Sync", "Sales").replace("Inventory Sync", "Stock checks"),
                 "workflow": _schedule_workflow(schedule),
                 "company_target": _schedule_company_target(schedule),
                 "timing_primary": timing_primary,
@@ -2863,6 +2864,9 @@ def run_detail(request, job_id):
             back_label="Runs",
         )
     )
+    from .services.messages import job_outcome
+    context["business_outcome"] = job_outcome(job, artifacts_list)
+    context["business_company"] = company_display_name or "Several companies"
     return render(request, "epos_qbo/run_detail.html", context)
 
 
@@ -4133,6 +4137,7 @@ def _batch_preload_companies_data(companies: list) -> dict:
 
 
 @login_required
+@require_GET
 def companies_list(request):
     """Companies management page with search, filter, sort; HTMX partial for list."""
     _ensure_company_records()
@@ -4185,8 +4190,24 @@ def companies_list(request):
         ]
     companies_data = _sort_companies_data(companies_data, sort_by)
     summary = _calculate_companies_summary(companies_data)
+    from .services import experience
+    health = {c["company"].company_key: c.get("token_info", {}) for c in companies_data}
+    positions = experience.home_context(token_health=health)["home_rows"]
+    keys = {c["company"].company_key for c in companies_data}
+    directory_rows = [r for r in positions if r["company_key"] in keys]
+    for row in directory_rows:
+        connection = health.get(row["company_key"], {})
+        row["connection_label"] = "Connected" if connection.get("connection_state") == "connected" else "Connection needs attention" if connection.get("severity") == "critical" else "Connection not checked"
+    state = request.GET.get("state", "")
+    if state == "attention":
+        directory_rows = [r for r in directory_rows if r["tone"] in {"danger", "warning"}]
+    elif state == "current":
+        directory_rows = [r for r in directory_rows if r["label"] == "Up to date"]
+    if sort_by == "last_run":
+        directory_rows.sort(key=lambda r: r["latest"] or date.min, reverse=True)
 
-    context = {
+    context = {"directory_rows": directory_rows, "directory_state": state,
+
         "companies_data": companies_data,
         "search": search,
         "filter_status": filter_status,
@@ -4207,7 +4228,7 @@ def companies_list(request):
     )
 
     if request.headers.get("HX-Request"):
-        return render(request, "components/company_cards.html", context)
+        return render(request, "components/company_directory.html", context)
     return render(request, "epos_qbo/companies.html", context)
 
 
@@ -4764,6 +4785,7 @@ def company_inventory_missing_create(request, company_key):
 
 
 @login_required
+@require_GET
 def company_detail(request, company_key):
     """Detail view for a single company."""
     company = get_object_or_404(CompanyConfigRecord, company_key=company_key)
@@ -4776,7 +4798,7 @@ def company_detail(request, company_key):
         RunArtifact.objects.filter(company_key=company_key)
         .filter(Q(run_job__status=RunJob.STATUS_SUCCEEDED) | Q(run_job__isnull=True))
         .select_related("run_job")
-        .order_by("-processed_at", "-imported_at", "-id")
+        .order_by("-processed_at", "-imported_at", "-id")[:500]
     ):
         if _is_sales_artifact(artifact):
             latest_successful_artifact = artifact
@@ -4811,6 +4833,9 @@ def company_detail(request, company_key):
             back_label="Companies",
         )
     )
+    from .services.company_workspace import page_context
+    context.update(page_context(company, request, _company_inventory_enabled(company),
+                                {company_key: company_data.get("token_info", {})}))
     return render(request, "epos_qbo/company_detail.html", context)
 
 

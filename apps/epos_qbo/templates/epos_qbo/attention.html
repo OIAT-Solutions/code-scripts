@@ -11,7 +11,7 @@
 
 <div class="space-y-4">
 {% for item in items %}
-<article class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-5">
+<article id="item-{{ item.key }}" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-5">
 <p class="text-xs text-slate-500 mb-2">{{ item.company }}{% if item.date %} · {{ item.date }}{% endif %}</p>
 <h2 class="font-semibold">{{ item.title }}</h2>
 <p class="text-sm mt-2 break-words">{{ item.reason }}</p>

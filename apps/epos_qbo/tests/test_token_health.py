@@ -180,4 +180,4 @@ class TokenHealthViewsTests(TestCase):
             response = self.client.get(reverse("epos_qbo:companies-list"))
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("QBO re-authentication required", html)
+        self.assertIn("QuickBooks connection needs attention", html)
