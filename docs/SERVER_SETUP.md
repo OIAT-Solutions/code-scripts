@@ -12,7 +12,7 @@ One job: `python -m code_scripts.akponora_ops.daily_run`, in the `akponora-ops` 
 | 2 | `bills` | Received EPOS POs (that day, plus earlier days still pending) → **unpaid** Bills. A genuinely new supplier becomes a QBO vendor; a near match waits for review. The PO "MODE OF PAYMENT" (CASH / TRANSFER) goes into the Bill memo as a hint | Vendors: `OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1` + ref (cap 5). Bills: `OIAT_COMPANY_A_BILLS_AUTO_POST=1` + ref (caps) |
 | 3 | `sales` | `run_pipeline --company company_a --target-date <day>`. Posts only through the standing auto-approval gates: 100% mapped, totals = EPOS, no posting hold, mapping SHA. Runs after bills, so stock arrives before it is sold | `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1` + standing ref. Without them it builds a dry-run and the day waits for review |
 | 4 | `guard` | `item_guard`: read-only QBO scan | Never |
-| 5 | `uf` | Undeposited Funds deposits (`uf_deposits`): each business day's SalesReceipts still in `100900` → Bank Deposits into the banks the till sheet names, then Bank→Bank true-up transfers so each bank matches the sheet mix. A day whose sheet is blank / unfinished, whose totals disagree with QBO, or that has an unmapped till line is held, and later days wait (section 12) | `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref (cap ₦15M per day). Enabled without auto post = plan only, days wait for review |
+| 5 | `uf` | Undeposited Funds deposits (`uf_deposits`): each business day's SalesReceipts still in `100900` → Bank Deposits into the banks the till sheet names, then Bank→Bank true-up transfers so each bank matches the sheet mix. A day whose sheet is blank / unfinished, whose totals disagree with QBO, or that has an unmapped till line is held on its own; later complete days still post. Slack ends with the till-sheet status (section 12) | `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref (cap ₦15M per day). Enabled without auto post = plan only, days wait for review |
 
 Rules:
 
@@ -265,16 +265,50 @@ Duplicate-PO holds, unit-cost holds and unmapped-product holds are fixed at the 
 
 Sales receipts land in Undeposited Funds (`100900`, QBO Id 72). The `uf` step moves each business day's receipts into the banks where the money really went, as written by the store on the Google Sheet **"Nora Mart Daily Sales Account Breakdown"** (owned by OIAT Admin). It uses the same method as the 26 Sep 2026 clean-up of January–24 September: *deposits follow the receipts, the mix follows the sheet*.
 
-For each day from its cursor (`/data/ops/company_a/uf_deposits/cursor.json`, first day 25 Sep 2026) up to the run's business date:
+**Days are independent** (owner, 3 Oct 2026). Every run looks at each business day from 25 Sep 2026 up to the run's business date that is not yet deposited, and posts every day whose gates pass. A held or missing day never blocks a later complete day; it is simply looked at again next run. Per-day state is kept in `/data/ops/company_a/uf_deposits/days.json`:
+
+| State | Meaning |
+| --- | --- |
+| `DEPOSITED` | Fully deposited (deposits + true-ups). Final: never planned again, its receipts are never re-linked |
+| `READY` | Gates pass; plan only (automatic posting off) - post by hand or turn auto post on |
+| `HELD` | Gates fail for another reason (totals off, unmapped line, closed period, cap, a post that stopped …); the reason is stored |
+| `WAITING_SHEET` | No block for the day on the till sheet, or the block is unfinished (blank CASH / SYSTEM / non-number) |
+| `NO_SALES` | No SalesReceipts in QBO for the day yet |
+
+The old single cursor (`cursor.json`) is migrated on first read: every day from 25 Sep up to its `last_complete_business_date` becomes `DEPOSITED`. It is left on disk and no longer written.
+
+For each open day:
 
 1. It reads the day's block on the sheet (SYSTEM 1 / SYSTEM 2 boxes) and maps every box to a QBO bank with `till_accounts.csv` (below).
 2. It reads the day's SalesReceipts still in Undeposited Funds.
-3. **Gates.** The day is **held** if: the sheet has no block for that day, the block is blank, a CASH box or SYSTEM is empty, a box is not a number, a filled box is not in `till_accounts.csv` (or is `Active=no`), the sheet total and the receipts total differ by more than max(₦1,000, 0.5 % of the receipts), a bank account is missing / inactive / renumbered in QBO, the day is inside the QBO closing date, a receipt was already deposited by hand, or (automatic mode) the day is above ₦15M. A held day stops the later days, so days are always deposited in order.
+3. **Gates.** The day is **held** if: the sheet has no block for that day, the block is blank, a CASH box or SYSTEM is empty, a box is not a number, a filled box is not in `till_accounts.csv` (or is `Active=no`), the sheet total and the receipts total differ by more than max(₦1,000, 0.5 % of the receipts), a bank account is missing / inactive / renumbered in QBO, the day is inside the QBO closing date, a receipt was already deposited by hand, or (automatic mode) the day is above ₦15M. Only that day waits; later days still post.
 4. **Deposits.** Whole receipts go to banks by tender: Cash receipts → the cash bank, Card → the card banks, Transfer → the transfer banks, mixed tenders (`Card/Cash` …) → the union of those banks, each time to the bank with the most of its sheet share still unfilled. One QBO Bank Deposit per bank, `DocNumber UF<yymmdd><bank no>` (e.g. `UF261001100100`), each line linked to its SalesReceipt.
 5. **True-up transfers.** Because whole receipts rarely split exactly like the sheet, Bank→Bank transfers then move the difference so each bank's total for the day equals the sheet amount scaled to the receipts total (for example sheet ₦3,200,000 vs receipts ₦3,199,500: every bank gets its sheet share × 3,199,500 / 3,200,000). No transfer when the receipts already fit. The transfer memo carries `UFTU <day> <from>><to>`.
 6. Every deposit and transfer memo starts `UF deposit <day> from till sheet; approval <ref>`. Each one is re-read and checked after posting. Evidence: `/data/ops/company_a/daily/<day>/run_*/uf/<deposit day>/` (`review.csv` per bank, `receipts.csv`, `payloads.jsonl`, `summary.json`, `results.csv`).
 
 Re-running is safe: receipts already in a `UF…` deposit and transfers with the `UFTU` tag are recognised and never posted twice.
+
+### Till-sheet status (every run)
+
+The `uf` step's `summary.json` / `scheduled.json` and the daily Slack summary end with a plain-English till-sheet report since 25 Sep, for example:
+
+> Till sheet: last day entered 1 Oct. Missing: 25, 26, 29 Sep. Waiting to deposit: none. Deposited: 27, 28, 30 Sep; 1 Oct.
+
+*Missing* = no block on the sheet; *Incomplete* (shown when any) = block present but a CASH box / SYSTEM is blank or a box is not a number; *Waiting to deposit* = complete on the sheet but not yet `DEPOSITED` (READY, HELD for another reason, or no sales yet). The same report plus the per-day state, read-only (sheet + `days.json`, no QBO):
+
+```bash
+docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits status
+#   --date <day> to report up to another day, --json for machine output, --sheet-xlsx <file> offline
+```
+
+### Tolerance toggle
+
+The sheet-vs-receipts gate is max(`OIAT_COMPANY_A_UF_TOLERANCE` (default ₦1,000), `OIAT_COMPANY_A_UF_TOLERANCE_PCT` (default 0.5) % of the day's receipts). Both are read at the start of every run (nothing is cached between runs). Two ways to change them:
+
+- **Server `.env`** (the normal place): edit, then `docker compose up -d akponora-ops` so the container picks up the new environment.
+- **No restart:** write the keys into `/data/ops/company_a/uf_deposits/settings.env` (one `KEY=VALUE` per line). It is read every run and wins over `.env`; delete the file to go back. Only the two tolerance keys are honoured there (enable / auto-post / approval / cap stay in `.env`).
+
+The tolerance used (and where it came from) is written to each plan's `summary.json`.
 
 ### `till_accounts.csv`
 
@@ -359,7 +393,7 @@ OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1      # plan every day; nothing is posted yet
 OIAT_COMPANY_A_UF_AUTO_POST=0            # 1 only after a clean plan and the owner's chat yes
 OIAT_COMPANY_A_UF_APPROVAL_REF=          # "owner UF approval, <date>, <chat ref>"
 OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL=15000000
-OIAT_COMPANY_A_UF_TOLERANCE=1000
+OIAT_COMPANY_A_UF_TOLERANCE=1000         # tolerance toggle (see "Tolerance toggle" above)
 OIAT_COMPANY_A_UF_TOLERANCE_PCT=0.5
 ```
 
@@ -369,7 +403,9 @@ OIAT_COMPANY_A_UF_TOLERANCE_PCT=0.5
 docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits plan --date 2026-10-01 --no-slack
 #   2026-10-01 READY    receipts 3211950.00 sheet 3212000.00 ...      (or HOLD + the reason)
 docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits plan --no-slack
-#   every day from the cursor (25 Sep) to yesterday
+#   every day since 25 Sep not yet DEPOSITED, up to yesterday
+docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits status
+#   till-sheet report + per-day state (no QBO)
 ```
 
 - A Google error `403 The caller does not have permission` means step 12 (sharing) is missing; `404` means the sheet id is wrong; "key not found" means step 13.
@@ -379,6 +415,6 @@ docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits
 ### Posting
 
 - **By hand (chat yes per day):** `python -m code_scripts.akponora_ops.uf_deposits post --plan-dir <out>/<day> --approval-ref "<chat yes>" --expect-sha <payloads_sha256 from <day>/summary.json>`. It re-checks every receipt and DocNumber live first, posts the deposits, then the transfers, verifies each, and can be re-run after a failure (`results.csv`).
-- **Automatic:** with `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`, `OIAT_COMPANY_A_UF_AUTO_POST=1` and `OIAT_COMPANY_A_UF_APPROVAL_REF` set (chat yes), the daily run posts every READY day in order, up to ₦15M per day.
-- **Held day:** fix the cause (staff fill the sheet, type 0 in an empty CASH box, add a terminal to `till_accounts.csv`, or investigate a total difference). The next run retries from the cursor. The cursor only moves past days that are fully deposited.
-- `--dry-run` on the daily run plans only and never moves the cursor.
+- **Automatic:** with `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`, `OIAT_COMPANY_A_UF_AUTO_POST=1` and `OIAT_COMPANY_A_UF_APPROVAL_REF` set (chat yes), the daily run posts every READY day, up to ₦15M per day, whatever happened to the days before it. If a post stops (QBO error or failed verification) the run stops posting, marks that day `HELD` and exits 2; the next run resumes it without re-posting what was done.
+- **Held day:** fix the cause (staff fill the sheet, type 0 in an empty CASH box, add a terminal to `till_accounts.csv`, or investigate a total difference). The next run re-evaluates it and posts it once the gates pass. A manual `post` marks the day `DEPOSITED` in `days.json` when complete.
+- `--dry-run` on the daily run plans only and never writes `days.json`.
