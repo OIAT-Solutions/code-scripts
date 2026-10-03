@@ -61,3 +61,31 @@ You are improving the **OIAT Portal**, the Django admin and monitoring UI for ou
 - Tailwind rebuilt if you add classes (`npm run build:css`).
 - Desktop and mobile layouts checked with screenshots from a local run.
 - Each phase is its own commit with a plain summary. Report back to Marvin with what changed, screenshots, and anything that needs a pipeline change from Claude.
+
+## Tool contracts for the portal
+
+Pipeline-side entry points for the "Needs your attention" inbox (branch `claude/approval-contracts`). Run each as a background `RunJob` from the repo root with the venv Python; pass the approving user as the approval ref (e.g. `"<user> via portal <timestamp>"`). Never call QuickBooks from a view. All of them print JSON (or write a JSON receipt) you can store in the audit record.
+
+**Products (catalogue_sync)**
+- Inputs: a plan folder (`plan.json`, `summary.json`, `review.csv`). `summary.json` has `plan_sha256`, `decision_shas` (`{EPOS id: sha}` for every non-HOLD decision), `excluded`, `counts`. review.csv has a `Decision SHA` column and `EXCLUDED` rows.
+- Approve some products: `python -m code_scripts.akponora_ops.catalogue_sync apply --plan-dir <dir> --approval-ref "<ref>" --expect-sha <plan_sha256> --only <id,id> [--exclude <id,…>] [--expect-decision-shas id=sha,id=sha] [--json] [--no-slack]`.
+- Refusals exit 4 with `REFUSED: …` on stderr: unknown id, HOLD id, id in both lists, child selected without the master this plan creates (message names the master to add), a decision whose digest changed, an expected decision sha that does not match, `--only` with `--auto`, installed mapping changed by anything other than an earlier apply of this same plan. Stop during writes = exit 2.
+- Receipt: `<plan>/apply_receipt.json` (latest) and `<plan>/apply_receipt_<stamp>.json`; keys `applied` (exactly what went in: pid, action, decision_sha256, target_sku, qbo_id, multiplier), `created`, `adopted`, `mapping_only`, `not_selected` (with why), `excluded`, `already_applied`, `installed` (new mapping sha). Re-applying an id from the same plan is a no-op (`already_applied`), so retries are safe. Several approvals against one plan are fine (`applied_state.json`).
+- Skip a product ("don't ask again"): `review_exclusions add --kind product --key <EPOS id> …` (below). Note: an excluded product sold on the till still fails the sales day.
+
+**Suppliers (vendors approve)**
+- Preview: `python -m code_scripts.akponora_ops.vendors approve --epos-name "<EPOS supplier>" (--link-to <QBO vendor Id> | --create [--display-name "<name>"]) --approval-ref "<ref>" [--epos-supplier-id <id>] --dry-run` → JSON with `result` (`dry_run` | `preflight_failed` | `already_approved`), `problems`, `warnings`, `payload`, `payload_sha256`. Show the problems in plain words.
+- Write: same arguments without `--dry-run`, plus `--expect-sha <payload_sha256>` → `result` `created` | `linked` | `already_approved`, `qbo_vendor_id`, `qbo_vendor_name`, `receipt` (path). Exit 0 ok, 2 preflight problem / stop, 4 refused (missing or changed sha, no approval ref).
+- Skip a supplier: `review_exclusions add --kind vendor --key "<EPOS supplier name>" …` → never auto-created, its bills HOLD with `supplier excluded`.
+
+**Bills (bills_sync post)**
+- Approve: set `Approve=yes` on the READY row in the plan's review.csv, then `bills_sync post --review <plan>/review.csv --approval-ref "<ref>" --expect-sha <payloads_sha256>`. Results per PO in `<plan>/results.csv` (`POSTED`, `ADOPTED`, `HELD_LIVE`, `RESOLVED`, `CAPPED`, `FAILED`, `STOPPED`) and `<plan>/post_<stamp>.json`.
+- Skip for this plan: `Approve=skip` (never posted; the day counts as done for the cursor).
+- Skip permanently ("resolved outside the tool"): `review_exclusions add --kind bill --key <PO OrderRef> …`. The next plan shows the PO as `EXCLUDED`; a post of an older plan records it `RESOLVED` without posting.
+
+**Exclusions (review_exclusions)**
+- File: `STATE_ROOT/mappings/company_a/review_exclusions.csv` (`kind, key, reason, added_by, added_at, expires_at`), history `review_exclusions_history.csv` (append-only: ts, action, kind, key, reason, actor, expires_at, previous, file_sha256_after).
+- `python -m code_scripts.akponora_ops.review_exclusions add --kind product|vendor|bill --key <k> --reason "<why>" --added-by "<ref>" [--expires-at YYYY-MM-DD] [--replace]`
+- `… remove --kind <k> --key <k> --removed-by "<ref>" --reason "<why>"` (an "undo" button)
+- `… list [--kind <k>] [--all]` → `{"file", "rows": [… "active"]}`
+- Output is one JSON object; exit 0 (`added` / `replaced` / `unchanged` / `removed`), 2 (`refused` + `error`). Adding the same row twice is `unchanged` (safe to retry).

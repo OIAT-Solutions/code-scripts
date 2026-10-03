@@ -51,10 +51,16 @@ Approvals, clearing the hold and "Run now" are not in the portal yet (see the ro
 .venv/bin/python -m code_scripts.akponora_ops.catalogue_sync apply \
   --plan-dir outputs/catalogue_sync_<day> \
   --approval-ref "<chat yes>" \
-  --expect-plan-sha <plan_sha256 from summary.json>
+  --expect-sha <plan_sha256 from summary.json>          # --expect-plan-sha still works
+# apply only some decisions (the portal does this per approved product):
+.venv/bin/python -m code_scripts.akponora_ops.catalogue_sync apply --plan-dir outputs/catalogue_sync_<day> \
+  --approval-ref "<chat yes>" --expect-sha <plan_sha256> --only 500,501 \
+  [--exclude 502] [--expect-decision-shas 500=<sha>,501=<sha>] [--json]
 ```
 
 - **Plan** is read-only (EPOS view-only + QBO GET). Exit 3 means HOLD or REVIEW rows need a human.
+- **Selective apply**: `--only` / `--exclude` take EPOS Product IDs. Each decision has a `decision_sha256` (summary.json `decision_shas`, review.csv `Decision SHA`); a decision that changed is refused, and `--expect-decision-shas` pins the ones a human approved. A child (mapping-only row) cannot be applied without its master when this plan creates the master: select both. Unknown IDs, HOLD rows, and `--only`/`--exclude` with `--auto` are refused (exit 4). A plan can be applied in parts: `applied_state.json` in the plan folder records what went in, a retry of an applied ID is a no-op (`already_applied`), and `apply_receipt.json` (`applied`, `not_selected`, `excluded`) lists exactly what this apply did (one timestamped copy per apply).
+- **Excluded products** (`review_exclusions`, below) are never planned; they show as `EXCLUDED` in review.csv and `excluded` in summary.json. Excluding a product does not make its till sales post: if it is sold, the sales day still fails until it is mapped.
 - **Apply** creates items (qty 0, InvStartDate 2026-10-01, asset 77) and installs a new mapping version. Never posts InventoryAdjustment.
 - Unexplained EPOS stock on a new tracked product is flagged; the item is still created at 0. A stock adjustment needs a separate chat yes.
 - **Before-sales hook** (off by default): set `OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES=1`. The Company A pipeline then plans (and, if automated creates are on, applies) only the Product IDs sold that day that are missing from the mapping. If anything stays unmapped, the transform still fails the day closed.
@@ -83,6 +89,38 @@ Approvals, clearing the hold and "Run now" are not in the portal yet (see the ro
 - Vendor map: `STATE_ROOT/mappings/company_a/vendors.csv` (human-approved from `vendors-suggest`, or `auto:<ref>` rows).
 - **Automatic vendors** (`scheduled` only, never `plan`; off by default): when a PO supplier is not in vendors.csv, it is scored against all live QBO vendors. Best score < 0.75 (genuinely new) → created with DisplayName = the cleaned EPOS supplier name, provided `OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1`, `OIAT_COMPANY_A_VENDOR_APPROVAL_REF` is set, the name is free across Vendors/Customers/Employees, and the per-run cap is not reached (`OIAT_COMPANY_A_VENDOR_AUTO_MAX`, default 5). Score ≥ 0.75 (possible typo/duplicate) → HOLD with the candidates. Evidence: `vendor_actions.json`. Shared code with `vendor_admin`: `code_scripts/akponora_ops/vendors.py`.
 - **Automated post** (off by default): `OIAT_COMPANY_A_BILLS_AUTO_POST=1` + approval ref + per-bill / per-run caps.
+- **`Approve` column**: `yes` posts (READY rows only); `skip` / `resolved` means a human dealt with this PO outside the tool for this plan: never posted, and its day counts as done for the cursor. Anything else (blank) waits.
+- **Excluded POs / suppliers** (`review_exclusions`): an excluded PO is planned `EXCLUDED` ("resolved outside the tool", permanently) and counts as done for the cursor; an excluded supplier's bills HOLD with `supplier excluded` and it is never auto-created. Exclusions added after a plan still win at `post`: the PO is recorded `RESOLVED`, the supplier's bill `HELD_LIVE`; neither posts.
+- **Approving a held supplier by hand** (one supplier, chat yes / portal approval):
+
+```bash
+# preview (GET only): preflight + payload sha
+.venv/bin/python -m code_scripts.akponora_ops.vendors approve --epos-name "WONUOLA SUPER STORE" \
+  --create [--display-name "WONUOLA SUPER STORE"] --approval-ref "<ref>" --dry-run
+#   or --link-to <existing QBO vendor Id> instead of --create
+# write (same arguments, sha from the dry run):
+.venv/bin/python -m code_scripts.akponora_ops.vendors approve --epos-name "WONUOLA SUPER STORE" \
+  --create --approval-ref "<ref>" --expect-sha <payload_sha256>
+```
+
+  Preflight: the supplier is not mapped to another vendor in vendors.csv, not excluded, the linked vendor exists and is active, a new DisplayName is free across Vendors/Customers/Employees. The write re-reads the vendor, appends the vendors.csv row with `Approved By = <ref>`, and writes a receipt + audit line under `STATE_ROOT/ops/company_a/vendors/`. A retry after success returns `already_approved`. The next bills plan then resolves the supplier. Exit 0 ok, 2 preflight problem, 4 refused (sha / ref).
+
+---
+
+## Review exclusions ("don't ask again")
+
+`STATE_ROOT/mappings/company_a/review_exclusions.csv` (`kind, key, reason, added_by, added_at, expires_at`); every change is appended to `review_exclusions_history.csv` next to it.
+
+```bash
+.venv/bin/python -m code_scripts.akponora_ops.review_exclusions add --kind product|vendor|bill --key <id or name> \
+  --reason "<why>" --added-by "<who / approval ref>" [--expires-at YYYY-MM-DD] [--replace]
+.venv/bin/python -m code_scripts.akponora_ops.review_exclusions remove --kind … --key … --removed-by "<who>" --reason "<why>"
+.venv/bin/python -m code_scripts.akponora_ops.review_exclusions list [--kind …] [--all]
+```
+
+- `product` = EPOS Product ID; `vendor` = EPOS supplier name (matched normalized); `bill` = EPOS PO OrderRef (`EPOS-PO-` prefix accepted).
+- `expires_at` (optional): the exclusion stops applying on that date (Lagos).
+- Output is JSON; exit 0 done/unchanged, 2 refused (missing reason/by, already excluded differently without `--replace`, not found).
 
 ---
 
