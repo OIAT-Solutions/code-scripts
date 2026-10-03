@@ -293,11 +293,13 @@ class QboWebhookEvent(models.Model):
 
 
 class RunJob(models.Model):
+    SCOPE_PORTAL_REVIEW = "portal_review"
     SCOPE_SINGLE = "single_company"
     SCOPE_ALL = "all_companies"
     SCOPE_INVENTORY_PIPELINE = "inventory_pipeline"
     SCOPE_INVENTORY_SYNC = "inventory_sync"
     SCOPE_CHOICES = [
+        (SCOPE_PORTAL_REVIEW, "Company A review"),
         (SCOPE_SINGLE, "Single Company"),
         (SCOPE_ALL, "All Companies"),
         (SCOPE_INVENTORY_PIPELINE, "Inventory"),
@@ -380,6 +382,8 @@ class RunJob(models.Model):
 
     @property
     def workflow_label(self) -> str:
+        if self.scope == self.SCOPE_PORTAL_REVIEW:
+            return "Review"
         if self.scope in {self.SCOPE_SINGLE, self.SCOPE_ALL}:
             return "Sales"
         if self.scope == self.SCOPE_INVENTORY_PIPELINE:
@@ -390,6 +394,8 @@ class RunJob(models.Model):
 
     @property
     def scope_label(self) -> str:
+        if self.scope == self.SCOPE_PORTAL_REVIEW:
+            return "Company A review"
         if self.scope == self.SCOPE_ALL:
             return "All companies"
         if self.scope == self.SCOPE_SINGLE:
@@ -665,7 +671,7 @@ class RunSchedule(models.Model):
         choices=SCHEDULE_TYPE_CHOICES,
         default=SCHEDULE_TYPE_RECURRING,
     )
-    scope = models.CharField(max_length=32, choices=RunJob.SCOPE_CHOICES, default=RunJob.SCOPE_ALL)
+    scope = models.CharField(max_length=32, choices=[choice for choice in RunJob.SCOPE_CHOICES if choice[0] != RunJob.SCOPE_PORTAL_REVIEW], default=RunJob.SCOPE_ALL)
     company_key = models.SlugField(max_length=64, null=True, blank=True)
     cron_expr = models.CharField(max_length=120, blank=True)
     timezone_name = models.CharField(max_length=64, default="UTC")
@@ -973,3 +979,20 @@ def _operator_schedule_name(name: str) -> str:
     if raw == "Legacy Env Fallback":
         return "System Fallback Schedule"
     return raw or "-"
+
+
+class PortalReviewAction(models.Model):
+    """Durable authorization and outcome for a specific reviewed evidence snapshot."""
+
+    job = models.OneToOneField(RunJob, on_delete=models.PROTECT, related_name="review_action")
+    actor = models.CharField(max_length=150)
+    action = models.CharField(max_length=20)
+    reason = models.TextField()
+    payload = models.JSONField(default=dict)
+    confirmation_id = models.CharField(max_length=64, unique=True)
+    result = models.TextField(blank=True, default="Queued")
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        permissions = [("can_approve_company_a_reviews", "Can approve Company A reviews")]

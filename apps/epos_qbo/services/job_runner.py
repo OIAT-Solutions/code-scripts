@@ -299,6 +299,8 @@ def _build_inventory_command(python_exe: str, cleaned: dict) -> list[str]:
 
 
 def build_command_for_job(job: RunJob) -> list[str]:
+    if job.scope == RunJob.SCOPE_PORTAL_REVIEW:
+        return [sys.executable, str(BASE_DIR / "manage.py"), "execute_portal_review", str(job.id)]
     if job.from_date and job.to_date:
         date_mode = "range"
     elif job.target_date:
@@ -345,7 +347,7 @@ def _monitor_process(job_id, popen: subprocess.Popen, log_handle):
             attach_started = time.monotonic()
             # Link artifacts before flipping the run out of RUNNING so dashboard completion
             # events observe status only after overview data is ready to refresh.
-            attached_artifacts = attach_recent_artifacts_to_job(job)
+            attached_artifacts = 0 if job.scope == RunJob.SCOPE_PORTAL_REVIEW else attach_recent_artifacts_to_job(job)
             attach_elapsed_ms = int((time.monotonic() - attach_started) * 1000)
 
             job.exit_code = exit_code

@@ -1708,6 +1708,8 @@ def overview(request):
     else:
         company_key, revenue_period = _get_user_overview_defaults(request)
     context = _overview_context(revenue_period, company_key=company_key)
+    from .services.attention import blockers
+    context["blockers"] = blockers()
     context["quick_sync_target_date"] = _quick_sync_default_target_date()
     context["quick_sync_timezone"] = context.get("business_timezone_display", get_business_timezone_display())
     context["dashboard_timezone_display"] = get_dashboard_timezone_display()
@@ -1737,6 +1739,8 @@ def overview_panels(request):
     else:
         company_key, revenue_period = _get_user_overview_defaults(request)
     context = _overview_context(revenue_period, company_key=company_key)
+    from .services.attention import blockers
+    context["blockers"] = blockers()
     response = render(request, "components/overview_refresh.html", context)
     response["Cache-Control"] = "no-store"
     response["Pragma"] = "no-cache"

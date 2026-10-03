@@ -1,10 +1,12 @@
 from django.urls import path
 
-from . import views, views_company_a, webhooks
+from . import views, views_company_a, views_attention, webhooks
 
 app_name = "epos_qbo"
 
 urlpatterns = [
+    path("attention/", views_attention.inbox, name="attention"),
+    path("attention/confirm/", views_attention.confirm, name="attention-confirm"),
     path("", views.overview, name="overview-root"),
     path("dashboard/", views.overview, name="overview"),
     path("dashboard/panels/", views.overview_panels, name="overview-panels"),
