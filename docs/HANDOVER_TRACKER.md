@@ -56,7 +56,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 | Item | Who | Where | Status |
 | --- | --- | --- | --- |
 | Portal redesign (inbox, Home, Daily runs, company workspaces, Products & Stock, Deposits, Suppliers) | Codex → Claude subagent | **Merged into the main branch at `a2322b3`** (652 + 535 tests pass). Handover: `docs/PORTAL_REDESIGN_HANDOVER.md`. Not deployed yet | ✅ Ready to deploy |
-| Google service account for the till sheet | Marvin | Google Cloud (OIAT Admin) | Steps in `SERVER_SETUP.md` ("Till sheet access"). The key goes to `/data/secrets/google_service_account.json` |
+| Google service account for the till sheet | Marvin | Google Cloud project `oiat-ops` (OIAT Admin, no billing) | ✅ **Done 3 Oct.** `oiat-sheets-reader@oiat-ops.iam.gserviceaccount.com` has Viewer access on the sheet. The key is at `/data/secrets/google_service_account.json` (chmod 600; loose copy deleted). A read-only test from the server returned HTTP 200 with all 13 tabs |
 
 ---
 
@@ -71,7 +71,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
    4. Server: `git pull`. Marvin runs `docker compose build web scheduler akponora-ops` (desktop PowerShell). Then `docker compose up -d`.
    5. Run `python manage.py migrate` in `web` (**0018, 0019, 0020**). Grant `can_approve_company_a_reviews`, `can_trigger_runs` and `can_manage_portal_settings` to the operators (Django admin).
    6. Smoke test: `daily_run --dry-run --date <yesterday>`. Open the portal pages.
-4. [ ] **Deposits:** once the service account key is on the server, run `uf_deposits status` and `plan` (read-only), show Marvin, then with his yes set `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`, `_UF_AUTO_POST=1`, `_UF_APPROVAL_REF`, and the sheet id/key env.
+4. [ ] **Deposits** (the key is on the server and access is verified): after deploy, run `uf_deposits status` and `plan` (read-only), show Marvin, then with his yes set `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`, `_UF_AUTO_POST=1`, `_UF_APPROVAL_REF`, and the sheet id/key env.
 5. [ ] **Goldplates corrections:** the ₦2.65M July late syncs and the 2 receipts for 22 Jun (prepare, then Marvin approves).
 6. [ ] **Master product setup** (team's Master Product Review; `docs/AKPONORA_STAFF_CHECKLIST.md`): **parked by Marvin.** Do not start without his yes.
 7. [ ] **Later:** repo clean-up phase 2, the client dashboard, and the W10 legacy retirement (see the roadmap).
