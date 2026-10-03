@@ -37,6 +37,12 @@ class DraftTests(unittest.TestCase):
         for field,value in [('Amount',90),('SalesItemLineDetail',{'ItemRef':{'value':'2'},'Qty':1})]:
             changed={**p,'Line':[{**p['Line'][0],field:value}]}
             with self.assertRaises(ValueError):assert_receipt_matches(p,changed)
+    def test_existing_receipt_qbo_default_deposit_is_not_a_mismatch(self):
+        p=dict(DocNumber='SR',TxnDate='2026-10-01',Line=[dict(DetailType='SalesItemLineDetail',Amount=100,SalesItemLineDetail={'ItemRef':{'value':'1'},'Qty':1})])
+        posted={**p,'DepositToAccountRef':{'value':'72'}}
+        assert_receipt_matches(p,posted)
+        with self.assertRaises(ValueError):
+            assert_receipt_matches({**p,'DepositToAccountRef':{'value':'35'}},posted)
     def test_reconcile_failure_holds_future_posts_no_automatic_clear(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch('code_scripts.operations_controls.posting_hold_path',return_value=Path(tmp)/'hold.json'):
             require_reconciliation_match('company_b',{'status':'MISMATCH'});assert_no_posting_hold()

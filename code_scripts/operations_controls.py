@@ -204,6 +204,11 @@ def receipt_signature(payload):
 def assert_receipt_matches(expected,actual):
     a,b=receipt_signature(expected),receipt_signature(actual)
     for field in ('date','doc','deposit','payment','memo'):
+        # The uploader leaves DepositToAccountRef (and sometimes PaymentMethodRef) unset so QBO
+        # applies its default (Undeposited Funds); the posted receipt then carries that default.
+        # Only compare those fields when our payload actually sets them.
+        if field in ('deposit','payment') and not a[field]:
+            continue
         if a[field]!=b[field]:raise ValueError('Existing QBO receipt '+field+' mismatch')
     if a['lines'].keys()!=b['lines'].keys():raise ValueError('Existing QBO receipt item identity mismatch')
     for key in a['lines']:
