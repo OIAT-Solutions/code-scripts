@@ -106,3 +106,34 @@ def hold_global_lock(holder: str) -> Iterator[LockResult]:
     finally:
         if result.acquired:
             lock.release()
+
+
+def global_lock_is_free() -> bool | None:
+    """Return True when no process holds the global run lock, False when one does.
+
+    Probes with a non-blocking acquire that is released immediately and never
+    writes to the lock file. The OS releases an flock when its holder dies, so a
+    free lock is a reliable "nothing is running" signal even after container
+    restarts reuse PIDs. Returns None when the probe cannot be made (Windows,
+    unopenable lock file); callers must then fall back to other checks.
+    """
+    if os.name == "nt":  # pragma: no cover
+        return None
+    try:
+        handle = open(lock_file_path(), "a+", encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        except OSError:
+            return None
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        return True
+    finally:
+        handle.close()

@@ -39,6 +39,8 @@ The OIAT Portal shows Company A without any new write action (phase 1). It reads
 
 Approvals, clearing the hold and "Run now" are not in the portal yet (see the roadmap §4/§5). Do them as described below.
 
+**Stuck portal runs.** A portal run left "running" by a dead process (e.g. a container restart; found 3 Oct 2026: a Company B run stuck since 21 Aug blocked every Company B schedule) is now closed automatically by the scheduler every cycle and before a manual "Run now". It is marked failed with "Marked failed: the run stopped without reporting back (detected …)" plus the reason, and a "Run failed" event, when: the global run lock (`STATE_ROOT/logs/.oiat_global_run.lock`) is free for a sales run older than 5 minutes; or its PID is gone / now belongs to a newer process and its log has been quiet 15 minutes; or it has run longer than `OIAT_RUNJOB_MAX_HOURS` (default 6). A skip now names the blocking run and how long it has run. Manual check: `python manage.py reconcile_run_jobs`. The lock is shared with the `akponora-ops` daily run, so the daily run holding it never makes a portal run look stale.
+
 ---
 
 ## Catalogue sync
