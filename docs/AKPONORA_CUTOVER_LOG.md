@@ -129,3 +129,19 @@ Evidence: `/data/ops/company_a/daily/2026-10-02/run_170000Z/`. The Slack start a
   - 28 and 30 Sep were planned READY but not posted (posting stops for the run after a stop).
   - Undeposited Funds after the run: ₦33,912,599.99.
 
+## 3 Oct 2026 (evening): deploy of the first-run fixes, Goldplates 2 Oct, deposits 27, 28 and 30 Sep
+
+- **Deploy** (rebuild ~20:20 Lagos; server at `b14ba1a`): deposit memo-tag recognition, the new Slack summary, the PO detail cache, Inbox banners, routine suppliers, aged-day escalation, the SQLite timeout, and the stale-lock fix. The May `.tar.gz` backups are no longer in the image. The PO cache was seeded from tonight's bills evidence (74 POs, 252 KB).
+- **Goldplates 2 Oct:**
+  - The 19:00 Lagos job was queued behind a stale portal RunLock: the 21 Aug job had been marked failed by hand without releasing the lock.
+  - Marvin released the lock; the run posted, reconcile MATCH, ₦15,484,400.
+  - The job record says "failed" because the stuck-run detector caught it: the manual dispatch left no process monitoring it. That label is cosmetic; the artifact is ingested and Home and the Inbox show the day confirmed.
+  - Fixed in `b14ba1a`: a finished job's lock no longer holds the queue.
+- **Deposits posted** (Marvin chat yes, approval ref "Marvin chat yes 2026-10-03: bank 27, 28, 30 Sep (N10,981,000)"); plan `/data/ops/company_a/uf_deposits/preview_20261003b/`:
+  - 27 Sep: 4 deposits + 4 true-up transfers (kept Deposit 80514); the day totals 5 deposits, ₦4,080,500.
+  - 28 Sep: 5 deposits + 5 transfers, ₦3,113,300.
+  - 30 Sep: 6 deposits + 5 transfers, ₦3,965,950.
+  - Every entry was verified on post; a QBO read-back shows the per-day deposit totals equal the sales.
+  - All three days are DEPOSITED in days.json. Undeposited Funds went from ₦33,912,599.99 to **₦22,931,599.99**.
+  - Still held (CASH (System 1) box blank on the till sheet): 25, 26 and 29 Sep, and 1 and 2 Oct.
+

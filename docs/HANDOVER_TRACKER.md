@@ -90,12 +90,13 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
      - **rebuild once after tonight's runs** (`git pull`, build, `up -d`), so `.dockerignore` removes the backups from the image and the image picks up `152dea2`;
      - Marvin's decisions: GitHub merged-branch deletes, zip the May evidence, website-log retention (`/data/db.sqlite3` 1.8 GB), `main` vs `master`, the `tender-bell` / `d618` drafts, root `Uploaded/`.
 4g. [ ] **Nightly read-only checker** (idea agreed in principle; Marvin said hold off to avoid bloat). Revisit after the clean-up.
-4h. [ ] **Fixes from the first live run (3 Oct), all pushed, deploying in one rebuild after Goldplates' 19:00 Lagos run:**
+4h. [x] **Fixes from the first live run (3 Oct), all pushed, deploying in one rebuild after Goldplates' 19:00 Lagos run:**
    - `6bef54a`: deposits are recognised by the memo tag (QBO keeps no DocNumber on Deposits).
    - `dca1592` / `c555d58`: the Slack summary is grouped by who acts (You / Store / OIAT). The bills step caches unchanged earlier POs and prunes the cache to the look-back window, so the bills step goes from 18 min to about 2–3.
    - `9b20bbf`: the Inbox banners use the Home rule. The 1 Oct record (MATCH) was copied from the Mac and ingested on the server.
    - `36596e8`: routine repeat-order suppliers (`routine_repeat` exclusion kind plus the Inbox button "Approve · routine supplier"); the bill "Don't ask again" relabelled "Handled outside, never post"; deposit days not banked for more than 7 days become an OIAT to-do; SQLite busy timeout of 20 s.
-   - **After the rebuild:** seed the PO cache from tonight's bills evidence; run a read-only `uf_deposits plan` (27 Sep should be READY, keeping 80514); then bank 27, 28 and 30 Sep with Marvin's yes.
+   - ✅ **Deployed 3 Oct ~20:20 Lagos** (`b14ba1a`). PO cache seeded. 27, 28 and 30 Sep banked with Marvin's yes (₦10,981,000; Undeposited Funds is now ₦22,931,599.99). See the cutover log.
+   - Next: watch the 4 Oct 18:00 run. Expect: the start message, the new summary, the bills step in about 2–3 min, and deposits for any day whose till sheet is complete.
 5. [ ] **Goldplates corrections:** the ₦2.65M July late syncs and the 2 receipts for 22 Jun (prepare, then Marvin approves).
 6. [ ] **Master product setup** (team's Master Product Review; `docs/AKPONORA_STAFF_CHECKLIST.md`): **parked by Marvin.** Do not start without his yes.
 7. [ ] **Later:** repo clean-up phase 2, the client dashboard, and the W10 legacy retirement (see the roadmap).
