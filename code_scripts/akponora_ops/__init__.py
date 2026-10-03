@@ -4,7 +4,9 @@
 - ``bills_sync``: received EPOS purchase orders -> reviewable QBO Bills on AKP- items.
 - ``item_guard``: read-only daily scan of QBO for items / lines that break the October contract.
 - ``vendors``: fuzzy vendor matching + gated automatic vendor creation (used by ``bills_sync``).
-- ``daily_run``: the single scheduled routine (catalogue -> vendors+bills -> sales -> guard).
+- ``uf_deposits``: Undeposited Funds -> bank deposits + true-up transfers from the till sheet
+  (``till_sheet`` reads the Google Sheet / xlsx).
+- ``daily_run``: the single scheduled routine (catalogue -> vendors+bills -> sales -> guard -> uf).
 - ``ops_scheduler``: cron runner for ``daily_run`` (or the individual jobs).
 
 Every production write is off by default and gated (see AGENTS.md and

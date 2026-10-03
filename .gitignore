@@ -124,3 +124,7 @@ caddy-root.crt
 
 # Header-only conversion template (no live products or stock)
 !templates/product_conversion_empty.csv
+# Till sheet line -> QBO bank template (account numbers only, no secrets)
+!templates/till_accounts_company_a.csv
+# Google service-account keys (STATE_ROOT/secrets only)
+google_service_account*.json

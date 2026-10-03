@@ -52,6 +52,11 @@ logs
 **/*.csv
 # entrypoint.sh copies this header-only template into STATE_ROOT on first start
 !templates/product_conversion_empty.csv
+# entrypoint.sh seeds STATE_ROOT/mappings/company_a/till_accounts.csv from this (no secrets)
+!templates/till_accounts_company_a.csv
+# Google service-account keys live only in STATE_ROOT/secrets
+**/google_service_account*.json
+secrets
 **/uploaded_docnumbers*.json
 **/qbo_tokens*.sqlite
 *.sqlite3

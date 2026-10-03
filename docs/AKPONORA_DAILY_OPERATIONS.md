@@ -21,7 +21,7 @@ One routine runs everything, in order, for the last closed business day. On the 
 | 2 | **bills** | `bills_sync scheduled`: received POs (that day + earlier pending days) → **unpaid** Bills. New suppliers → QBO vendor (gated); near matches HOLD. PO payment mode → Bill memo hint |
 | 3 | **sales** | `run_pipeline --target-date <day>` via the standing auto-approval; without it, a dry-run and exit 3. Skipped while the posting hold is in place |
 | 4 | **guard** | `item_guard`: read-only, report only |
-| 5 | **uf** | Undeposited Funds placeholder (`OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`): balance + days since last deposit. Never deposits |
+| 5 | **uf** | `uf_deposits scheduled`: each day's receipts in Undeposited Funds → Bank Deposits by the till sheet + true-up transfers (below). Off unless `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`; posts only with `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref |
 
 Exit 0 = clean, 3 = waits for review, 2 = a step failed. One Slack summary; evidence under `STATE_ROOT/ops/company_a/daily/<day>/`. It holds the global run lock. While `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`, the portal scheduler never schedules Company A, and the individual job crons below are ignored. Each job below can still be run on its own.
 
@@ -69,6 +69,25 @@ Until the server is on, sales are still posted by hand from this repo (dry-run, 
 - Vendor map: `STATE_ROOT/mappings/company_a/vendors.csv` (human-approved from `vendors-suggest`, or `auto:<ref>` rows).
 - **Automatic vendors** (`scheduled` only, never `plan`; off by default): when a PO supplier is not in vendors.csv, it is scored against all live QBO vendors. Best score < 0.75 (genuinely new) → created with DisplayName = the cleaned EPOS supplier name, provided `OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1`, `OIAT_COMPANY_A_VENDOR_APPROVAL_REF` is set, the name is free across Vendors/Customers/Employees, and the per-run cap is not reached (`OIAT_COMPANY_A_VENDOR_AUTO_MAX`, default 5). Score ≥ 0.75 (possible typo/duplicate) → HOLD with the candidates. Evidence: `vendor_actions.json`. Shared code with `vendor_admin`: `code_scripts/akponora_ops/vendors.py`.
 - **Automated post** (off by default): `OIAT_COMPANY_A_BILLS_AUTO_POST=1` + approval ref + per-bill / per-run caps.
+
+---
+
+## Undeposited Funds deposits (till sheet)
+
+```bash
+.venv/bin/python -m code_scripts.akponora_ops.uf_deposits plan --date 2026-10-01 --out outputs/uf_deposits_<day>
+#   offline: add --sheet-xlsx <download of the sheet>.xlsx
+# after review, chat yes:
+.venv/bin/python -m code_scripts.akponora_ops.uf_deposits post --plan-dir outputs/uf_deposits_<day>/2026-10-01 \
+  --approval-ref "<chat yes>" --expect-sha <payloads_sha256 from 2026-10-01/summary.json>
+```
+
+- Source: the Google Sheet "Nora Mart Daily Sales Account Breakdown", read live by a read-only service account (`OIAT_COMPANY_A_TILL_SHEET_SA_KEY`, default `STATE_ROOT/secrets/google_service_account.json`; setup in [`SERVER_SETUP.md`](SERVER_SETUP.md) §12). Box → bank map: `STATE_ROOT/mappings/company_a/till_accounts.csv` (seeded from `templates/till_accounts_company_a.csv`).
+- Method (same as 26 Sep): whole receipts are deposited by tender (Cash → 100100, Card → card banks, Transfer → transfer banks, mixed → both) with LinkedTxn (minorversion 65, `TxnLineId 0`); then Bank→Bank true-up transfers make each bank's day total = sheet amount × receipts total / sheet total. Deposits follow the receipts; the mix follows the sheet. DocNumber `UF<yymmdd><bank no>`; transfer memo tag `UFTU <day> <from>><to>`; every memo `UF deposit <day> from till sheet; approval <ref>`.
+- Holds (and later days wait): blank or unfinished sheet day (a CASH box or SYSTEM empty), unmapped / inactive till line, sheet vs receipts beyond max(₦1,000, 0.5 %) (`OIAT_COMPANY_A_UF_TOLERANCE`, `OIAT_COMPANY_A_UF_TOLERANCE_PCT`), receipts deposited by hand, closed period, missing bank, or above `OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL` (₦15M) in automatic mode.
+- Cursor `STATE_ROOT/ops/company_a/uf_deposits/cursor.json` (floor 2026-09-25) moves only over fully deposited days.
+- Automatic (chat yes to enable): `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + `OIAT_COMPANY_A_UF_APPROVAL_REF`. Enabled alone = plan every day, nothing posted.
+- The old cutover scripts (`akponora_cutover/uf_*`) are history (26 Sep); `uf_allocation_draft` now uses the same sheet parser (`akponora_ops/till_sheet.py`).
 
 ---
 
@@ -136,7 +155,7 @@ W9 env (server `.env`, chat yes): `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`, `
 - September deliveries billed late: against GRNI `210200`, not stock items.
 - Do **not** create new QBO items by hand. Do **not** use `LEGACY —` items or catch-all `15030`.
 - Customer invoices: new items + matching EPOS stock-out. No `SR-` invoice numbers.
-- Undeposited Funds (`100900`): deposit from the till sheet (`akponora_cutover/uf_*`). A teammate is connecting the Daily Sales Account Breakdown sheet → server → QBO (review later).
+- Undeposited Funds (`100900`): do not deposit sales receipts by hand. `uf_deposits` (daily run step 5) deposits them from the till sheet; staff must fill every day's sheet block (both CASH boxes and SYSTEM, 0 where nothing).
 
 ---
 
@@ -144,7 +163,7 @@ W9 env (server `.env`, chat yes): `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`, `
 
 | Allowed without asking | Needs chat yes | Forbidden |
 | --- | --- | --- |
-| `plan`, `vendors-suggest`, `item_guard`, dry-runs, mapping files on disk | `catalogue_sync apply`, `bills_sync post`, enabling any `*_AUTO_*` / before-sales hook / W9, InventoryAdjustment, UF deposits, Bill Payments | Delete/inactivate products; patch legacy qty; create items with default qty; October sales to catch-all or legacy |
+| `plan` (incl. `uf_deposits plan`), `vendors-suggest`, `item_guard`, dry-runs, mapping files on disk | `catalogue_sync apply`, `bills_sync post`, enabling any `*_AUTO_*` (incl. `OIAT_COMPANY_A_UF_AUTO_POST`) / before-sales hook / W9, InventoryAdjustment, `uf_deposits post`, Bill Payments | Delete/inactivate products; patch legacy qty; create items with default qty; October sales to catch-all or legacy |
 
 ---
 

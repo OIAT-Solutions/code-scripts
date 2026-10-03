@@ -29,7 +29,10 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | Confirm the 11 items that went negative on 1 Oct come back up as the 1–2 Oct bills post | Agent |
 | [ ] | Enter the real **September** supplier invoices against `210200 Goods Received Not Invoiced` (not stock items) as they arrive; GRNI balance should fall towards 0 | Bookkeeper |
 | [ ] | Resume customer invoices (Gold Plates etc.) on the new items only, with EPOS stock-out; no `SR-` numbers | Bookkeeper (after the invoice tool is repurposed, §4) |
-| [ ] | Undeposited Funds: fill the till sheet for 25, 26 and 29 Sep; deposit 25 Sep onwards (₦29.2M+) by the till-sheet method | Staff, then Agent |
+| [x] 2026-10-03 | Undeposited Funds automation built: `uf_deposits` = daily run step 5 (till sheet → Bank Deposits + true-up transfers, gated, off by default). Branch `claude/akponora-uf-deposits` | Agent |
+| [ ] | Till sheet access: Google service account (read-only) + share the sheet as Viewer + key in `/data/secrets/` (`SERVER_SETUP.md` §12) | Marvin (OIAT Admin) |
+| [ ] | Staff: fill the till sheet for 25, 26 and 29 Sep (blank, so they hold every later day) | Staff |
+| [ ] | `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` (plan only); review the 25 Sep → today plans; then post (₦29.2M+ for 25 Sep–1 Oct) by hand or set `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref (chat yes) | Marvin + Agent |
 | [ ] | Send the updated freeze note / new rules to the bookkeeper | Marvin |
 | [ ] | QBO closing date → 30/09/2026 (optional but recommended) | Marvin |
 

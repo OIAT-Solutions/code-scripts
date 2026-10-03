@@ -86,7 +86,7 @@ Enabling any automated write mode on production is a chat-yes action.
 
 Open items:
 
-- Undeposited Funds `100900` ₦29,233,799.99 (25 Sep–1 Oct receipts) awaits the till-sheet deposits; 25, 26 and 29 Sep sheets were blank. A teammate is building the "Daily Sales Account Breakdown" sheet → server → QBO deposit flow (review later).
+- Undeposited Funds `100900` ₦29,233,799.99 (25 Sep–1 Oct receipts) awaits the till-sheet deposits; 25, 26 and 29 Sep sheets were blank. `uf_deposits` (daily run step 5, branch `claude/akponora-uf-deposits`) is built and off: needs the Google service-account key, then a chat yes (`docs/SERVER_SETUP.md` §12).
 - 11 items went negative on 1 Oct (deliveries not yet billed); they clear when the October bills are posted.
 - **438 legacy items were never renamed** (W5 renamed only the 3,879 whose names clashed with a new item). They have no Sku and no `LEGACY —` prefix; 428 still carry qty (~₦9.14M), so a bookkeeper could pick them. `item_guard` treats any October line on them as an ALERT. Owner to decide: a W5 follow-up rename (chat yes) or accept. List: `outputs/item_guard_firstrun/report.json` → `legacy_not_renamed`.
 - Equity: `300100` −₦531,210,337.71, `300150` ₦427,977,166.81; full clean-up deferred to year end.

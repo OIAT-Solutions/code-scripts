@@ -5,7 +5,7 @@ scheduled only when it is switched on, so an unconfigured server runs nothing.
 
 The single scheduled Company A job (recommended):
 
-  OIAT_COMPANY_A_DAILY_RUN_ENABLED=1   run ``daily_run`` (catalogue -> bills -> sales -> guard)
+  OIAT_COMPANY_A_DAILY_RUN_ENABLED=1   run ``daily_run`` (catalogue -> bills -> sales -> guard -> uf)
   OIAT_COMPANY_A_DAILY_RUN_CRON        default "0 6 * * *" (SCHEDULE_TZ, default Africa/Lagos)
 
 While daily_run is on, the portal schedule worker never schedules Company A sales and the

@@ -74,7 +74,7 @@ services:
   # Company A operations (docs/SERVER_SETUP.md). Opt-in profile: set COMPOSE_PROFILES=akponora-ops
   # in .env (or `docker compose --profile akponora-ops up -d akponora-ops`). With
   # OIAT_COMPANY_A_DAILY_RUN_ENABLED=1 it runs the single Company A routine
-  # (`python -m code_scripts.akponora_ops.daily_run`: catalogue -> vendors+bills -> sales -> guard)
+  # (`python -m code_scripts.akponora_ops.daily_run`: catalogue -> vendors+bills -> sales -> guard -> uf deposits)
   # at OIAT_COMPANY_A_DAILY_RUN_CRON (default "0 6 * * *", SCHEDULE_TZ). Individual job crons
   # (OIAT_AKPONORA_<JOB>_CRON) are ignored while the daily run is on. Every QBO write still needs
   # its own approval env vars. Idle (no restart loop) when nothing is switched on.

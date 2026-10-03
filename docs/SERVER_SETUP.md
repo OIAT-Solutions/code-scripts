@@ -12,12 +12,12 @@ One job: `python -m code_scripts.akponora_ops.daily_run`, in the `akponora-ops` 
 | 2 | `bills` | Received EPOS POs (that day, plus earlier days still pending) → **unpaid** Bills. A genuinely new supplier becomes a QBO vendor; a near match waits for review. The PO "MODE OF PAYMENT" (CASH / TRANSFER) goes into the Bill memo as a hint | Vendors: `OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1` + ref (cap 5). Bills: `OIAT_COMPANY_A_BILLS_AUTO_POST=1` + ref (caps) |
 | 3 | `sales` | `run_pipeline --company company_a --target-date <day>`. Posts only through the standing auto-approval gates: 100% mapped, totals = EPOS, no posting hold, mapping SHA. Runs after bills, so stock arrives before it is sold | `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1` + standing ref. Without them it builds a dry-run and the day waits for review |
 | 4 | `guard` | `item_guard`: read-only QBO scan | Never |
-| 5 | `uf` | Undeposited Funds placeholder: reports the `100900` balance and days since the last deposit | Never (off by default) |
+| 5 | `uf` | Undeposited Funds deposits (`uf_deposits`): each business day's SalesReceipts still in `100900` → Bank Deposits into the banks the till sheet names, then Bank→Bank true-up transfers so each bank matches the sheet mix. A day whose sheet is blank / unfinished, whose totals disagree with QBO, or that has an unmapped till line is held, and later days wait (section 12) | `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref (cap ₦15M per day). Enabled without auto post = plan only, days wait for review |
 
 Rules:
 
 - A failed or held step never makes a later step post something inconsistent. If catalogue fails, bills and sales still run, and sales still fails closed on any unmapped product. If sales is held, the guard still runs.
-- It never creates Bill Payments, deposits, InventoryAdjustments or journals, and never edits or deletes existing QBO records.
+- It never creates Bill Payments, InventoryAdjustments or journals, and never edits or deletes existing QBO records. Deposits and bank transfers are created only by the `uf` step, under its own switches.
 - It holds the global run lock for the whole run, so it never overlaps a manual `run_pipeline` or portal run. If the lock is busy, it waits up to 30 minutes, then reports a failure.
 - **No double runs.** While `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`, the portal scheduler never schedules Company A (all-company runs exclude it, and Company A-only schedules are skipped). The individual `OIAT_AKPONORA_<JOB>_CRON` values are also ignored. Company B is unchanged.
 - **Exit codes:** `0` all clean, `3` something waits for review, `2` a step failed.
@@ -71,8 +71,15 @@ OIAT_COMPANY_A_BILLS_APPROVAL_REF="owner bills approval, <date>, <chat ref>"
 OIAT_COMPANY_A_BILLS_AUTO_MAX_BILL=2000000    # larger bills wait for review
 OIAT_COMPANY_A_BILLS_AUTO_MAX_COUNT=20        # per run
 
-# Undeposited Funds placeholder (report only)
-OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=0
+# Undeposited Funds deposits from the till sheet (section 12). Off until the key is installed.
+OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=0           # 1 = plan every day (needs the Google key)
+OIAT_COMPANY_A_UF_AUTO_POST=0                 # 1 = post READY days (chat yes)
+OIAT_COMPANY_A_UF_APPROVAL_REF=               # "owner UF approval, <date>, <chat ref>"
+OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL=15000000 # a day above this waits for a manual post
+OIAT_COMPANY_A_UF_TOLERANCE=1000              # sheet vs receipts: max(N1,000, 0.5% of receipts)
+OIAT_COMPANY_A_UF_TOLERANCE_PCT=0.5
+OIAT_COMPANY_A_TILL_SHEET_ID=15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A
+OIAT_COMPANY_A_TILL_SHEET_SA_KEY=/data/secrets/google_service_account.json
 
 # Leave these UNSET while the daily run is on (they would be ignored anyway):
 # OIAT_AKPONORA_CATALOGUE_SYNC_CRON / OIAT_AKPONORA_BILLS_SYNC_CRON / OIAT_AKPONORA_ITEM_GUARD_CRON
@@ -187,7 +194,7 @@ Akponora daily run 2026-10-02: :warning: waiting for review
 :warning: bills [review] 5 PO(s) 2026-10-02..2026-10-02; posted 4 (READY N312000.00), hold 1 (N40000.00), capped 0, already posted 0; vendors created 1, held 1. Bills left UNPAID | CREATED: WONUOLA SUPER STORE -> QBO 912; HOLD_NEAR_MATCH: NIGERIAN BOTLING CO
 :white_check_mark: sales [ok] post; receipts uploaded 6, skipped 0, failed 0; reconcile MATCH EPOS N3211950.00 / QBO N3211950.00
 :white_check_mark: guard [ok] ALERT 0, WARN 3 (read-only)
-:zzz: uf [disabled] off (...)
+:warning: uf [review] auto-post; deposited 1 day(s): 2026-10-01 N3211950.00 (100100 N401200.00, 100202 N1500300.00, ...); held 1 day(s) from 2026-10-02: CASH (System 1) box is blank (type 0 if there was no cash); Undeposited Funds N3456000.00
 Waiting for review:
 - bill HOLD PO 3999 NIGERIAN BOTLING CO N40000.00: supplier ... not approved in vendors.csv
 - vendor HOLD_NEAR_MATCH: supplier 'NIGERIAN BOTLING CO' looks like an existing QBO vendor (best 0.95): 10 NIGERIAN BOTTLING COMPANY (0.95) ...
@@ -239,7 +246,7 @@ Duplicate-PO holds, unit-cost holds and unmapped-product holds are fixed at the 
 
 | Lagos time | Job | Container | Notes |
 | --- | --- | --- | --- |
-| 06:00 daily | `daily_run` (catalogue → vendors+bills → sales → guard) | `akponora-ops` | The only Company A schedule |
+| 06:00 daily | `daily_run` (catalogue → vendors+bills → sales → guard → uf) | `akponora-ops` | The only Company A schedule |
 | 18:00 daily | Portal all-company sales (`SCHEDULE_CRON`) | `scheduler` | Company B etc.; Company A automatically excluded |
 | — | `OIAT_AKPONORA_*_CRON` individual jobs | `akponora-ops` | Leave unset while `daily_run` is on (ignored unless `OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS=1`) |
 | as needed | `daily_run --date <day> [--only …]` | `akponora-ops` | Catch-up / re-run after a hold |
@@ -249,3 +256,129 @@ Duplicate-PO holds, unit-cost holds and unmapped-product holds are fixed at the 
 - **Everything:** `OIAT_COMPANY_A_DAILY_RUN_ENABLED=0`, then `docker compose up -d akponora-ops scheduler`. Company A then has no schedule at all, unless `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`, which puts it back into the 18:00 portal run.
 - **One kind of write:** set that step's switch to `0` (for example `OIAT_COMPANY_A_BILLS_AUTO_POST=0`). The step keeps planning, and its work waits for review.
 - **Emergency:** `docker compose stop akponora-ops`.
+
+---
+
+## 12. Undeposited Funds deposits (`uf` step) and till sheet access
+
+### What it does
+
+Sales receipts land in Undeposited Funds (`100900`, QBO Id 72). The `uf` step moves each business day's receipts into the banks where the money really went, as written by the store on the Google Sheet **"Nora Mart Daily Sales Account Breakdown"** (owned by OIAT Admin). It uses the same method as the 26 Sep 2026 clean-up of January–24 September: *deposits follow the receipts, the mix follows the sheet*.
+
+For each day from its cursor (`/data/ops/company_a/uf_deposits/cursor.json`, first day 25 Sep 2026) up to the run's business date:
+
+1. It reads the day's block on the sheet (SYSTEM 1 / SYSTEM 2 boxes) and maps every box to a QBO bank with `till_accounts.csv` (below).
+2. It reads the day's SalesReceipts still in Undeposited Funds.
+3. **Gates.** The day is **held** if: the sheet has no block for that day, the block is blank, a CASH box or SYSTEM is empty, a box is not a number, a filled box is not in `till_accounts.csv` (or is `Active=no`), the sheet total and the receipts total differ by more than max(₦1,000, 0.5 % of the receipts), a bank account is missing / inactive / renumbered in QBO, the day is inside the QBO closing date, a receipt was already deposited by hand, or (automatic mode) the day is above ₦15M. A held day stops the later days, so days are always deposited in order.
+4. **Deposits.** Whole receipts go to banks by tender: Cash receipts → the cash bank, Card → the card banks, Transfer → the transfer banks, mixed tenders (`Card/Cash` …) → the union of those banks, each time to the bank with the most of its sheet share still unfilled. One QBO Bank Deposit per bank, `DocNumber UF<yymmdd><bank no>` (e.g. `UF261001100100`), each line linked to its SalesReceipt.
+5. **True-up transfers.** Because whole receipts rarely split exactly like the sheet, Bank→Bank transfers then move the difference so each bank's total for the day equals the sheet amount scaled to the receipts total (for example sheet ₦3,200,000 vs receipts ₦3,199,500: every bank gets its sheet share × 3,199,500 / 3,200,000). No transfer when the receipts already fit. The transfer memo carries `UFTU <day> <from>><to>`.
+6. Every deposit and transfer memo starts `UF deposit <day> from till sheet; approval <ref>`. Each one is re-read and checked after posting. Evidence: `/data/ops/company_a/daily/<day>/run_*/uf/<deposit day>/` (`review.csv` per bank, `receipts.csv`, `payloads.jsonl`, `summary.json`, `results.csv`).
+
+Re-running is safe: receipts already in a `UF…` deposit and transfers with the `UFTU` tag are recognised and never posted twice.
+
+### `till_accounts.csv`
+
+`/data/mappings/company_a/till_accounts.csv` maps each till-sheet line to a QBO bank. The container creates it from `templates/till_accounts_company_a.csv` the first time only; after that the copy in `/data` is the one used (edit it there).
+
+| Column | Meaning |
+| --- | --- |
+| Till sheet line | The line's name on the sheet (for people) |
+| Terminal / TID | The terminal number in brackets on the sheet line, e.g. `[5024249823]`. `-` for CASH. This is what the tool matches on |
+| QBO account number / QBO account Id | The bank in QBO. Both are checked against QBO every run |
+| Kind | `cash`, `card` or `transfer`: which receipts (by tender) may be deposited there |
+| Active | `yes` / `no`. A filled box on an `Active=no` line holds the day |
+| Note | Free text (wallet number etc.) |
+
+Owner-confirmed rows (3 Oct 2026):
+
+| Till sheet line | TID | QBO bank | Kind |
+| --- | --- | --- | --- |
+| CASH (System 1 + System 2) | - | 100100 (Id 29) | cash |
+| ZENITH POS | 1284573680 | 100301 Zenith 1225575438 (Id 1150040044) | card |
+| MONIE POINT POS 1 | 5024249823 | 100207 Moniepoint 4000850527 (Id 1150040041) | card |
+| MONIE POINT POS 2 / TRANSFER | 5397768082 | 100205 Moniepoint 6397730972 (Id 1150040005) | transfer |
+| MONIE POINT POS 3 | 5024245533 | 100206 Moniepoint 4000850479 (Id 1150040040) | card |
+| MONIE POINT POS 4 | 5015892841 | 100201 Moniepoint 4000700275 (Id 1150040001) | card (unused so far) |
+| MONIE POINT POS 5 / TRANSFER | 5688464974 | 100202 Moniepoint 4686987227 (Id 1150040002) | transfer (sales + expenses wallet) |
+
+A new terminal on the sheet holds that day until a row is added here.
+
+### Till sheet access (Google service account)
+
+The server reads the sheet with a Google **service account** that can only **view** it (scope `spreadsheets.readonly`). Do these steps once, signed in as the **OIAT Admin** Google account (the sheet's owner).
+
+**A. Create a Google Cloud project**
+
+1. Open <https://console.cloud.google.com/> and sign in as OIAT Admin. Accept the terms if asked.
+2. Click the project picker at the top left (next to "Google Cloud") → **New project**.
+3. Project name: `oiat-till-sheet`. Leave Location as it is → **Create**. Wait for the notification, then select the new project in the project picker.
+
+**B. Turn on the Google Sheets API**
+
+4. Left menu (☰) → **APIs & Services** → **Library**.
+5. Search `Google Sheets API` → open it → **Enable**. (The Drive API is not needed.)
+
+**C. Create the service account (no roles)**
+
+6. Left menu → **IAM & Admin** → **Service accounts** → **+ Create service account**.
+7. Service account name: `oiat-till-sheet-reader` (the ID fills in). Description: `Reads the Nora Mart till sheet (read-only)`. → **Create and continue**.
+8. "Grant this service account access to project": leave **empty** → **Continue**. "Grant users access": leave empty → **Done**.
+9. Copy the service account's **email** from the list (it looks like `oiat-till-sheet-reader@oiat-till-sheet.iam.gserviceaccount.com`).
+
+**D. Create the JSON key**
+
+10. Click the service account → **Keys** tab → **Add key** → **Create new key** → **JSON** → **Create**. A `.json` file downloads. It is a password: never email it, never commit it, delete the download after step F.
+    - If Google says *"Service account key creation is disabled"*, an organisation policy blocks keys (new Google Workspace organisations have this on by default). A Workspace super-admin opens **IAM & Admin → Organization policies**, finds **"Disable service account key creation"** (`iam.disableServiceAccountKeyCreation`), **Manage policy** → *Override parent's policy* → Enforcement **Off** for the `oiat-till-sheet` project only → **Set policy**, then repeats step 10.
+
+**E. Share the sheet with the service account (Viewer)**
+
+11. Open the sheet "Nora Mart Daily Sales Account Breakdown" (`https://docs.google.com/spreadsheets/d/15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A`).
+12. **Share** → paste the service-account email → role **Viewer** → untick **Notify people** → **Share** (or **Share anyway** if Google warns it is outside the organisation).
+    - If sharing is blocked ("can't share outside your organisation"), the Workspace admin opens <https://admin.google.com> → **Apps → Google Workspace → Drive and Docs → Sharing settings → Sharing options** and allows sharing outside the domain (or adds an allowlist rule that permits it) for the OIAT Admin account's organisational unit, then repeat step 12. Viewer access is all that is needed; never give Editor.
+
+**F. Put the key on the server**
+
+13. Copy the downloaded file to the server (for example over Tailscale), then from the repo folder on the server (PowerShell on Windows):
+
+```powershell
+cd C:\oiat\code-scripts                     # the server checkout (where docker-compose.yml is)
+docker compose cp "$env:USERPROFILE\Downloads\oiat-till-sheet-1234abcd.json" web:/data/secrets/google_service_account.json
+docker compose exec web chmod 600 /data/secrets/google_service_account.json
+docker compose exec web ls -l /data/secrets
+Remove-Item "$env:USERPROFILE\Downloads\oiat-till-sheet-1234abcd.json"   # and empty the Recycle Bin
+```
+
+(Linux/macOS: the same `docker compose cp …` with a normal path.) `/data` is shared by `web` and `akponora-ops`, so copying through `web` is enough.
+
+**G. Env vars** (server `.env`, then `docker compose up -d akponora-ops`; the image must be rebuilt once for the new Python packages: `docker compose build`):
+
+```bash
+OIAT_COMPANY_A_TILL_SHEET_ID=15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A
+OIAT_COMPANY_A_TILL_SHEET_SA_KEY=/data/secrets/google_service_account.json
+OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1      # plan every day; nothing is posted yet
+OIAT_COMPANY_A_UF_AUTO_POST=0            # 1 only after a clean plan and the owner's chat yes
+OIAT_COMPANY_A_UF_APPROVAL_REF=          # "owner UF approval, <date>, <chat ref>"
+OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL=15000000
+OIAT_COMPANY_A_UF_TOLERANCE=1000
+OIAT_COMPANY_A_UF_TOLERANCE_PCT=0.5
+```
+
+**H. Smoke test (read-only: sheet + QBO GET, writes nothing to QBO)**
+
+```bash
+docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits plan --date 2026-10-01 --no-slack
+#   2026-10-01 READY    receipts 3211950.00 sheet 3212000.00 ...      (or HOLD + the reason)
+docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits plan --no-slack
+#   every day from the cursor (25 Sep) to yesterday
+```
+
+- A Google error `403 The caller does not have permission` means step 12 (sharing) is missing; `404` means the sheet id is wrong; "key not found" means step 13.
+- Without Google access you can still check a day from a download of the sheet: `… uf_deposits plan --date <day> --sheet-xlsx /data/ops/nora_sales.xlsx`.
+- Open `<out>/<day>/review.csv`: per bank the sheet amount, the scaled target, the deposited receipts, the true-up in/out and the final (= target).
+
+### Posting
+
+- **By hand (chat yes per day):** `python -m code_scripts.akponora_ops.uf_deposits post --plan-dir <out>/<day> --approval-ref "<chat yes>" --expect-sha <payloads_sha256 from <day>/summary.json>`. It re-checks every receipt and DocNumber live first, posts the deposits, then the transfers, verifies each, and can be re-run after a failure (`results.csv`).
+- **Automatic:** with `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`, `OIAT_COMPANY_A_UF_AUTO_POST=1` and `OIAT_COMPANY_A_UF_APPROVAL_REF` set (chat yes), the daily run posts every READY day in order, up to ₦15M per day.
+- **Held day:** fix the cause (staff fill the sheet, type 0 in an empty CASH box, add a terminal to `till_accounts.csv`, or investigate a total difference). The next run retries from the cursor. The cursor only moves past days that are fully deposited.
+- `--dry-run` on the daily run plans only and never moves the cursor.

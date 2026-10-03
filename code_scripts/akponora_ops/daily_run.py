@@ -17,13 +17,19 @@ Default business date = the last CLOSED Lagos business day (05:00 cutoff): run a
    the day waits for review. Runs after bills so stock arrives before it is sold. Skipped when
    the posting hold is already in place.
 4. ``guard``      item_guard read-only scan (report only).
-5. ``uf``         Undeposited Funds placeholder, off unless ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``:
-   reports the 100900 balance and days since the last deposit. Never deposits.
+5. ``uf``         Undeposited Funds deposits from the till sheet (``uf_deposits``), off unless
+   ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``. For each business day from its cursor up to this one:
+   the day's SalesReceipts still in Undeposited Funds are deposited (LinkedTxn) into the banks the
+   "Nora Mart Daily Sales Account Breakdown" sheet names, plus Bank->Bank true-up transfers so each
+   bank matches the sheet mix. Posts only with ``OIAT_COMPANY_A_UF_AUTO_POST=1`` and
+   ``OIAT_COMPANY_A_UF_APPROVAL_REF`` (cap ``OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL``); otherwise the
+   plan waits for review. A held day (blank sheet, totals off, unmapped till line ...) stops later
+   days. Runs in-process after sales and guard; a failure here never affects the other steps.
 
 A failed / held step never makes a later step write something inconsistent: each later step has
 its own fail-closed gates, and the sales step never runs while the posting hold is in place.
 ``--dry-run`` writes nothing to QBO (catalogue/bills ``plan``, ``run_pipeline --dry-run``,
-item_guard without advancing its cursor) and sends Slack only with ``--slack``.
+item_guard without advancing its cursor, uf_deposits plan only) and sends Slack only with ``--slack``.
 
 Exit 0 = all clean, 3 = something waits for review, 2 = a step failed (or the run lock stayed
 busy). Writes ``summary.json`` and sends ONE Slack summary (``OIAT_AKPONORA_OPS_SLACK_WEBHOOK_URL``,
@@ -57,7 +63,6 @@ DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
 UF_ENV = "OIAT_COMPANY_A_UF_DEPOSIT_ENABLED"
-UF_ACCOUNT_NUMBER = "100900"
 
 OK, REVIEW, FAILED, SKIPPED, DISABLED = "ok", "review", "failed", "skipped", "disabled"
 EXIT_OK, EXIT_FAILED, EXIT_REVIEW = 0, 2, 3
@@ -128,12 +133,13 @@ def send_summary_slack(text: str) -> None:
 
 
 class DailyRun:
-    """The ordered routine. ``runner`` / ``slack`` / ``uf_client`` are injectable for tests."""
+    """The ordered routine. ``runner`` / ``slack`` / ``uf_client`` / ``uf_write_client`` / ``uf_sheet``
+    are injectable for tests."""
 
     def __init__(self, business_day: str, *, dry_run: bool = False, only: list[str] | None = None,
                  root: Path | None = None, runner: Callable = run_command, slack: Callable | None = None,
-                 send_slack: bool = True, env: dict | None = None, uf_client=None,
-                 python: str = sys.executable):
+                 send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
+                 uf_sheet=None, python: str = sys.executable):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
@@ -142,6 +148,8 @@ class DailyRun:
         self.send_slack = send_slack
         self.base_env = dict(os.environ if env is None else env)
         self.uf_client = uf_client
+        self.uf_write_client = uf_write_client
+        self.uf_sheet = uf_sheet
         self.python = python
         stamp = datetime.now(timezone.utc).strftime("%H%M%SZ")
         self.day_dir = Path(root) if root else _daily_root() / business_day
@@ -325,20 +333,50 @@ class DailyRun:
             res.detail = f"item_guard exited {rc}; see {out / 'log.txt'}"
 
     def step_uf(self, res: StepResult) -> None:
-        """Placeholder: report-only Undeposited Funds view. Never deposits or transfers."""
-        if not truthy(self.base_env.get(UF_ENV)):
+        """Undeposited Funds deposits from the till sheet (uf_deposits ``scheduled``, in-process)."""
+        from code_scripts.akponora_ops import uf_deposits as ufd
+
+        s = ufd.settings(self.base_env)
+        if not s["enabled"]:
             res.status = DISABLED
-            res.detail = f"off ({UF_ENV}=1 to report the Undeposited Funds balance)"
+            res.detail = f"off ({UF_ENV}=1 to deposit Undeposited Funds from the till sheet)"
             return
         client = self.uf_client
         if client is None:
             from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
 
             client = QBOClient.for_company_a(allow_writes=False)
-        res.counts = uf_report(client, as_of=date.fromisoformat(self.date))
-        dump_json(Path(res.out) / "uf.json", res.counts)
-        res.status = OK
-        res.detail = "report only - deposits are not automated"
+        source = self.uf_sheet or ufd.sheet_source(s)
+        accounts = ufd.load_accounts(ufd.accounts_path(s))
+        r = ufd.run_scheduled(Path(res.out), business_day=self.date, client=client, source=source, s=s,
+                              accounts=accounts, write_client=self.uf_write_client, dry_run=self.dry_run)
+        mode = "dry-run (plan only)" if self.dry_run else ("auto-post" if r["auto_post"] else "plan only")
+        res.counts = {
+            "mode": mode, "window": r["window"], "uf_balance": r["uf_balance"], "cursor": r["cursor"],
+            "deposited": [{"day": d["day"], "total": d["receipts_total"], "by_bank": d["final_by_bank"]}
+                          for d in r["days"] if d["status"] == "DEPOSITED"],
+            "held": [{"day": d["day"], "status": d["status"], "reason": (d["reasons"] or [""])[0]}
+                     for d in r["days"] if d["status"] in ("HOLD", "WAITING")],
+            "ready": [{"day": d["day"], "total": d["receipts_total"], "by_bank": d["final_by_bank"]}
+                      for d in r["days"] if d["status"] == "READY"],
+            "already_done": sum(1 for d in r["days"] if d["status"] == "DONE"),
+        }
+        for d in r["days"]:
+            if d["status"] == "HOLD":
+                res.review.append(f"uf {d['day']} HOLD: {(d['reasons'] or [''])[0][:200]} -> {d['dir']}/review.csv")
+            elif d["status"] == "READY" and not self.dry_run:
+                res.review.append(f"uf {d['day']} READY N{d['receipts_total']} (plan only): {d['post_command']}")
+        waiting = [d for d in r["days"] if d["status"] == "WAITING"]
+        if waiting:
+            res.review.append(f"uf: {len(waiting)} later day(s) wait for the held day "
+                              f"({waiting[0]['day']}..{waiting[-1]['day']})")
+        if r["stopped"]:
+            res.status = FAILED
+            res.detail = f"post stopped: {r['stopped']}"
+        elif r["waiting"]:
+            res.status = REVIEW
+        else:
+            res.status = OK
 
     # ------------------------------------------------------------ orchestration
     def execute(self) -> dict:
@@ -414,8 +452,19 @@ def step_line(r: dict) -> str:
     elif name == "guard":
         body = f"ALERT {c.get('alert', 0)}, WARN {c.get('warn', 0)} (read-only)"
     elif name == "uf":
-        body = (f"Undeposited Funds N{c.get('balance')}, last deposit {c.get('last_deposit_date') or 'none'}"
-                f" ({c.get('days_since_last_deposit')} day(s)) - report only")
+        bits = [c.get("mode", "")]
+        dep = c.get("deposited") or []
+        bits.append(f"deposited {len(dep)} day(s)" + (": " + "; ".join(
+            f"{d['day']} N{d['total']} (" + ", ".join(f"{k} N{v}" for k, v in (d.get("by_bank") or {}).items()) + ")"
+            for d in dep) if dep else ""))
+        if c.get("ready"):
+            bits.append("ready, not posted: " + ", ".join(f"{d['day']} N{d['total']}" for d in c["ready"]))
+        held = c.get("held") or []
+        if held:
+            first = held[0]
+            bits.append(f"held {len(held)} day(s) from {first['day']}: {first['reason'][:160]}")
+        bits.append(f"Undeposited Funds N{c.get('uf_balance')}")
+        body = "; ".join(b for b in bits if b)
     else:
         body = ""
     detail = r.get("detail") or ""
@@ -467,21 +516,6 @@ def sales_stats(day: str, *, since: float | None = None) -> dict:
     return {}
 
 
-def uf_report(client, *, as_of: date) -> dict:
-    """Undeposited Funds (100900) balance and days since the last Deposit. GET only."""
-    rows = client.query(f"select * from Account where AcctNum = '{UF_ACCOUNT_NUMBER}'").get("Account") or []
-    if not rows:
-        rows = client.query("select * from Account where Name = 'Undeposited Funds'").get("Account") or []
-    rows = rows if isinstance(rows, list) else [rows]
-    acct = rows[0] if rows else {}
-    deps = client.query("select * from Deposit orderby TxnDate desc maxresults 1").get("Deposit") or []
-    deps = deps if isinstance(deps, list) else [deps]
-    last = deps[0].get("TxnDate") if deps else ""
-    days = (as_of - date.fromisoformat(last)).days if last else None
-    return {"account_id": acct.get("Id", ""), "balance": acct.get("CurrentBalance"),
-            "last_deposit_date": last, "days_since_last_deposit": days}
-
-
 def _daily_root() -> Path:
     setup_env()
     from code_scripts.paths import STATE_ROOT
@@ -525,7 +559,7 @@ def parse_only(text: str | None) -> list[str] | None:
 
 
 def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = None, sleep=time.sleep,
-         uf_client=None) -> int:
+         uf_client=None, uf_write_client=None, uf_sheet=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--date", help="business date YYYY-MM-DD (default: last closed Lagos business day)")
     ap.add_argument("--dry-run", action="store_true", help="write nothing to QBO; no Slack unless --slack")
@@ -551,7 +585,7 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
         return EXIT_FAILED
     try:
         run = DailyRun(day, dry_run=a.dry_run, only=a.only, runner=runner, slack=slack, send_slack=send,
-                       uf_client=uf_client)
+                       uf_client=uf_client, uf_write_client=uf_write_client, uf_sheet=uf_sheet)
         summary = run.execute()
     finally:
         lock.release()

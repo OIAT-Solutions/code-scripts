@@ -219,24 +219,21 @@ class DailyRunTests(unittest.TestCase):
         self.assertIn(str(Path(summary["run_dir"]) / "bills" / "review.csv"), text)
         self.assertIn("HOLD_NEAR_MATCH", text)
 
-    def test_uf_placeholder_reports_only(self):
-        class UF:
-            def __init__(self):
-                self.queries = []
+    def test_uf_step_runs_in_process_after_guard(self):
+        # the step itself is covered in test_uf_deposits.DailyRunUFTests; here: ordering + isolation
+        seen = []
 
-            def query(self, sql):
-                self.queries.append(sql)
-                if "from Account" in sql:
-                    return {"Account": [{"Id": "1150040005", "CurrentBalance": 29233799.99}]}
-                return {"Deposit": [{"TxnDate": "2026-09-24"}]}
+        def fake_uf(_self, res):
+            seen.append([r.name for r in _self.results])
+            raise RuntimeError("sheet unreachable")
 
-        uf = UF()
-        env = {**STANDING, dr.UF_ENV: "1"}
-        summary = self.make(FakeRunner(), env=env, uf_client=uf, only=["uf"]).execute()
+        with mock.patch.object(dr.DailyRun, "step_uf", fake_uf):
+            summary = self.make(FakeRunner(), env={**STANDING, dr.UF_ENV: "1"}).execute()
+        self.assertEqual(seen, [["catalogue", "bills", "sales", "guard"]])
         step = {s["name"]: s for s in summary["steps"]}["uf"]
-        self.assertEqual(step["status"], dr.OK)
-        self.assertEqual(step["counts"]["days_since_last_deposit"], 8)
-        self.assertTrue(all(q.lower().startswith("select") for q in uf.queries))
+        self.assertEqual(step["status"], dr.FAILED)
+        self.assertIn("sheet unreachable", step["detail"])
+        self.assertEqual({s["name"]: s["status"] for s in summary["steps"]}["sales"], dr.OK)
 
     def test_business_date_is_last_closed_lagos_day(self):
         tz = ZoneInfo("Africa/Lagos")

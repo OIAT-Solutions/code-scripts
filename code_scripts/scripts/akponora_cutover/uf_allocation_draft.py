@@ -29,6 +29,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from code_scripts.akponora_ops.till_sheet import HEADING_RE, parse_heading as _parse_heading_date, parse_rows
 from code_scripts.scripts.akponora_cutover._common import DEFAULT_EVIDENCE_ROOT, resolve_out
 
 TOOL = "uf_allocation_draft"
@@ -49,11 +50,6 @@ MONTHS = [
     "Aug 2026",
     "Sep 2026",
 ]
-HEADING_RE = re.compile(
-    r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+"
-    r"(\d+)(?:st|nd|rd|th)\s+([A-Za-z]+)\s+(20\d{2})",
-    re.I,
-)
 LABEL_MAP = [
     ("ZENITH POS", "zenith_pos", "1284573680"),
     ("MONIE POINT POS 1", "pos1_card", "5024249823"),
@@ -157,13 +153,8 @@ def d2(value: Decimal) -> str:
 
 
 def parse_heading(text: str) -> datetime | None:
-    match = HEADING_RE.search(str(text or "").strip())
-    if not match:
-        return None
-    day = int(match.group(2))
-    month = match.group(3)
-    year = int(match.group(4))
-    return datetime.strptime(f"{day} {month} {year}", "%d %B %Y")
+    day = _parse_heading_date(text)
+    return datetime(day.year, day.month, day.day) if day else None
 
 
 def classify_label(label: str) -> str | None:
@@ -190,56 +181,36 @@ def classify_label(label: str) -> str | None:
 
 
 def parse_month(ws) -> list[dict]:
+    """Day blocks of one month tab, via the shared parser (``akponora_ops.till_sheet``), in the
+    channel layout this draft uses (Decimal 0 for blank boxes)."""
     days: list[dict] = []
-    current: dict | None = None
-    cash_parts: list[Decimal] = []
-
-    def close():
-        nonlocal current, cash_parts
-        if not current:
-            return
+    rows = ws.iter_rows(min_col=1, max_col=2, values_only=True)
+    for day in parse_rows(rows, tab=getattr(ws, "title", "")):
+        current = {
+            "date": day["date"],
+            "zenith_pos": Decimal("0"),
+            "pos1_card": Decimal("0"),
+            "pos2_card": Decimal("0"),
+            "pos2_transfer": Decimal("0"),
+            "pos3_card": Decimal("0"),
+            "pos4_card": Decimal("0"),
+            "pos5_card": Decimal("0"),
+            "pos5_transfer": Decimal("0"),
+            "actual": money(day["actual"]),
+            "system": money(day["system"]),
+            "excess": money(day["excess"]),
+        }
+        cash_parts: list[Decimal] = []
+        for box in day["boxes"]:
+            key = classify_label(box["label"])
+            if key == "cash":
+                cash_parts.append(money(box["value"]))
+            elif key:
+                current[key] = money(box["value"])
         current["cash"] = sum(cash_parts, Decimal("0"))
         current["cash_system1"] = cash_parts[0] if cash_parts else Decimal("0")
         current["cash_system2"] = cash_parts[1] if len(cash_parts) > 1 else Decimal("0")
         days.append(current)
-        current = None
-        cash_parts = []
-
-    for row in ws.iter_rows(min_col=1, max_col=2, values_only=True):
-        label = str(row[0] or "").strip()
-        heading = parse_heading(label)
-        if heading:
-            close()
-            current = {
-                "date": heading.date().isoformat(),
-                "zenith_pos": Decimal("0"),
-                "pos1_card": Decimal("0"),
-                "pos2_card": Decimal("0"),
-                "pos2_transfer": Decimal("0"),
-                "pos3_card": Decimal("0"),
-                "pos4_card": Decimal("0"),
-                "pos5_card": Decimal("0"),
-                "pos5_transfer": Decimal("0"),
-                "actual": Decimal("0"),
-                "system": Decimal("0"),
-                "excess": Decimal("0"),
-            }
-            cash_parts = []
-            continue
-        if current is None:
-            continue
-        key = classify_label(label)
-        if key == "cash":
-            cash_parts.append(money(row[1]))
-        elif key:
-            current[key] = money(row[1])
-        elif label.upper() == "ACTUAL SALES":
-            current["actual"] = money(row[1])
-        elif label.upper() == "SYSTEM":
-            current["system"] = money(row[1])
-        elif label.upper() == "EXCESS":
-            current["excess"] = money(row[1])
-    close()
     return days
 
 
