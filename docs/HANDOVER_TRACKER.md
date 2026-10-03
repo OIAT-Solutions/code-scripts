@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-03 ~10:00 New York (15:00 Lagos) by Claude (session "Repository onboarding").
+**Last updated:** 2026-10-03 ~11:15 New York (16:15 Lagos) by Claude (session "Repository onboarding").
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
 
@@ -38,7 +38,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 **Company A: AKPONORA / NORA MINI MART (`company_a`, realm 9341455406194328)**
 - Live on the new QBO items since 1 Oct: 3,938 Inventory `AKP-` + 492 NonInventory `AKP-NS-`. All 4,316 legacy items are renamed `LEGACY —`. September is closed (journals 76552/76553/76554, offset 80493, reclass 80500). FIFO COGS is working.
-- **Unattended `daily_run` is ON** on the server (`akponora-ops` container) at **18:00 Africa/Lagos** (13:00 New York): products → bills → sales → guard (→ stock and deposits once deployed). Server `.env` has the switches and caps (backup `.env.bak_20261003`). The server build is **`0ad7a1f`**; the newer main-branch code is not deployed yet.
+- **Unattended `daily_run` is ON** on the server (`akponora-ops` container) at **18:00 Africa/Lagos** (13:00 New York): products → bills → sales → guard (→ stock and deposits once deployed). Server `.env` has the switches and caps (backup `.env.bak_20261003`). **Deployed `326e097` at ~15:57 Lagos on 3 Oct** (portal redesign, migrations 0018–0020 applied, `till_accounts.csv` seeded, 78 Goldplates artifacts imported with `ingest_run_history`). Tonight's real runs use this build.
 - **First automatic run: 3 Oct 2026 18:00 Lagos.** It should post 2 Oct sales and the 1–2 Oct bills (PO 3969 is expected to HOLD as a possible duplicate). **Check the Slack summary and the evidence in `/data/ops/company_a/daily/2026-10-02/`.**
 - Vendors: `vendors.csv` maps all 123 EPOS suppliers (15 created, 5 renamed on 2 Oct).
 - Undeposited Funds: ~₦29M+ waiting from 25 Sep onwards. The deposit step is built but **off**; it needs the Google service account (Marvin is setting it up now).
@@ -55,7 +55,9 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 | Item | Who | Where | Status |
 | --- | --- | --- | --- |
-| Portal redesign (inbox, Home, Daily runs, company workspaces, Products & Stock, Deposits, Suppliers) | Codex → Claude subagent | **Merged into the main branch at `a2322b3`** (652 + 535 tests pass). Handover: `docs/PORTAL_REDESIGN_HANDOVER.md`. Not deployed yet | ✅ Ready to deploy |
+| Portal redesign | Codex → Claude subagent | Merged `a2322b3`, **deployed 3 Oct** | ✅ Live |
+| Home page shows false "missing days" (Goldplates 30 + failed banner from the old 21 Aug job; Company A 1 Oct) | **Codex** | Brief: [`CODEX_BRIEF_HOME_CONFIRMATION.md`](CODEX_BRIEF_HOME_CONFIRMATION.md) | 🔄 Investigating |
+| Deposits: till sheet status works live. 27, 28, 30 Sep complete; 25, 26, 29 Sep, 1 and 2 Oct have a blank CASH (System 1) box (the store must enter it, or 0) | Claude / store | `uf_deposits status` | Next: `plan` (read-only), then a one-day test post with Marvin's yes |
 | Google service account for the till sheet | Marvin | Google Cloud project `oiat-ops` (OIAT Admin, no billing) | ✅ **Done 3 Oct.** `oiat-sheets-reader@oiat-ops.iam.gserviceaccount.com` has Viewer access on the sheet. The key is at `/data/secrets/google_service_account.json` (chmod 600; loose copy deleted). A read-only test from the server returned HTTP 200 with all 13 tabs |
 
 ---
@@ -64,7 +66,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 1. [ ] **After 18:00 Lagos:** check Company A's first automatic run (Slack + `/data/ops/company_a/daily/2026-10-02/run_*/summary.json`). Approve PO 3969 if it is genuine (`bills_sync post` with `Approve=yes`), or let the inbox do it after deploy.
 2. [ ] **After 19:00 Lagos:** check that Goldplates 2 Oct posted (portal Daily runs, or a QBO read on the server).
-3. [ ] **Combine and deploy** (after both runs, about 14:30 New York or later):
+3. [x] **Combine and deploy** (done 3 Oct ~15:57 Lagos; dry-run smoke test of 2 Oct in progress) (after both runs, about 14:30 New York or later):
    1. ✅ Portal branch merged (`a2322b3`); screenshots in `outputs/portal_phase1_review/claude-*.png`.
    2. Run both test suites: `python -m unittest discover -s code_scripts/tests -q` and `python manage.py test apps.epos_qbo apps.dashboard apps.core`, with dummy env and a scratch `STATE_ROOT`.
    3. Push.
