@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-03 ~11:15 New York (16:15 Lagos) by Claude (session "Repository onboarding").
+**Last updated:** 2026-10-03 ~11:20 New York (16:20 Lagos) by Codex; Home confirmation fix completed locally (production state below remains Claude's reported deploy state).
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
 
@@ -56,7 +56,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 | Item | Who | Where | Status |
 | --- | --- | --- | --- |
 | Portal redesign | Codex → Claude subagent | Merged `a2322b3`, **deployed 3 Oct** | ✅ Live |
-| Home page shows false "missing days" (Goldplates 30 + failed banner from the old 21 Aug job; Company A 1 Oct) | **Codex** | Brief: [`CODEX_BRIEF_HOME_CONFIRMATION.md`](CODEX_BRIEF_HOME_CONFIRMATION.md) | 🔄 Investigating |
+| Home sales confirmation | **Codex** | Fix `58d6f1a`; [report](CODEX_PORTAL_HOME_CONFIRMATION_REPORT.md) | ✅ Completed 3 Oct locally: imported MATCH records counted, superseded failed warning removed, October Company A artifacts accepted, singular wording fixed. 543 portal + 652 pipeline tests pass. Awaiting deploy outside 17:45–19:30 Lagos. Company A 1 Oct stays unconfirmed if no matching artifact exists. |
 | Deposits: till sheet status works live. 27, 28, 30 Sep complete; 25, 26, 29 Sep, 1 and 2 Oct have a blank CASH (System 1) box (the store must enter it, or 0) | Claude / store | `uf_deposits status` | Next: `plan` (read-only), then a one-day test post with Marvin's yes |
 | Google service account for the till sheet | Marvin | Google Cloud project `oiat-ops` (OIAT Admin, no billing) | ✅ **Done 3 Oct.** `oiat-sheets-reader@oiat-ops.iam.gserviceaccount.com` has Viewer access on the sheet. The key is at `/data/secrets/google_service_account.json` (chmod 600; loose copy deleted). A read-only test from the server returned HTTP 200 with all 13 tabs |
 
@@ -88,7 +88,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 - After finishing anything, **update this file** (sections 2–4), the cutover log (for production writes) and the roadmap ticks. Then commit.
 
 ### Small portal follow-ups (not blocking)
-- "1 days have no confirmed…" should read "1 day has…" (pluralisation).
+- ✅ Pluralisation fixed 3 Oct in `58d6f1a`: "1 day has…" and "View 1 missing day".
 - The company page shows "Next scheduled run: No active schedule recorded" unless the `web` container has the Company A daily-run env. Check it after deploy.
 - Supplier linking is limited to the bills step's suggestion or creating a new supplier; till accounts are view-only.
 - Inbox actions take the global pipeline lock, so they wait while a daily run is active.
