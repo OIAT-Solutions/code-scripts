@@ -26,7 +26,7 @@ def job_outcome(job, artifacts):
 
     confirmed = any(confirmed_artifact(a) for a in artifacts)
     label, sentence, tone = job_message(job, confirmed)
-    if job.scope in (RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC, RunJob.SCOPE_PORTAL_REVIEW):
+    if job.scope in (RunJob.SCOPE_WORKSPACE_READ, RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC, RunJob.SCOPE_PORTAL_REVIEW):
         if job.status == RunJob.STATUS_SUCCEEDED:
             label, sentence, tone = "Finished", "This work finished. Review its recorded result below.", "neutral"
     return dict(label=label, sentence=sentence, tone=tone)

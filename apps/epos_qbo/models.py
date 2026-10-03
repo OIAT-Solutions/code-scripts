@@ -293,12 +293,14 @@ class QboWebhookEvent(models.Model):
 
 
 class RunJob(models.Model):
+    SCOPE_WORKSPACE_READ = "workspace_read"
     SCOPE_PORTAL_REVIEW = "portal_review"
     SCOPE_SINGLE = "single_company"
     SCOPE_ALL = "all_companies"
     SCOPE_INVENTORY_PIPELINE = "inventory_pipeline"
     SCOPE_INVENTORY_SYNC = "inventory_sync"
     SCOPE_CHOICES = [
+        (SCOPE_WORKSPACE_READ, "Company records update"),
         (SCOPE_PORTAL_REVIEW, "Company A review"),
         (SCOPE_SINGLE, "Single Company"),
         (SCOPE_ALL, "All Companies"),
@@ -382,6 +384,8 @@ class RunJob(models.Model):
 
     @property
     def workflow_label(self) -> str:
+        if self.scope == self.SCOPE_WORKSPACE_READ:
+            return "Records update"
         if self.scope == self.SCOPE_PORTAL_REVIEW:
             return "Review"
         if self.scope in {self.SCOPE_SINGLE, self.SCOPE_ALL}:
@@ -671,7 +675,7 @@ class RunSchedule(models.Model):
         choices=SCHEDULE_TYPE_CHOICES,
         default=SCHEDULE_TYPE_RECURRING,
     )
-    scope = models.CharField(max_length=32, choices=[choice for choice in RunJob.SCOPE_CHOICES if choice[0] != RunJob.SCOPE_PORTAL_REVIEW], default=RunJob.SCOPE_ALL)
+    scope = models.CharField(max_length=32, choices=[choice for choice in RunJob.SCOPE_CHOICES if choice[0] not in {RunJob.SCOPE_PORTAL_REVIEW,RunJob.SCOPE_WORKSPACE_READ}], default=RunJob.SCOPE_ALL)
     company_key = models.SlugField(max_length=64, null=True, blank=True)
     cron_expr = models.CharField(max_length=120, blank=True)
     timezone_name = models.CharField(max_length=64, default="UTC")

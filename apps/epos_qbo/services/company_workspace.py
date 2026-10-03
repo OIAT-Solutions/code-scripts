@@ -73,7 +73,14 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
                 activity.append(dict(day=experience.date_value(run.business_date), title="Stock checks" if step.name == "guard" else TAB_LABELS[active],
                     preview=run.dry_run, facts=facts, **outcome,
                     url=reverse("epos_qbo:company-a-run-detail", args=[run.business_date, run.run_id]) + "#step-" + step.name))
-    return dict(company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab":t})) for t in tabs],
+    register_context = {}
+    if key == ops.COMPANY_KEY and active == "products":
+        from .products import context
+        register_context = context(request)
+    if key == ops.COMPANY_KEY and active in {"deposits","settings"}:
+        from .deposits import context
+        register_context.update(context(request))
+    return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab":t})) for t in tabs],
         company_tab=active, company_tab_label=TAB_LABELS[active], company_choices=choices,
         company_sales_page=sales_page, company_decisions=decisions, company_record_errors=errors,
         company_step_activity=activity, company_history_url=reverse("epos_qbo:runs") + "?" + urlencode({"company":key}),

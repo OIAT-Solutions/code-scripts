@@ -1,10 +1,11 @@
 from django.urls import path
 
-from . import views, views_company_a, views_attention, views_experience, webhooks
+from . import views, views_company_a, views_attention, views_experience, views_workspace, webhooks
 
 app_name = "epos_qbo"
 
 urlpatterns = [
+    path("companies/<slug:company_key>/records/update/", views_workspace.update, name="workspace-update"),
     path("admin/", views_experience.admin_home, name="admin-home"),
     path("attention/", views_attention.inbox, name="attention"),
     path("attention/confirm/", views_attention.confirm, name="attention-confirm"),

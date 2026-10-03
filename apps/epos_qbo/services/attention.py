@@ -20,7 +20,7 @@ def safe_path(path):
     path = Path(path)
     resolved = path.resolve()
     allowed_files = {p.parent.resolve() / p.name for p in (ops.posting_hold_path(), ops.state_root() / "mappings/company_a/vendors.csv", ops.ops_root() / "uf_deposits/days.json")}
-    if not resolved.is_relative_to(ops.state_root().resolve()) or (not resolved.is_relative_to(ops.daily_root().resolve()) and resolved not in allowed_files):
+    if not resolved.is_relative_to(ops.state_root().resolve()) or (not resolved.is_relative_to(ops.daily_root().resolve()) and not resolved.is_relative_to((ops.ops_root()/"portal_reads").resolve()) and resolved not in allowed_files):
         raise ValueError("Evidence points outside the state directory")
     if path.is_file() and path.stat().st_size > ops.MAX_VIEW_BYTES:
         raise ValueError("Evidence file is too large")
@@ -93,6 +93,29 @@ def inbox():
             items.append(make_item("hold", "sales", "Sales posting is paused", hold["reason"] or "Review the failed checks before clearing the hold.", approve=not bool(hold["error"])))
     except (OSError, ValueError):
         errors.append("The sales hold could not be read safely. Review the hold file before taking action.")
+    # Latest deposit plans include read-only portal replans as well as daily plans.
+    from .deposits import plan_folders
+    for path in plan_folders():
+        try:
+            summary = document(path)
+            day = summary.get("day") or path.parent.name
+            if not ops.DATE_RE.fullmatch(day) or ("deposit",day) in seen:
+                continue
+            seen.add(("deposit",day))
+            state_file=ops.ops_root()/"uf_deposits/days.json"
+            state=document(state_file).get("days",{}).get(day,{}) if state_file.exists() else {}
+            if state.get("status")=="DEPOSITED" or any(document(p).get("complete") for p in path.parent.glob("post_*.json")):
+                continue
+            held_after_plan = state.get("status")=="HELD" and ops._parse_dt(state.get("updated_at")) and ops._parse_dt(state["updated_at"]).timestamp()>path.stat().st_mtime
+            run=ops.Run(business_date=day,run_id="run_portal_plan",path=path.parent.parent,dry_run=False,status="review")
+            item=make_item("deposit",day,f"Deposits · {day}","; ".join(summary.get("reasons") or []) or "Review the till sheet split before banking this day.",run,path.parent.name,
+                approve=summary.get("status")=="READY" and not held_after_plan and bool(summary.get("payloads_sha256")),skip=True,
+                extra={"sha":summary.get("payloads_sha256",""),"summary":summary})
+            item["paths"].append(state_file);item["snapshot"]=snapshot(item["paths"])
+            item["details_url"]=reverse("epos_qbo:company-detail",args=["company_a"])+"?tab=deposits&day="+day+"#deposit-details"
+            items.append(item)
+        except (OSError,ValueError,TypeError,KeyError,ops.EvidenceError):
+            errors.append("A deposit plan could not be read safely.")
     runs = ops.list_runs()
     done_bills = set()
     for run in runs:

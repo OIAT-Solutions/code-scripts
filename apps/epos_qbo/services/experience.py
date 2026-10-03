@@ -124,7 +124,7 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
     for artifact in artifacts:
         if artifact.run_job_id:
             by_job[artifact.run_job_id].append(artifact)
-    job_query = RunJob.objects.exclude(scope__in=[RunJob.SCOPE_PORTAL_REVIEW, RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC])
+    job_query = RunJob.objects.exclude(scope__in=[RunJob.SCOPE_WORKSPACE_READ, RunJob.SCOPE_PORTAL_REVIEW, RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC])
     if company_key:
         job_query = job_query.filter(Q(company_key=company_key) | Q(id__in=by_job))
     if start:
@@ -171,7 +171,7 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
 
 def other_activity(company_key=""):
     names = dict(CompanyConfigRecord.objects.values_list("company_key", "display_name"))
-    jobs = RunJob.objects.filter(scope__in=[RunJob.SCOPE_PORTAL_REVIEW, RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC])
+    jobs = RunJob.objects.filter(scope__in=[RunJob.SCOPE_WORKSPACE_READ, RunJob.SCOPE_PORTAL_REVIEW, RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC])
     if company_key:
         jobs = jobs.filter(company_key=company_key)
     out = []
@@ -180,7 +180,7 @@ def other_activity(company_key=""):
         if job.status == RunJob.STATUS_SUCCEEDED:
             label, tone = "Finished", "neutral"
         out.append(dict(company=names.get(job.company_key, job.company_key),
-            title="Review decision" if job.scope == RunJob.SCOPE_PORTAL_REVIEW else "Stock check",
+            title="Records update" if job.scope == RunJob.SCOPE_WORKSPACE_READ else "Review decision" if job.scope == RunJob.SCOPE_PORTAL_REVIEW else "Stock check",
             label=label, tone=tone, when=job.created_at, url=reverse("epos_qbo:run-detail", args=[job.id])))
     return out
 
