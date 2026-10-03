@@ -172,6 +172,23 @@ class QueueDispatchTests(TestCase):
         self.assertEqual(queued.status, RunJob.STATUS_QUEUED)
 
 
+    @patch("apps.epos_qbo.services.job_runner.start_run_job")
+    def test_lock_left_by_a_finished_job_never_holds_the_queue(self, start_run_job_mock):
+        """3 Oct 2026: the 21 Aug job was marked failed by hand but kept the lock; the 19:00 Lagos
+        Goldplates run then stayed queued."""
+        for status in (RunJob.STATUS_FAILED, RunJob.STATUS_SUCCEEDED, RunJob.STATUS_CANCELLED):
+            RunLock.objects.all().delete()
+            RunJob.objects.all().delete()
+            owner = RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key="company_b", status=status)
+            RunLock.objects.create(id=1, active=True, holder=f"dashboard:{owner.id}", owner_run_job=owner)
+            queued = RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key="company_b", status=RunJob.STATUS_QUEUED)
+            start_run_job_mock.side_effect = lambda job, command: job
+            dispatched, result = dispatch_next_queued_job()
+            self.assertEqual(result, "started", status)
+            self.assertEqual(dispatched.id, queued.id)
+            self.assertEqual(RunLock.objects.get(pk=1).owner_run_job_id, queued.id)
+
+
 class MonitorProcessTests(TestCase):
     @patch("apps.epos_qbo.services.inventory_review_slack.send_inventory_review_action_failed_notification")
     @patch("apps.epos_qbo.services.job_runner.dispatch_next_queued_job")

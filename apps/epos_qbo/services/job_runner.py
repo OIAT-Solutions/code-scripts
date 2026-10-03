@@ -21,7 +21,7 @@ from code_scripts.slack_notify import build_inventory_review_action_envelope
 from .. import portal_settings
 from ..models import RunJob, RunLock, RunSchedule, RunScheduleEvent
 from .artifact_ingestion import attach_recent_artifacts_to_job
-from .locking import release_run_lock
+from .locking import clear_if_stale, release_run_lock
 
 logger = logging.getLogger(__name__)
 
@@ -487,6 +487,7 @@ def dispatch_next_queued_job() -> tuple[RunJob | None, str]:
     while failure_count < DISPATCH_START_FAILURE_LIMIT:
         with transaction.atomic():
             lock, _ = RunLock.objects.select_for_update().get_or_create(id=1)
+            clear_if_stale(lock)  # a finished job's lock must never hold the queue
             if lock.active:
                 return None, "queued"
 
