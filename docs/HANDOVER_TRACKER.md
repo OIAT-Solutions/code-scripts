@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-03 ~09:15 New York (14:15 Lagos) by Claude (session "Repository onboarding").
+**Last updated:** 2026-10-03 ~10:00 New York (15:00 Lagos) by Claude (session "Repository onboarding").
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
 
@@ -55,7 +55,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 | Item | Who | Where | Status |
 | --- | --- | --- | --- |
-| Finish the portal redesign: Products & Stock, Deposits, Suppliers tabs; wire the approval contracts into the inbox; auto approval reference; tests; screenshots; `docs/PORTAL_REDESIGN_HANDOVER.md` | Claude subagent (took over from Codex) | `/private/tmp/oiat-portal-redesign-phase1`, branch `codex/portal-redesign-phase1` | Running. If it dies, continue from that branch's latest commit. The specs are in `docs/CODEX_BRIEF_PORTAL_REDESIGN.md` and `docs/CODEX_SPEC_DEPOSITS_PAGE.md` |
+| Portal redesign (inbox, Home, Daily runs, company workspaces, Products & Stock, Deposits, Suppliers) | Codex → Claude subagent | **Merged into the main branch at `a2322b3`** (652 + 535 tests pass). Handover: `docs/PORTAL_REDESIGN_HANDOVER.md`. Not deployed yet | ✅ Ready to deploy |
 | Google service account for the till sheet | Marvin | Google Cloud (OIAT Admin) | Steps in `SERVER_SETUP.md` ("Till sheet access"). The key goes to `/data/secrets/google_service_account.json` |
 
 ---
@@ -65,13 +65,12 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 1. [ ] **After 18:00 Lagos:** check Company A's first automatic run (Slack + `/data/ops/company_a/daily/2026-10-02/run_*/summary.json`). Approve PO 3969 if it is genuine (`bills_sync post` with `Approve=yes`), or let the inbox do it after deploy.
 2. [ ] **After 19:00 Lagos:** check that Goldplates 2 Oct posted (portal Daily runs, or a QBO read on the server).
 3. [ ] **Combine and deploy** (after both runs, about 14:30 New York or later):
-   1. When the portal agent finishes, review its handover and screenshots, then merge `codex/portal-redesign-phase1` into `cursor/post-akponora-qbo-writes-51f3`.
+   1. ✅ Portal branch merged (`a2322b3`); screenshots in `outputs/portal_phase1_review/claude-*.png`.
    2. Run both test suites: `python -m unittest discover -s code_scripts/tests -q` and `python manage.py test apps.epos_qbo apps.dashboard apps.core`, with dummy env and a scratch `STATE_ROOT`.
    3. Push.
    4. Server: `git pull`. Marvin runs `docker compose build web scheduler akponora-ops` (desktop PowerShell). Then `docker compose up -d`.
-   5. Run `python manage.py migrate` in `web` (0018, 0019 and any new migrations). Grant `can_approve_company_a_reviews` to the operators.
+   5. Run `python manage.py migrate` in `web` (**0018, 0019, 0020**). Grant `can_approve_company_a_reviews`, `can_trigger_runs` and `can_manage_portal_settings` to the operators (Django admin).
    6. Smoke test: `daily_run --dry-run --date <yesterday>`. Open the portal pages.
-   - If the portal branch isn't ready, deploy the main branch alone. It is safe: deposits are off by default, the stock step is read-only and the approval tools are only called by the portal.
 4. [ ] **Deposits:** once the service account key is on the server, run `uf_deposits status` and `plan` (read-only), show Marvin, then with his yes set `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`, `_UF_AUTO_POST=1`, `_UF_APPROVAL_REF`, and the sheet id/key env.
 5. [ ] **Goldplates corrections:** the ₦2.65M July late syncs and the 2 receipts for 22 Jun (prepare, then Marvin approves).
 6. [ ] **Master product setup** (team's Master Product Review; `docs/AKPONORA_STAFF_CHECKLIST.md`): **parked by Marvin.** Do not start without his yes.
@@ -85,3 +84,9 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 - QuickBooks calls happen **only on the server** (tokens live there). EPOS can be read from the Mac (pipeline credentials in `.env`).
 - Don't edit `code_scripts/akponora_ops/` and `apps/` in parallel branches without coordinating. Use isolated worktrees, then merge.
 - After finishing anything, **update this file** (sections 2–4), the cutover log (for production writes) and the roadmap ticks. Then commit.
+
+### Small portal follow-ups (not blocking)
+- "1 days have no confirmed…" should read "1 day has…" (pluralisation).
+- The company page shows "Next scheduled run: No active schedule recorded" unless the `web` container has the Company A daily-run env. Check it after deploy.
+- Supplier linking is limited to the bills step's suggestion or creating a new supplier; till accounts are view-only.
+- Inbox actions take the global pipeline lock, so they wait while a daily run is active.
