@@ -5,8 +5,15 @@ Undeposited Funds (``100900``, QBO Id 72) into the banks the till sheet says the
 by the method used on 26 Sep 2026 for 1 Jan-24 Sep (``akponora_cutover/uf_reverse_and_allocate``):
 "deposits follow the receipts; the mix follows the sheet".
 
-Per business day (from the cursor ``STATE_ROOT/ops/company_a/uf_deposits/cursor.json``, floor
-2026-09-25, up to the run's business date):
+Days are independent (owner, 3 Oct 2026). Every run looks at each business day from the floor
+2026-09-25 up to the run's business date that is not yet DEPOSITED in
+``STATE_ROOT/ops/company_a/uf_deposits/days.json`` and posts each day whose gates pass; a held or
+missing day never blocks a later one and is simply re-evaluated next run. Per-day state:
+DEPOSITED (final, never re-planned) / READY (plan only) / HELD (reason) / WAITING_SHEET (sheet
+block missing or unfinished) / NO_SALES (no SalesReceipts yet). An old ``cursor.json`` is migrated
+on first read (floor .. its last_complete_business_date = DEPOSITED); it is not written any more.
+
+Per business day:
 
 1. Receipts: that day's SalesReceipts (TxnDate = day, TotalAmt > 0) still in Undeposited Funds
    (DepositToAccountRef 72 or unset) and not linked to any Deposit. Receipts already in a deposit
@@ -15,10 +22,12 @@ Per business day (from the cursor ``STATE_ROOT/ops/company_a/uf_deposits/cursor.
 2. Sheet: the day's block of the "Nora Mart Daily Sales Account Breakdown" Google Sheet (live via
    a read-only service account, or ``--sheet-xlsx``). Each box is mapped to a QBO bank through
    ``STATE_ROOT/mappings/company_a/till_accounts.csv`` (by terminal TID; CASH by Kind ``cash``).
-3. Gates (any failure HOLDs the day, and later days wait to keep order): sheet day present; no
+3. Gates (any failure holds that day only): sheet day present; no
    non-numeric box; both CASH boxes and SYSTEM filled; boxes total > 0; every filled box mapped
    to an active row; |sheet total - receipts total| <= max(OIAT_COMPANY_A_UF_TOLERANCE (N1,000),
-   OIAT_COMPANY_A_UF_TOLERANCE_PCT (0.5) % of receipts); bank accounts exist, active, Bank type,
+   OIAT_COMPANY_A_UF_TOLERANCE_PCT (0.5) % of receipts) - read fresh every run from the env and
+   then from ``STATE_ROOT/ops/company_a/uf_deposits/settings.env`` (no restart needed); bank
+   accounts exist, active, Bank type,
    numbers as in the mapping; the day is after the QBO closing date; no conflicting deposit /
    true-up already in QBO; in automatic mode, receipts total <= OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL
    (N15,000,000).
@@ -38,17 +47,23 @@ Per business day (from the cursor ``STATE_ROOT/ops/company_a/uf_deposits/cursor.
 
 Subcommands
 -----------
-``plan`` (READ-ONLY: sheet + QBO GET). ``--date D`` for one day, else ``--from`` (default cursor)
-    ``--to`` (default last closed Lagos business day). Writes ``<out>/<day>/plan.json``,
+``plan`` (READ-ONLY: sheet + QBO GET). ``--date D`` for one day, else ``--from`` (default: every
+    day since the floor not yet DEPOSITED) ``--to`` (default last closed Lagos business day).
+    Writes ``<out>/<day>/plan.json``,
     ``review.csv`` (per bank), ``receipts.csv``, ``payloads.jsonl`` and ``summary.json`` (sha256 of
     the payloads), plus ``<out>/summary.json`` for the window.
 ``post`` (WRITES; needs a chat yes): ``--plan-dir <out>/<day> --approval-ref '<chat yes>'
     --expect-sha <payloads_sha256>``. Re-checks every receipt and DocNumber live, posts the
     deposits then the transfers, re-reads and verifies each, writes ``results.csv`` (resumable)
-    and advances the cursor only over fully done days.
-``scheduled``: plan, then post each READY day in order when ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``,
+    and marks the day DEPOSITED in days.json once fully done.
+``scheduled``: plan, then post every READY day when ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``,
     ``OIAT_COMPANY_A_UF_AUTO_POST=1`` and ``OIAT_COMPANY_A_UF_APPROVAL_REF`` are all set; otherwise
-    plan only. Exit 0 = nothing waiting, 3 = days wait (HOLD / READY not posted), 2 = stopped.
+    plan only. A post that stops (QBO error / failed verification) ends posting for the run.
+    Exit 0 = nothing waiting, 3 = days wait (HELD / WAITING_SHEET / NO_SALES / READY), 2 = stopped.
+    Writes the till-sheet status report into ``summary.json`` / ``scheduled.json``.
+``status`` (READ-ONLY: sheet + days.json, no QBO): last day entered on the till sheet, missing /
+    incomplete days since the floor, complete days not yet deposited, deposited days, and the
+    per-day state.
 
 Sheet access: ``OIAT_COMPANY_A_TILL_SHEET_SA_KEY`` (default STATE_ROOT/secrets/google_service_account.json)
 and ``OIAT_COMPANY_A_TILL_SHEET_ID``. See docs/SERVER_SETUP.md "Till sheet access".
@@ -102,7 +117,10 @@ RECEIPT_COLS = ["Day", "Receipt Id", "DocNumber", "Amount", "Tender", "State", "
 RESULT_COLS = ["ts", "day", "kind", "key", "status", "qbo_id", "amount", "payload_sha256", "requestid",
                "approval_ref", "mode", "detail"]
 DONE_RESULTS = {"POSTED", "ADOPTED"}
-READY, DONE, HOLD, WAITING = "READY", "DONE", "HOLD", "WAITING"
+READY, DONE, HOLD = "READY", "DONE", "HOLD"  # plan status of one day folder
+# stored per-day state (days.json) and the scheduled run's day status
+DEPOSITED, HELD, WAITING_SHEET, NO_SALES = "DEPOSITED", "HELD", "WAITING_SHEET", "NO_SALES"
+OPEN_STATES = (READY, HELD, WAITING_SHEET, NO_SALES)
 TAG_RE = re.compile(r"UFTU (\d{4}-\d{2}-\d{2}) (\d+)>(\d+)")
 
 
@@ -184,14 +202,57 @@ def day_range(start: str, end: str) -> list[str]:
 
 
 # ---------------------------------------------------------------- settings
+def overrides_path() -> Path:
+    """``STATE_ROOT/ops/company_a/uf_deposits/settings.env``: KEY=VALUE lines read at the start of
+    every run (no restart). Only the tolerance keys are honoured."""
+    from code_scripts.paths import STATE_ROOT
+
+    return Path(STATE_ROOT) / "ops" / COMPANY / TOOL / "settings.env"
+
+
+RUNTIME_KEYS = (TOL_ENV, TOL_PCT_ENV)
+
+
+def runtime_overrides() -> dict:
+    path = overrides_path()
+    if not path.exists():
+        return {}
+    out = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = (x.strip() for x in line.split("=", 1))
+        value = value.split(" #", 1)[0].strip().strip("'\"")
+        if key in RUNTIME_KEYS and value:
+            out[key] = value
+    return out
+
+
+def _dec(env, key: str, default: str) -> Decimal:
+    text = clean(env.get(key)) or default
+    try:
+        value = Decimal(text)
+    except ArithmeticError:
+        raise StopRun(f"{key}={text!r} is not a number") from None
+    if not value.is_finite() or value < 0:
+        raise StopRun(f"{key}={text!r} must be a number >= 0")
+    return value
+
+
 def settings(env=None) -> dict:
-    env = os.environ if env is None else env
+    """Read fresh on every call (every run): the process env (``.env``) and then
+    ``settings.env`` under the state dir for the tolerance keys."""
+    env = dict(os.environ if env is None else env)
+    over = runtime_overrides()
+    env.update(over)
     enabled, auto, ref = truthy(env.get(ENABLED_ENV)), truthy(env.get(AUTO_ENV)), clean(env.get(REF_ENV))
     return {
         "enabled": enabled, "auto_flag": auto, "ref": ref, "auto": bool(enabled and auto and ref),
-        "tol_abs": Decimal(clean(env.get(TOL_ENV)) or "1000"),
-        "tol_pct": Decimal(clean(env.get(TOL_PCT_ENV)) or "0.5"),
-        "cap": Decimal(clean(env.get(CAP_ENV)) or "15000000"),
+        "tol_abs": _dec(env, TOL_ENV, "1000"),
+        "tol_pct": _dec(env, TOL_PCT_ENV, "0.5"),
+        "tol_source": f"{overrides_path()}" if over else "environment",
+        "cap": _dec(env, CAP_ENV, "15000000"),
         "sheet_id": clean(env.get(SHEET_ENV)) or till_sheet.DEFAULT_SHEET_ID,
         "key_path": clean(env.get(KEY_ENV)),
         "accounts_path": clean(env.get(ACCOUNTS_ENV)),
@@ -225,8 +286,22 @@ def sheet_source(s: dict, *, xlsx: str | Path | None = None):
     return till_sheet.GoogleSheetSource(s["sheet_id"], key_path(s))
 
 
-# ---------------------------------------------------------------- cursor
+# ---------------------------------------------------------------- per-day state (days.json)
+def day_state(status: str, hold_kind: str = "") -> str:
+    """Plan status -> the stored per-day state."""
+    if status == DONE:
+        return DEPOSITED
+    if status == HOLD:
+        return {"no_sales": NO_SALES, "sheet": WAITING_SHEET}.get(hold_kind, HELD)
+    return status  # READY (plan only / not posted)
+
+
+def days_path() -> Path:
+    return state_dir(TOOL) / "days.json"
+
+
 def cursor_path() -> Path:
+    """Old single forward cursor (before 3 Oct 2026); read only to migrate."""
     return state_dir(TOOL) / "cursor.json"
 
 
@@ -235,23 +310,120 @@ def read_cursor() -> dict:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def default_from() -> str:
-    last = read_cursor().get("last_complete_business_date")
-    if not last:
-        return FLOOR
-    return max(FLOOR, (date.fromisoformat(last) + timedelta(days=1)).isoformat())
+def migrate_cursor() -> dict:
+    """A fresh state; every day from the floor up to an old cursor.json counts as DEPOSITED."""
+    state = {"floor": FLOOR, "days": {}}
+    last = clean(read_cursor().get("last_complete_business_date"))
+    if last and last >= FLOOR:
+        for d in day_range(FLOOR, last):
+            state["days"][d] = {"status": DEPOSITED, "reason": f"migrated from cursor.json (done up to {last})",
+                                "updated_at": now_iso()}
+        state["migrated_from_cursor"] = {"last_complete_business_date": last, "at": now_iso()}
+    return state
 
 
-def advance_cursor(done: dict, *, upto: str, detail: dict) -> str | None:
-    """Move the cursor over the contiguous run of fully done days that starts right after it."""
-    day, last = default_from(), None
-    while day <= upto and done.get(day):
-        last = day
+def read_state() -> dict:
+    path = days_path()
+    if path.exists():
+        state = json.loads(path.read_text())
+        state.setdefault("floor", FLOOR)
+        state.setdefault("days", {})
+        return state
+    return migrate_cursor()
+
+
+def write_state(state: dict) -> None:
+    dump_json(days_path(), {**state, "floor": FLOOR, "updated_at": now_iso(),
+                            "days": dict(sorted(state["days"].items()))})
+
+
+def is_deposited(state: dict, day: str) -> bool:
+    return (state["days"].get(day) or {}).get("status") == DEPOSITED
+
+
+def open_days(state: dict, start: str, end: str) -> list[str]:
+    """Days in start..end that are not yet DEPOSITED (each is re-evaluated every run)."""
+    return [d for d in day_range(start, end) if not is_deposited(state, d)] if start <= end else []
+
+
+def default_from(state: dict | None = None) -> str:
+    """First day from the floor that is not DEPOSITED."""
+    state = read_state() if state is None else state
+    day = FLOOR
+    while is_deposited(state, day):
         day = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
-    if last is None:
-        return read_cursor().get("last_complete_business_date")
-    dump_json(cursor_path(), {"last_complete_business_date": last, "updated_at": now_iso(), **detail})
-    return last
+    return day
+
+
+def record_day(state: dict, day: str, status: str, *, reasons=(), **extra) -> None:
+    entry = {"status": status, "reason": (list(reasons) or [""])[0], "updated_at": now_iso()}
+    if status != DEPOSITED and reasons:
+        entry["reasons"] = list(reasons)[:10]
+    entry.update({k: v for k, v in extra.items() if v not in (None, "")})
+    state["days"][day] = entry
+
+
+# ---------------------------------------------------------------- till-sheet status report
+def fmt_day(day: str) -> str:
+    d = date.fromisoformat(day)
+    return f"{d.day} {d.strftime('%b')}"
+
+
+def fmt_days(days: list[str]) -> str:
+    """'25, 26, 29 Sep; 1-4 Oct' (runs of 3+ days collapse to a range)."""
+    if not days:
+        return "none"
+    days = sorted(days)
+    groups: list[list[date]] = []
+    for d in (date.fromisoformat(x) for x in days):
+        if groups and groups[-1][-1].month == d.month and (d - groups[-1][-1]).days == 1:
+            groups[-1].append(d)
+        else:
+            groups.append([d])
+    by_month: dict[str, list[str]] = {}
+    for g in groups:
+        key = g[0].strftime("%b")
+        if len(g) >= 3:
+            by_month.setdefault(key, []).append(f"{g[0].day}-{g[-1].day}")
+        else:
+            by_month.setdefault(key, []).extend(str(x.day) for x in g)
+    return "; ".join(f"{', '.join(v)} {k}" for k, v in by_month.items())
+
+
+def sheet_report(source, *, upto: str, state: dict) -> dict:
+    """Till-sheet status since the floor: last complete day, missing / incomplete days, days
+    complete on the sheet but not deposited, days deposited. Reads the sheet only (no QBO)."""
+    days = day_range(FLOOR, upto) if FLOOR <= upto else []
+    complete, missing, incomplete = [], [], []
+    for d in days:
+        status, why = till_sheet.day_completeness(source, d)
+        if status == till_sheet.COMPLETE:
+            complete.append(d)
+        elif status == till_sheet.MISSING:
+            missing.append(d)
+        else:
+            incomplete.append({"day": d, "reason": (why or [""])[0]})
+    deposited = [d for d in days if is_deposited(state, d)]
+    waiting = [{"day": d, "status": (state["days"].get(d) or {}).get("status") or "NOT RUN",
+                "reason": (state["days"].get(d) or {}).get("reason", "")}
+               for d in complete if not is_deposited(state, d)]
+    report = {"as_of": upto, "floor": FLOOR, "last_complete_day": complete[-1] if complete else None,
+              "missing": missing, "incomplete": incomplete, "complete_not_deposited": waiting,
+              "deposited": deposited}
+    report["text"] = report_text(report)
+    return report
+
+
+def report_text(r: dict) -> str:
+    if r.get("error"):
+        return f"Till sheet: status unavailable ({r['error'][:160]})."
+    last = fmt_day(r["last_complete_day"]) if r.get("last_complete_day") else "none since " + fmt_day(r["floor"])
+    text = f"Till sheet: last day entered {last}. Missing: {fmt_days(r['missing'])}."
+    if r["incomplete"]:
+        text += f" Incomplete: {fmt_days([x['day'] for x in r['incomplete']])}."
+    text += f" Waiting to deposit: {fmt_days([x['day'] for x in r['complete_not_deposited']])}."
+    text += f" Deposited: {fmt_days(r['deposited'])}."
+    return text
 
 
 # ---------------------------------------------------------------- till accounts mapping
@@ -333,18 +505,7 @@ def resolve_sheet(day: dict, accounts: dict) -> tuple[dict, list, list]:
 
 
 def sheet_reasons(day: dict) -> list[str]:
-    reasons = list(day["problems"])
-    cash = [b for b in day["boxes"] if b["kind"] == "cash"]
-    if len(cash) < 2:
-        reasons.append(f"sheet day has {len(cash)} CASH box(es), expected System 1 and System 2")
-    for b in cash:
-        if b["blank"]:
-            reasons.append(f"{b['line']} box is blank (type 0 if there was no cash)")
-    if day.get("system") is None:
-        reasons.append("SYSTEM (EPOS total) box is blank - the day is not finished on the sheet")
-    if till_sheet.boxes_total(day) <= 0:
-        reasons.append("sheet day is blank (all boxes empty or zero)")
-    return reasons
+    return till_sheet.completeness_reasons(day)
 
 
 # ---------------------------------------------------------------- receipts
@@ -515,7 +676,7 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     banks = accounts["banks"]
     e = {"day": day, "status": "", "reasons": [], "warnings": [], "sheet": None, "sheet_sha256": "",
          "sheet_total": Decimal(0), "receipts_total": Decimal(0), "receipts": {}, "boxes": [], "alloc": None,
-         "actions": [], "sheet_by_bank": {}}
+         "actions": [], "sheet_by_bank": {}, "hold_kind": ""}
     reasons, warns = e["reasons"], e["warnings"]
     rec = classify_receipts(day, ctx["receipts"].get(day, []), deposit_links(ctx["deposits"]))
     e["receipts"] = rec
@@ -524,7 +685,7 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     active = rec["pending"] + rec["fixed"]
     e["receipts_total"] = sum((r["amount"] for r in active), Decimal(0))
     if not active and not rec["outside"]:
-        e["status"] = HOLD
+        e["status"], e["hold_kind"] = HOLD, "no_sales"
         reasons.append(f"no SalesReceipts in QBO for {day} yet (sales not posted?)")
         return e
     if rec["outside"]:
@@ -537,11 +698,14 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     sheet_day, why, sha = till_sheet.find_day(source, day)
     e["sheet_sha256"] = sha
     if sheet_day is None:
-        e["status"] = HOLD
+        e["status"], e["hold_kind"] = HOLD, "sheet"
         reasons.append(why)
         return e
     e["sheet"] = {k: sheet_day[k] for k in ("date", "tab", "row", "actual", "system", "excess")}
-    reasons += sheet_reasons(sheet_day)
+    unfinished = sheet_reasons(sheet_day)
+    reasons += unfinished
+    if unfinished:
+        e["hold_kind"] = "sheet"
     sheet_by_bank, e["boxes"], map_reasons = resolve_sheet(sheet_day, accounts)
     reasons += map_reasons
     e["sheet_by_bank"] = sheet_by_bank
@@ -702,7 +866,8 @@ def day_summary(e: dict, banks: dict) -> dict:
     alloc = e.get("alloc") or {}
     num = lambda b: banks.get(b, {}).get("number", b)  # noqa: E731
     return {
-        "day": e["day"], "status": e["status"], "reasons": e["reasons"], "warnings": e["warnings"],
+        "day": e["day"], "status": e["status"], "state": day_state(e["status"], e.get("hold_kind", "")),
+        "reasons": e["reasons"], "warnings": e["warnings"],
         "sheet_total": money(e["sheet_total"]), "receipts_total": money(e["receipts_total"]),
         "receipts": {k: len(v) for k, v in e["receipts"].items()},
         "sheet_by_bank": {num(b): money(v) for b, v in sorted(e["sheet_by_bank"].items(), key=lambda kv: num(kv[0]))},
@@ -740,24 +905,19 @@ def run_plan(out: Path, *, days: list[str], client: QBOClient, source, s: dict, 
     out.mkdir(parents=True, exist_ok=True)
     meta = {"tool": TOOL, "realm": REALM, "mode": "plan", "planned_at": now_iso(),
             "sheet_source": source.describe(), "accounts_file": {"path": accounts["path"], "sha256": accounts["sha256"]},
-            "tolerance": {"abs": money(s["tol_abs"]), "pct": str(s["tol_pct"])},
+            "tolerance": {"abs": money(s["tol_abs"]), "pct": str(s["tol_pct"]),
+                          "source": s.get("tol_source", "environment")},
             "auto_cap": money(auto_cap) if auto_cap is not None else ""}
-    entries, blocked_by = [], None
+    entries = []
+    days = sorted(days)
     ctx = fetch_context(client, days, accounts["banks"]) if days else None
-    for day in days:
+    for day in days:  # days are independent: a held day never stops a later one
         e = plan_day(day, source=source, accounts=accounts, ctx=ctx, s=s, auto_cap=auto_cap)
-        if blocked_by and e["status"] == READY:
-            e["status"] = WAITING
-            e["reasons"].insert(0, f"waits for {blocked_by} (held) - days are deposited in order")
-        elif e["status"] == HOLD and not blocked_by:
-            blocked_by = day
-        elif e["status"] == HOLD:
-            e["reasons"].insert(0, f"(also waits for {blocked_by})")
         e["summary"] = write_day(out / day, e, accounts["banks"], meta)
         entries.append(e)
     summary = {**meta, "window": [days[0], days[-1]] if days else [], "qbo_requests": client.requests,
                "counts": dict(Counter(e["status"] for e in entries)),
-               "days": [{k: e["summary"][k] for k in ("day", "status", "reasons", "warnings", "receipts_total",
+               "days": [{k: e["summary"][k] for k in ("day", "status", "state", "reasons", "warnings", "receipts_total",
                                                        "sheet_total", "final_by_bank", "payloads_sha256",
                                                        "post_command")} | {"dir": str(out / e["day"])}
                         for e in entries]}
@@ -944,50 +1104,63 @@ def uf_balance(client: QBOClient) -> str:
 # ---------------------------------------------------------------- scheduled
 def run_scheduled(out: Path, *, business_day: str, client: QBOClient, source, s: dict, accounts: dict,
                   write_client: QBOClient | None = None, dry_run: bool = False, from_day: str | None = None) -> dict:
-    """Plan the window (cursor..business_day); post READY days in order when the automatic gates
-    are on (never on a dry run). Advances the cursor (not on a dry run)."""
-    start = from_day or default_from()
-    days = day_range(start, business_day) if start <= business_day else []
+    """Every business day from the floor (or ``from_day``) to ``business_day`` that is not yet
+    DEPOSITED is planned on its own; each READY day is posted when the automatic gates are on (never
+    on a dry run), whatever happened to the days before it. Per-day state goes to days.json (not on
+    a dry run). A post that stops (QBO error / verification) ends posting for this run."""
+    state = read_state()
+    days = open_days(state, from_day or FLOOR, business_day)
     auto = s["auto"] and not dry_run
     plan = run_plan(out, days=days, client=client, source=source, s=s, accounts=accounts,
                     auto_cap=s["cap"] if auto else None)
-    posted, stopped = [], None
-    done = {d["day"]: d["status"] == DONE for d in plan["days"]}
+    posted, stopped, results = [], None, {}
     if auto:
         for d in plan["days"]:
-            if d["status"] == DONE:
-                continue
             if d["status"] != READY:
-                break
+                continue
             wclient = write_client or QBOClient.for_company_a(allow_writes=True)
             write_client = wclient
             res = post_day(Path(d["dir"]), client=wclient, approval_ref=s["ref"], expect_sha=d["payloads_sha256"],
                            auto=True, s=s)
             posted.append(res)
+            results[d["day"]] = res
             if res["stopped"]:
                 stopped = f"{d['day']}: {res['stopped']}"
                 break
-            done[d["day"]] = res["complete"]
-    cursor = read_cursor().get("last_complete_business_date")
+    days_out = []
+    for d in plan["days"]:
+        res = results.get(d["day"])
+        reasons = list(d["reasons"])
+        if res and res["complete"]:
+            status, posted_now = DEPOSITED, True
+        elif res:
+            status, posted_now = HELD, False
+            reasons.insert(0, f"post stopped: {res['stopped'] or 'incomplete'}")
+        else:
+            status, posted_now = d["state"], False
+        days_out.append({**{k: d[k] for k in ("day", "warnings", "receipts_total", "sheet_total", "final_by_bank",
+                                               "payloads_sha256", "dir", "post_command")},
+                         "status": status, "reasons": reasons, "posted_now": posted_now})
+        record_day(state, d["day"], status, reasons=reasons, run_dir=d["dir"], receipts_total=d["receipts_total"],
+                   approval_ref=s["ref"] if posted_now else "")
     if not dry_run:
-        cursor = advance_cursor(done, upto=business_day, detail={"run_dir": str(out),
-                                                                 "approval_ref": s["ref"] if auto else ""})
+        write_state(state)
+    try:
+        report = sheet_report(source, upto=business_day, state=state)
+    except Exception as exc:  # noqa: BLE001 - the report is informational
+        report = {"error": str(exc)[:200]}
+        report["text"] = report_text(report)
     try:
         balance = uf_balance(write_client or client)
     except Exception as exc:  # noqa: BLE001 - the balance is informational
         balance = f"unavailable ({str(exc)[:80]})"
-    posted_days = {p["day"] for p in posted if p["complete"]}
-    days_out = []
-    for d in plan["days"]:
-        status = "DEPOSITED" if d["day"] in posted_days else d["status"]
-        days_out.append({**{k: d[k] for k in ("day", "reasons", "warnings", "receipts_total", "sheet_total",
-                                               "final_by_bank", "payloads_sha256", "dir", "post_command")},
-                         "status": status})
-    waiting = [d for d in days_out if d["status"] in (READY, HOLD, WAITING)]
+    waiting = [d for d in days_out if d["status"] in OPEN_STATES]
     result = {"tool": TOOL, "business_date": business_day, "window": plan["window"], "auto_post": auto,
-              "dry_run": dry_run, "days": days_out, "posted": posted, "stopped": stopped, "cursor": cursor,
-              "uf_balance": balance, "waiting": len(waiting), "run_dir": str(out),
+              "dry_run": dry_run, "days": days_out, "posted": posted, "stopped": stopped,
+              "uf_balance": balance, "waiting": len(waiting), "run_dir": str(out), "till_sheet": report,
               "counts": dict(Counter(d["status"] for d in days_out))}
+    plan["till_sheet"] = report
+    dump_json(out / "summary.json", plan)
     dump_json(out / "scheduled.json", result)
     return result
 
@@ -997,15 +1170,19 @@ def slack_text(res: dict) -> str:
              f"{', '.join(f'{k} {v}' for k, v in sorted(res['counts'].items())) or 'no days'}; "
              f"Undeposited Funds {res['uf_balance']}"]
     for d in res["days"]:
-        if d["status"] == "DEPOSITED":
-            lines.append(f"- {d['day']} deposited {naira(d['receipts_total'])}: "
-                         + ", ".join(f"{k} {naira(v)}" for k, v in d["final_by_bank"].items()))
-        elif d["status"] in (HOLD, WAITING):
+        if d["status"] == DEPOSITED:
+            lines.append(f"- {d['day']} {'deposited' if d.get('posted_now') else 'already deposited'} "
+                         f"{naira(d['receipts_total'])}"
+                         + (": " + ", ".join(f"{k} {naira(v)}" for k, v in d["final_by_bank"].items())
+                            if d.get("posted_now") else ""))
+        elif d["status"] in (HELD, WAITING_SHEET, NO_SALES):
             lines.append(f"- {d['day']} {d['status']}: {(d['reasons'] or [''])[0][:200]}")
         elif d["status"] == READY:
             lines.append(f"- {d['day']} READY (plan only) {naira(d['receipts_total'])}: {d['post_command'][:300]}")
     if res.get("stopped"):
         lines.append(f"STOPPED: {res['stopped']}")
+    if res.get("till_sheet"):
+        lines.append(res["till_sheet"]["text"])
     return "\n".join(lines)
 
 
@@ -1019,8 +1196,9 @@ def cmd_plan(a) -> int:
     if a.date:
         days = [a.date]
     else:
-        start, end = a.date_from or default_from(), a.date_to or last_closed_day()
-        days = day_range(start, end) if start <= end else []
+        end = a.date_to or last_closed_day()
+        days = day_range(a.date_from, end) if a.date_from else open_days(read_state(), FLOOR, end)
+        days = [d for d in days if d <= end]
     out = run_dir(TOOL, a.out)
     accounts = _accounts(a, s)
     source = sheet_source(s, xlsx=a.sheet_xlsx)
@@ -1036,17 +1214,40 @@ def cmd_plan(a) -> int:
 def cmd_post(a) -> int:
     client = QBOClient.for_company_a(allow_writes=True)
     res = post_day(Path(a.plan_dir), client=client, approval_ref=a.approval_ref, expect_sha=a.expect_sha)
-    cursor = read_cursor().get("last_complete_business_date")
+    state = read_state()
     if res["complete"]:
-        cursor = advance_cursor({res["day"]: True}, upto=last_closed_day(),
-                                detail={"run_dir": a.plan_dir, "approval_ref": a.approval_ref})
-    res["cursor"] = cursor
+        record_day(state, res["day"], DEPOSITED, reasons=["posted by hand (uf_deposits post)"], run_dir=a.plan_dir,
+                   receipts_total=res.get("receipts_total"), approval_ref=a.approval_ref)
+    elif res["stopped"]:
+        record_day(state, res["day"], HELD, reasons=[f"post stopped: {res['stopped']}"], run_dir=a.plan_dir)
+    write_state(state)
+    res["day_state"] = state["days"][res["day"]]["status"]
     res["uf_balance"] = uf_balance(client)
     print(json.dumps(res, indent=1, default=str))
     if not a.no_slack:
         send_slack(f"Akponora UF deposits post {res['day']}: {res['counts']}; stopped: {res['stopped'] or 'no'}; "
-                   f"cursor {cursor}; Undeposited Funds {res['uf_balance']}. Folder: {a.plan_dir}")
+                   f"day {res['day_state']}; Undeposited Funds {res['uf_balance']}. Folder: {a.plan_dir}")
     return 2 if res["stopped"] else 0
+
+
+def status_lines(state: dict, report: dict, *, upto: str) -> list[str]:
+    lines = [report["text"], "", f"Per-day deposit state ({FLOOR} .. {upto}):"]
+    for d in day_range(FLOOR, upto) if FLOOR <= upto else []:
+        entry = state["days"].get(d) or {}
+        lines.append(f"{d} {entry.get('status') or 'NOT RUN':13} {clean(entry.get('reason'))[:160]}")
+    return lines
+
+
+def cmd_status(a) -> int:
+    s = settings()
+    upto = a.date or last_closed_day()
+    state = read_state()
+    report = sheet_report(sheet_source(s, xlsx=a.sheet_xlsx), upto=upto, state=state)
+    if a.json:
+        print(json.dumps({"till_sheet": report, "days": state["days"]}, indent=1, default=str))
+    else:
+        print("\n".join(status_lines(state, report, upto=upto)))
+    return 0
 
 
 def cmd_scheduled(a) -> int:
@@ -1080,7 +1281,11 @@ def main(argv=None) -> int:
             p.add_argument("--from", dest="date_from", default=None, help="first business day (default cursor)")
             p.add_argument("--to", dest="date_to", default=None, help="last business day (default last closed)")
         else:
-            p.add_argument("--dry-run", action="store_true", help="plan only; never posts or moves the cursor")
+            p.add_argument("--dry-run", action="store_true", help="plan only; never posts or writes days.json")
+    p = sub.add_parser("status", help="READ-ONLY (sheet + days.json, no QBO): till-sheet and deposit status")
+    p.add_argument("--date", default=None, help="report up to this business day (default last closed)")
+    p.add_argument("--sheet-xlsx", default=None, help="offline: an .xlsx download of the till sheet")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("post", help="WRITES: post one READY day")
     p.add_argument("--plan-dir", required=True, help="<plan out>/<day>")
     p.add_argument("--approval-ref", default="")
@@ -1092,6 +1297,8 @@ def main(argv=None) -> int:
             return cmd_plan(a)
         if a.cmd == "post":
             return cmd_post(a)
+        if a.cmd == "status":
+            return cmd_status(a)
         return cmd_scheduled(a)
     except StopRun as exc:
         print(f"STOP: {exc}", file=sys.stderr)

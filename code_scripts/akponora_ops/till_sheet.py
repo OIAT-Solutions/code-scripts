@@ -274,3 +274,33 @@ def find_day(source, day: str) -> tuple[dict | None, str, str]:
     if len(matches) > 1:
         return None, f"till sheet tab '{tab}' has {len(matches)} blocks for {day}", sha
     return matches[0], "", sha
+
+
+# ---------------------------------------------------------------- completeness (shared with uf_deposits)
+MISSING, INCOMPLETE, COMPLETE = "missing", "incomplete", "complete"
+
+
+def completeness_reasons(day: dict) -> list[str]:
+    """Why a parsed sheet day is not finished ([] = complete): non-numeric boxes, a CASH box or
+    SYSTEM left blank, or the whole block blank."""
+    reasons = list(day["problems"])
+    cash = [b for b in day["boxes"] if b["kind"] == "cash"]
+    if len(cash) < 2:
+        reasons.append(f"sheet day has {len(cash)} CASH box(es), expected System 1 and System 2")
+    for b in cash:
+        if b["blank"]:
+            reasons.append(f"{b['line']} box is blank (type 0 if there was no cash)")
+    if day.get("system") is None:
+        reasons.append("SYSTEM (EPOS total) box is blank - the day is not finished on the sheet")
+    if boxes_total(day) <= 0:
+        reasons.append("sheet day is blank (all boxes empty or zero)")
+    return reasons
+
+
+def day_completeness(source, day: str) -> tuple[str, list[str]]:
+    """(``complete`` | ``incomplete`` | ``missing``, reasons) for one business day of the sheet."""
+    found, why, _ = find_day(source, day)
+    if found is None:
+        return MISSING, [why]
+    reasons = completeness_reasons(found)
+    return (INCOMPLETE, reasons) if reasons else (COMPLETE, [])

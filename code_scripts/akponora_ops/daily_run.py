@@ -18,13 +18,15 @@ Default business date = the last CLOSED Lagos business day (05:00 cutoff): run a
    the posting hold is already in place.
 4. ``guard``      item_guard read-only scan (report only).
 5. ``uf``         Undeposited Funds deposits from the till sheet (``uf_deposits``), off unless
-   ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``. For each business day from its cursor up to this one:
+   ``OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1``. For each business day since 25 Sep not yet deposited:
    the day's SalesReceipts still in Undeposited Funds are deposited (LinkedTxn) into the banks the
    "Nora Mart Daily Sales Account Breakdown" sheet names, plus Bank->Bank true-up transfers so each
    bank matches the sheet mix. Posts only with ``OIAT_COMPANY_A_UF_AUTO_POST=1`` and
    ``OIAT_COMPANY_A_UF_APPROVAL_REF`` (cap ``OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL``); otherwise the
-   plan waits for review. A held day (blank sheet, totals off, unmapped till line ...) stops later
-   days. Runs in-process after sales and guard; a failure here never affects the other steps.
+   plan waits for review. Days are independent: a held day (blank sheet, totals off, unmapped till
+   line ...) waits on its own and later complete days still post. The Slack line ends with the
+   till-sheet status (last day entered, missing days, days waiting to deposit). Runs in-process
+   after sales and guard; a failure here never affects the other steps.
 
 A failed / held step never makes a later step write something inconsistent: each later step has
 its own fail-closed gates, and the sales step never runs while the posting hold is in place.
@@ -351,25 +353,27 @@ class DailyRun:
         r = ufd.run_scheduled(Path(res.out), business_day=self.date, client=client, source=source, s=s,
                               accounts=accounts, write_client=self.uf_write_client, dry_run=self.dry_run)
         mode = "dry-run (plan only)" if self.dry_run else ("auto-post" if r["auto_post"] else "plan only")
+        sheet = r.get("till_sheet") or {}
         res.counts = {
-            "mode": mode, "window": r["window"], "uf_balance": r["uf_balance"], "cursor": r["cursor"],
+            "mode": mode, "window": r["window"], "uf_balance": r["uf_balance"],
             "deposited": [{"day": d["day"], "total": d["receipts_total"], "by_bank": d["final_by_bank"]}
-                          for d in r["days"] if d["status"] == "DEPOSITED"],
+                          for d in r["days"] if d["status"] == ufd.DEPOSITED and d.get("posted_now")],
             "held": [{"day": d["day"], "status": d["status"], "reason": (d["reasons"] or [""])[0]}
-                     for d in r["days"] if d["status"] in ("HOLD", "WAITING")],
+                     for d in r["days"] if d["status"] in (ufd.HELD, ufd.WAITING_SHEET, ufd.NO_SALES)],
             "ready": [{"day": d["day"], "total": d["receipts_total"], "by_bank": d["final_by_bank"]}
-                      for d in r["days"] if d["status"] == "READY"],
-            "already_done": sum(1 for d in r["days"] if d["status"] == "DONE"),
+                      for d in r["days"] if d["status"] == ufd.READY],
+            "already_done": sum(1 for d in r["days"] if d["status"] == ufd.DEPOSITED and not d.get("posted_now")),
+            "till_sheet": sheet.get("text", ""),
+            "till_sheet_last_day": sheet.get("last_complete_day"),
+            "till_sheet_missing": list(sheet.get("missing") or []) + [x["day"] for x in sheet.get("incomplete") or []],
+            "till_sheet_waiting_to_deposit": [x["day"] for x in sheet.get("complete_not_deposited") or []],
         }
         for d in r["days"]:
-            if d["status"] == "HOLD":
-                res.review.append(f"uf {d['day']} HOLD: {(d['reasons'] or [''])[0][:200]} -> {d['dir']}/review.csv")
-            elif d["status"] == "READY" and not self.dry_run:
+            if d["status"] in (ufd.HELD, ufd.WAITING_SHEET, ufd.NO_SALES):
+                res.review.append(f"uf {d['day']} {d['status']}: {(d['reasons'] or [''])[0][:200]} "
+                                  f"-> {d['dir']}/review.csv")
+            elif d["status"] == ufd.READY and not self.dry_run:
                 res.review.append(f"uf {d['day']} READY N{d['receipts_total']} (plan only): {d['post_command']}")
-        waiting = [d for d in r["days"] if d["status"] == "WAITING"]
-        if waiting:
-            res.review.append(f"uf: {len(waiting)} later day(s) wait for the held day "
-                              f"({waiting[0]['day']}..{waiting[-1]['day']})")
         if r["stopped"]:
             res.status = FAILED
             res.detail = f"post stopped: {r['stopped']}"
@@ -462,9 +466,12 @@ def step_line(r: dict) -> str:
         held = c.get("held") or []
         if held:
             first = held[0]
-            bits.append(f"held {len(held)} day(s) from {first['day']}: {first['reason'][:160]}")
+            bits.append(f"not deposited {len(held)} day(s) ({', '.join(d['day'] for d in held[:8])}"
+                        f"{', ...' if len(held) > 8 else ''}); first {first['day']}: {first['reason'][:160]}")
         bits.append(f"Undeposited Funds N{c.get('uf_balance')}")
         body = "; ".join(b for b in bits if b)
+        if c.get("till_sheet"):
+            body += ". " + c["till_sheet"]
     else:
         body = ""
     detail = r.get("detail") or ""
