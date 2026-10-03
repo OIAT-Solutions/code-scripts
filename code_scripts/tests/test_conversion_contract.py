@@ -13,7 +13,6 @@ from code_scripts.product_conversion import ProductConversionRegistry, MappingVa
 from code_scripts.tests.test_product_conversion import approved_row, write_mapping, sales_frame, Config
 from code_scripts.transform import transform_dataframe_unified
 from code_scripts.scripts.install_conversion_mapping import install
-from code_scripts.scripts.akponora_canonical_catalog import build
 from code_scripts import qbo_upload
 
 
@@ -132,19 +131,6 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((destination.parent/'versions'/f'{hashlib.sha256(b"old").hexdigest()}.csv').read_text(),'old')
         with self.assertRaises(ValueError):install(self.path,destination,'wrong','approval')
         self.assertEqual(destination.read_bytes(),raw)
-
-    def test_catalogue_deduplicates_family_and_normalizes_cost(self):
-        rows=[{'Row ID':'1','Family Candidate':'Wine','EPOS Name':'Wine crate','Stock Tracked':'True',
-               'EPOS Volume Denominator':'24','EPOS Total Stock':'2.5','EPOS Cost Inc Tax':'24000','Pipeline Status':'PROVISIONAL'},
-              {'Row ID':'2','Family Candidate':'Wine','EPOS Name':'Wine bottle','Stock Tracked':'False','Pipeline Status':'PROVISIONAL'}]
-        families,mappings,payloads,_=build(rows,[])
-        self.assertEqual(len(families),1);self.assertEqual(len(payloads),1)
-        self.assertEqual(families[0]['16 Sep canonical qty (proposal)'],'60.0')
-        self.assertEqual(families[0]['Unit cost inclusive (proposal)'],'1000')
-        self.assertEqual(mappings[0]['Target QBO SKU'],mappings[1]['Target QBO SKU'])
-        self.assertEqual(mappings[0]['Staff Approved Sale Multiplier'],'')
-        rows[1]['Stock Tracked']='True'
-        self.assertEqual(build(rows,[])[2],[])
 
     def test_same_family_cannot_create_separate_pack_stock(self):
         other={**self.row,'Row ID':'2','EPOS Name':'Wine bottle','EPOS Product ID':'42','EPOS Existing SKU':'EACH',

@@ -11,7 +11,7 @@ PKG = "code_scripts.scripts.akponora_cutover"
 TOOLS = [
     "epos_catalogue_pull", "epos_product_families", "build_canonical", "review_approval", "build_final_mapping",
     "w5_legacy_rename", "verify_backfill", "month_close_draft", "bills_from_epos_pos", "stock_bridge",
-    "epos_master_links", "epos_sales_download", "uf_allocation_draft", "uf_list_transfers", "uf_reverse_and_allocate",
+    "epos_master_links", "epos_sales_download", "uf_allocation_draft", "uf_list_transfers",
 ]
 
 

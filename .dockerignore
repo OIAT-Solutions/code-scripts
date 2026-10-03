@@ -67,3 +67,15 @@ secrets
 **/__pycache__
 **/.DS_Store
 .DS_Store
+
+# Backups and old evidence in the checkout root never belong in an image (audit 3 Oct 2026:
+# two May *.tar.gz backups holding qbo_tokens.sqlite were being copied into /app)
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+qbo_inventory_remediation_*
+remediation-evidence
+/*.json
+!/package.json
+!/package-lock.json

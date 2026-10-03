@@ -7,3 +7,15 @@ Historical documents kept for evidence only. Do not follow them as operating ins
 - [`PORTAL_IMPROVEMENTS_AND_TRACKING.md`](PORTAL_IMPROVEMENTS_AND_TRACKING.md) — early portal hardening/performance change log; superseded by git history, `CLAUDE.md` and the main [`README.md`](../../README.md).
 - [`ARTIFACT_RETENTION_PLAN.md`](ARTIFACT_RETENTION_PLAN.md) — proposed artifact retention/lifecycle layout (never fully implemented); superseded by the `STATE_ROOT` layout in `CLAUDE.md` and [`DEV_STAGE_SETUP.md`](../DEV_STAGE_SETUP.md).
 - [`QBO_INVENTORY_REMEDIATION.md`](QBO_INVENTORY_REMEDIATION.md) — Apr 2026 InventoryAdjustment remediation runbook for `code_scripts/qbo_inventory_remediation.py`; superseded by `AGENTS.md` (Company A deletes are refused in code).
+
+Archived 3 Oct 2026 (portal redesign and deposits work done and deployed; Docker migration done, see SERVER_SETUP.md):
+- [`CODEX_PORTAL_PHASE1_REPORT.md`](CODEX_PORTAL_PHASE1_REPORT.md)
+- [`CODEX_PORTAL_HOME_DAILY_REPORT.md`](CODEX_PORTAL_HOME_DAILY_REPORT.md)
+- [`CODEX_PORTAL_COMPANY_WORKSPACE_REPORT.md`](CODEX_PORTAL_COMPANY_WORKSPACE_REPORT.md)
+- [`CODEX_PORTAL_EXPERIENCE_REVIEW.md`](CODEX_PORTAL_EXPERIENCE_REVIEW.md)
+- [`PORTAL_REDESIGN_HANDOVER.md`](PORTAL_REDESIGN_HANDOVER.md)
+- [`CODEX_BRIEF_HOME_CONFIRMATION.md`](CODEX_BRIEF_HOME_CONFIRMATION.md)
+- [`CODEX_PORTAL_HOME_CONFIRMATION_REPORT.md`](CODEX_PORTAL_HOME_CONFIRMATION_REPORT.md)
+- [`CODEX_SPEC_DEPOSITS_PAGE.md`](CODEX_SPEC_DEPOSITS_PAGE.md)
+- [`CODEX_PORTAL_PRODUCTS_INTEGRATION_PLAN.md`](CODEX_PORTAL_PRODUCTS_INTEGRATION_PLAN.md)
+- [`DOCKER_MIGRATION_READY.md`](DOCKER_MIGRATION_READY.md)

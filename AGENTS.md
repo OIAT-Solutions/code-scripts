@@ -64,13 +64,13 @@ The cutover is done. Details and receipts: [`docs/AKPONORA_CUTOVER_LOG.md`](docs
 | --- | --- | --- |
 | W0 | Bookkeeper freeze | Bills **can resume on the new `AKP-` items once the owner says so** (prefer the bills sync below). September deliveries billed late go against GRNI `210200`, never items. Still no new items by hand, nothing on `LEGACY —` items |
 | W2/W3 | Canonical mapping v3 | **Done and installed**: 6,150 rules → 4,430 Item Ids, sha `b4d8c640…` |
-| W4 | Pipeline code | Merged (PR #62) plus later fixes on branch `cursor/post-akponora-qbo-writes-51f3` (not pushed yet). **Not deployed to OIAT-SRV-01** |
+| W4 | Pipeline code | On branch `cursor/post-akponora-qbo-writes-51f3` (PR #62), pushed and **deployed to OIAT-SRV-01** (3 Oct 2026) |
 | W5 | Legacy rename | **Done** 1 Oct: 3,879 items `LEGACY — …` |
 | — | QBO closing date | Owner sets **30 Sep 2026** in the QBO UI (not yet confirmed) |
 | W6 / W8 | 30 Sep pack; 25–30 Sep backfill; Sep close journals; GRNI | **Done** (JE 76552, 76553, 76554; GRNI account `210200` Id 87). IA `77` = V ₦148,824,877.40 at 30 Sep; every 120xxx ₦0 |
 | W7 | 3,938 Inventory + 492 NonInventory creates; IA offset JE 80493; equity reclass JE 80500 | **Done** 2 Oct |
 | — | 1 Oct sales | **Posted** 2 Oct (SalesReceipts 80494–80499, ₦3,211,950.00, MATCH, FIFO COGS ₦1,933,536.56) |
-| W9 | Company A daily automation on the server | **Not on.** One routine: `code_scripts/akponora_ops/daily_run.py` (catalogue → vendors+bills → sales → guard, 06:00 Lagos). Branch `claude/akponora-daily-run`. Steps in [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md): push + deploy, copy mapping/vendors/cursors/tokens to `/data`, dry-run smoke test, env switches with chat yes. Until then each day is run by hand from this repo |
+| W9 | Company A daily automation on the server | **On since 3 Oct 2026.** `code_scripts/akponora_ops/daily_run.py` in the `akponora-ops` container at 18:00 Lagos: products → bills → sales → item check → stock → Undeposited Funds deposits. Status: [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md); setup: [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
 | W10 | Safe legacy inactivation | After W9 is stable |
 
 ### Being built now (2 Oct) — `code_scripts/akponora_ops/`

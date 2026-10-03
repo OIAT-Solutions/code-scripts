@@ -78,7 +78,7 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | Portal as the single UI for Company A: phase 2 (approvals inbox, hold clear, Run now) and phase 3 (Products & Stock, Suppliers, Deposits, settings/mapping editors) from §4; until then approvals stay on the CLI | Agent / Marvin |
 | [ ] | Optional: read-only token endpoint on the server (1-hour access tokens, never the refresh token) if laptops need production lookups | Agent |
 | [ ] | Public ingress for QBO webhooks (portal is tailnet-only) so webhook item lookups work | Marvin / Team |
-| [ ] | Repo clean-up phase 2 (Codex): root shims, old scheduler pair, `akponora_canonical_catalog.py`, journal templates, `.env.example` completeness | Codex |
+| [x] | Repo clean-up phase 2 (3 Oct, Claude): root shims, old scheduler pair and `akponora_canonical_catalog.py` deleted; `uf_reverse_and_allocate` archived; finished docs archived. Journal templates kept (tested, used by `post_journal`). `.env.example` completeness still open | Claude |
 | [ ] | Merge PR #62 to `master` after the first clean week | Marvin |
 
 | [ ] | Portal redesign phases 2–3 (brief: `docs/CODEX_BRIEF_PORTAL_REDESIGN.md`) | Codex |

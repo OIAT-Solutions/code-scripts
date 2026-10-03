@@ -14,6 +14,5 @@ Run all commands from the **repo root** (`code-scripts`), e.g. `python code_scri
 | [qbo_queries/](qbo_queries/) | Ad-hoc read-only QBO queries (items, accounts, etc.) | OK (read-only) |
 | [akponora_cutover/](akponora_cutover/) | Akponora / NORA (company_a) cutover tools (catalogue pull, mapping, W5, backfill checks, month close, bills, stock bridge, UF) | Company A only; follow AGENTS.md |
 | `install_conversion_mapping.py` | Validate and atomically install an operator-approved conversion mapping (no QBO writes) | Company A; follow AGENTS.md |
-| `akponora_canonical_catalog.py` | Rebuild a provisional family catalogue from preserved conversion evidence (read-only) | Company A; follow AGENTS.md |
 | `qbo_delete_sales_receipts.py` | Delete sales receipts in QBO (by date or DocNumber) | **Refused** in every mode |
 | `qbo_inv_manager.py` | Inventory / InvStartDate management | Read-only subcommands only |
