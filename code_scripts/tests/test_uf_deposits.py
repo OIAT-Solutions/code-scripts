@@ -879,9 +879,8 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(self.day_states()["2026-10-02"], ufd.WAITING_SHEET)
         human = self.slack[-1]
         self.assertIn("*Banking*   ₦3,199,500 banked for 1 Oct", human)
-        self.assertIn("*Waiting on the store*", human)
-        self.assertIn("• cash box blank: 2 Oct", human)
-        self.assertIn("Still in Undeposited Funds: ₦3,199,500", human)
+        self.assertIn("*Store* · fill in the cash box on the till sheet for 2 Oct", human)
+        self.assertIn("₦3,199,500 still in Undeposited Funds", human)
 
     def test_plan_only_and_dry_run(self):
         fake, source = self.sources()
@@ -892,7 +891,7 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(fake.posts(), [])
         self.assertTrue(any("READY" in line and "post --plan-dir" in line for line in summary["waiting_for_review"]))
         self.assertIn("Waiting to deposit: 1 Oct.", dr.technical_text(summary))
-        self.assertIn("waits for your approval", self.slack[-1])
+        self.assertIn("waiting for you", self.slack[-1])
         summary = self.run_uf(AUTO, fake, source, dry=True)
         self.assertEqual({s["name"]: s for s in summary["steps"]}["uf"]["counts"]["mode"], "dry-run (plan only)")
         self.assertEqual(fake.posts(), [])

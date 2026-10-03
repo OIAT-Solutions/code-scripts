@@ -435,3 +435,26 @@ class VendorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PoDetailCacheTests(unittest.TestCase):
+    """3 Oct 2026: the bills step re-opened 65 unchanged earlier POs every night (18 of 26 minutes)."""
+
+    def test_only_unchanged_lookback_pos_come_from_the_cache(self):
+        import tempfile
+        from pathlib import Path
+
+        old = {"OrderRef": 3850, "DateReceived": "2026-09-20T10:00:00", "TotalValueReceived": 60000}
+        edited = {"OrderRef": 3851, "DateReceived": "2026-09-21T10:00:00", "TotalValueReceived": 70000}
+        today = {"OrderRef": 3970, "DateReceived": "2026-10-02T10:00:00", "TotalValueReceived": 20000}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / bs.PO_CACHE
+            rows = [{"ref": "3850", "fingerprint": bs.po_fingerprint(old), "detail": {"OrderRef": 3850}},
+                    {"ref": "3851", "fingerprint": bs.po_fingerprint({**edited, "TotalValueReceived": 1}),
+                     "detail": {"OrderRef": 3851}},
+                    {"ref": "3970", "fingerprint": bs.po_fingerprint(today), "detail": {"OrderRef": 3970}}]
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
+            cache = bs.load_po_cache(path)
+        got = bs.cached_details([old, edited, today], cache, lambda o: o["DateReceived"] < "2026-10-01")
+        self.assertEqual(set(got), {"3850"})  # edited row and in-window PO are opened live
+        self.assertEqual(bs.load_po_cache(Path("/nonexistent/x.jsonl")), {})

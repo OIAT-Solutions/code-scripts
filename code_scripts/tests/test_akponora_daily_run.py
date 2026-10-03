@@ -136,7 +136,7 @@ class DailyRunTests(unittest.TestCase):
             self.assertEqual(env["SLACK_WEBHOOK_URL_A"], "")
         self.assertEqual(len(self.slack), 2)  # a start message, then one summary
         self.assertIn("daily run started", self.slack[0])
-        self.assertIn("*Nora Mart daily run · Fri 2 Oct 2026*: finished", self.slack[1])
+        self.assertTrue(self.slack[1].startswith(":large_yellow_circle: *Nora Mart · Fri 2 Oct* · done · "))
 
     def test_catalogue_crash_still_runs_bills_and_sales(self):
         runner = FakeRunner(raise_on={"catalogue"})
@@ -259,8 +259,7 @@ class DailyRunTests(unittest.TestCase):
         self.assertEqual(summary["exit_code"], 0)
         self.assertIn("*stock* [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks",
                       dr.technical_text(summary))
-        self.assertIn("*Stock*   3,812 items match EPOS · 41 differ (30 likely timing) · 11 negative in QuickBooks",
-                      self.slack[-1])
+        self.assertIn("*Checks*   ran normally · 2 new product(s) added · 11 items negative in QuickBooks", self.slack[-1])
 
     def test_stock_step_is_read_only_in_dry_run_too(self):
         runner = FakeRunner()
@@ -311,7 +310,7 @@ class LockTests(unittest.TestCase):
         rc = dr.main(["--date", "2026-10-02"], runner=runner, slack=slack.append, sleep=lambda s: None)
         self.assertEqual(rc, 2)
         self.assertEqual(runner.calls, [])
-        self.assertIn("did not start", slack[0])
+        self.assertIn("didn't start", slack[0])
 
     def test_lock_is_held_during_the_run_and_released_after(self):
         from code_scripts.run_lock import GlobalRunLock
@@ -537,80 +536,124 @@ if __name__ == "__main__":
 
 
 class SlackMessageTests(unittest.TestCase):
-    """The plain-English Slack messages (start + summary)."""
+    """The plain-English Slack messages (start + summary), shaped on the first live run (3 Oct 2026)."""
 
     def summary(self, **over):
+        sheet_wait = [{"day": d, "status": "WAITING_SHEET",
+                       "reason": "CASH (System 1) box is blank (type 0 if there was no cash)"}
+                      for d in ("2026-09-25", "2026-09-26", "2026-09-29", "2026-10-01")]
         steps = [
             {"name": "catalogue", "status": dr.OK, "counts": {"new_products": 0, "items_created": 0, "mapping_only": 0,
                                                               "review": 0, "hold": 0}},
-            {"name": "bills", "status": dr.OK, "counts": {
-                "pos": 9, "ready": 8, "ready_total": "217350.00", "posted": 8, "hold": 1, "hold_total_inc": "20000.00",
-                "capped": 0, "vendors_created": 0,
-                "holds": [{"po": "3970", "supplier": "FLOURISH COOL WATER, ALPINE FRESH WATER", "total": "20000.00",
-                           "reason": "supplier not approved in vendors.csv"}],
-                "vendor_holds": [{"name": "FLOURISH COOL WATER, ALPINE FRESH WATER", "state": "HOLD_NEAR_MATCH",
-                                  "detail": "looks like an existing QBO vendor (best 0.90): 64 FLOURISH (0.90); "
-                                            "261 ALPINE FRESH TABLE WATER (0.58)"}]}},
+            {"name": "bills", "status": dr.REVIEW, "counts": {
+                "pos": 9, "ready": 8, "ready_total": "217350.00", "posted": 7, "posted_total": "190350.00", "hold": 1,
+                "hold_total_inc": "20000.00", "capped": 0, "vendors_created": 0,
+                "waiting_items": [
+                    {"po": "3969", "supplier": "UNCLE'S SAM BAKERY AND CAFE", "total": "27000.00", "status": "READY",
+                     "why": "possible duplicate receipt of EPOS PO 3967 (2026-10-01, ...): same products/qty"},
+                    {"po": "3970", "supplier": "FLOURISH COOL WATER, ALPINE FRESH WATER", "total": "20000.00",
+                     "status": "HOLD", "why": "supplier not approved in vendors.csv", "vendor_hint": "FLOURISH"}]}},
             {"name": "sales", "status": dr.OK, "counts": {"mode": "post", "uploaded": 6, "skipped": 0, "failed": 0,
                                                           "reconcile_status": "MATCH", "epos_total": 4857550.0,
                                                           "qbo_total": 4857550.0}},
-            {"name": "guard", "status": dr.REVIEW, "counts": {"alert": 437, "warn": 18}},
-            {"name": "stock", "status": dr.OK, "counts": {"by_status": {"MATCH": 3242, "DIFFERENT": 669, "NEGATIVE_QBO": 11},
-                                                          "likely_timing": 273}},
-            {"name": "uf", "status": dr.REVIEW, "counts": {
-                "mode": "auto-post", "uf_balance": "18073049.99",
-                "deposited": [{"day": "2026-09-27", "total": "4080500.00"}, {"day": "2026-09-28", "total": "3113300.00"},
-                              {"day": "2026-09-30", "total": "3965950.00"}],
-                "ready": [], "held": [{"day": d, "status": "WAITING_SHEET",
-                                       "reason": "CASH (System 1) box is blank (type 0 if there was no cash)"}
-                                      for d in ("2026-09-25", "2026-09-26", "2026-09-29", "2026-10-01")]}},
+            {"name": "guard", "status": dr.REVIEW, "counts": {"alert": 437, "warn": 26}},
+            {"name": "stock", "status": dr.OK, "counts": {"by_status": {"MATCH": 3458, "DIFFERENT": 449, "NEGATIVE_QBO": 19},
+                                                          "likely_timing": 202}},
+            {"name": "uf", "status": dr.FAILED, "detail": "post stopped: 2026-09-27: deposit 80514 failed verification",
+             "counts": {"mode": "auto-post", "uf_balance": "33912599.99", "deposited": [],
+                        "ready": [{"day": "2026-09-28", "total": "3113300.00"}, {"day": "2026-09-30", "total": "3965950.00"}],
+                        "held": sheet_wait + [{"day": "2026-09-27", "status": "HELD",
+                                               "reason": "post stopped: deposit 80514 failed verification"},
+                                              {"day": "2026-10-02", "status": "WAITING_SHEET",
+                                               "reason": "CASH (System 1) box is blank (type 0 if there was no cash)"}]}},
         ]
-        base = {"business_date": "2026-10-02", "dry_run": False, "exit_code": 3, "steps": steps,
-                "started_at": "2026-10-03T17:00:00+00:00", "finished_at": "2026-10-03T17:12:10+00:00",
+        base = {"business_date": "2026-10-02", "dry_run": False, "exit_code": 2, "steps": steps,
+                "started_at": "2026-10-03T17:00:00+00:00", "finished_at": "2026-10-03T17:25:59+00:00",
                 "previous_guard_alert": 437,
                 "links": dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_170000Z")}
         base.update(over)
         return base
 
-    def test_summary_reads_like_a_person_wrote_it(self):
-        text = dr.slack_text(self.summary())
-        lines = text.splitlines()
-        self.assertEqual(lines[0], ":large_yellow_circle: *Nora Mart daily run · Fri 2 Oct 2026*: finished, 1 thing needs you")
-        self.assertIn(":white_check_mark: *Sales*   ₦4,857,550 posted (6 receipts) · matches EPOS", text)
-        self.assertIn("*Bills*   8 posted (₦217,350), left unpaid · :double_vertical_bar: 1 held (₦20,000)", text)
-        self.assertIn("*Banking*   ₦11,159,750 banked for 27, 28, 30 Sep", text)
-        self.assertIn("• cash box blank: 25, 26, 29 Sep and 1 Oct", text)
-        self.assertIn("1. PO 3970 · ₦20,000: supplier “FLOURISH COOL WATER, ALPINE FRESH WATER” isn't set up in "
-                      "QuickBooks yet (looks like FLOURISH). Link it or create it → <https://portal.example.com/epos-qbo/attention/|Inbox>", text)
-        self.assertIn(":heavy_minus_sign: *Item check*   437 alerts, no new ones", text)
-        self.assertIn("Still in Undeposited Funds: ₦18,073,049.99 · took 12 min · "
-                      "<https://portal.example.com/epos-qbo/company-a/daily-runs/2026-10-02/run_170000Z/|Open this run>", text)
-        self.assertNotIn("/data/", text)  # no file paths or commands in Slack
+    INBOX = "<https://portal.example.com/epos-qbo/attention/|Inbox>"
+    RUN = "<https://portal.example.com/epos-qbo/company-a/daily-runs/2026-10-02/run_170000Z/|Open run>"
 
-    def test_new_item_alerts_and_failures_change_the_headline(self):
-        text = dr.slack_text(self.summary(previous_guard_alert=430))
-        self.assertIn("437 alerts, 7 new since the last run", text)
-        self.assertIn("2 things need you", text)
+    def test_first_live_run_reads_clearly(self):
+        lines = dr.slack_text(self.summary()).splitlines()
+        self.assertEqual(lines, [
+            ":red_circle: *Nora Mart · Fri 2 Oct* · banking stopped · 4 to-dos",
+            "",
+            "*Sales*   ₦4,857,550 posted · 6 receipts · matches EPOS",
+            "*Bills*   7 posted · ₦190,350 · 2 waiting for you",
+            "*Banking*   stopped part-way on 27 Sep · 28, 30 Sep go on the next run",
+            "*Checks*   ran normally · 19 items negative in QuickBooks",
+            "",
+            "*To do*",
+            f":bust_in_silhouette: *You* · approve PO 3969, UNCLE'S SAM BAKERY AND CAFE, ₦27,000 (looks like a repeat of PO 3967) → {self.INBOX}",
+            f":bust_in_silhouette: *You* · PO 3970, FLOURISH COOL WATER, ALPINE FRESH WATER, ₦20,000: supplier looks like FLOURISH, link or create it → {self.INBOX}",
+            ":convenience_store: *Store* · fill in the cash box on the till sheet for 25, 26, 29 Sep and 1, 2 Oct → "
+            "<https://docs.google.com/spreadsheets/d/15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A|Till sheet>",
+            f":hammer_and_wrench: *OIAT* · banking stopped part-way on 27 Sep; nothing posts twice → {self.RUN}",
+            "",
+            f"₦33,912,600 still in Undeposited Funds · finished 18:25 · {self.RUN}",
+        ])
+
+    def test_a_clean_day_is_five_lines(self):
         s = self.summary()
-        s["steps"][2] = {"name": "sales", "status": dr.FAILED, "detail": "run_pipeline exited 1", "counts": {}}
-        self.assertTrue(dr.slack_text(s).startswith(":red_circle: *Nora Mart daily run · Fri 2 Oct 2026*: Sales didn't finish"))
+        s["steps"][1] = {"name": "bills", "status": dr.OK, "counts": {"posted": 3, "posted_total": "61000.00",
+                                                                        "waiting_items": []}}
+        s["steps"][5] = {"name": "uf", "status": dr.OK, "counts": {
+            "uf_balance": "29055050.00", "deposited": [{"day": "2026-10-02", "total": "4857550.00"}], "ready": [], "held": []}}
+        s["steps"][4]["counts"]["by_status"]["NEGATIVE_QBO"] = 0
+        text = dr.slack_text(s)
+        self.assertEqual(text.splitlines(), [
+            ":large_green_circle: *Nora Mart · Fri 2 Oct* · all done", "",
+            "*Sales*   ₦4,857,550 posted · 6 receipts · matches EPOS",
+            "*Bills*   3 posted · ₦61,000",
+            "*Banking*   ₦4,857,550 banked for 2 Oct",
+            "*Checks*   ran normally", "",
+            f"₦29,055,050 still in Undeposited Funds · finished 18:25 · {self.RUN}"])
 
-    def test_all_good_is_green(self):
-        s = self.summary(previous_guard_alert=437)
-        s["steps"][1]["counts"].update(hold=0, holds=[], vendor_holds=[])
+    def test_new_item_alerts_and_approval_days(self):
+        s = self.summary(previous_guard_alert=430)
+        s["steps"][5]["status"] = dr.REVIEW
         s["steps"][5]["counts"]["held"] = []
         text = dr.slack_text(s)
-        self.assertTrue(text.startswith(":large_green_circle:"))
-        self.assertIn("finished, all good", text)
-        self.assertNotIn("Needs you", text)
+        self.assertIn("*Checks*   ran normally · 7 new item alert(s) · 19 items negative in QuickBooks", text)
+        self.assertIn(f":hammer_and_wrench: *OIAT* · 7 new item alert(s) → {self.RUN}", text)
+        self.assertIn("*Banking*   ₦7,079,250 for 28, 30 Sep waiting for you", text)
+        self.assertIn(f"*You* · approve banking ₦7,079,250 for 28, 30 Sep → {self.INBOX}", text)
+        self.assertTrue(text.startswith(":large_yellow_circle: *Nora Mart · Fri 2 Oct* · done · 4 to-dos"))
+
+    def test_failed_sales_is_red_and_has_no_error_text(self):
+        s = self.summary()
+        s["steps"][2] = {"name": "sales", "status": dr.FAILED, "detail": "run_pipeline exited 1; see /data/x/log.txt",
+                         "counts": {}}
+        text = dr.slack_text(s)
+        self.assertTrue(text.startswith(":red_circle: *Nora Mart · Fri 2 Oct* · sales didn't post"))
+        self.assertNotIn("/data/", text)
+        self.assertNotIn("exited", text)
+        self.assertNotIn("DocNumber", dr.slack_text(self.summary()))
 
     def test_start_message(self):
         text = dr.start_text("2026-10-02", banking_on=True,
                              links=dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_x"))
-        self.assertIn("*Nora Mart daily run started · Fri 2 Oct 2026*", text)
-        self.assertIn("Running: Products → Bills → Sales → Item check → Stock → Banking", text)
-        self.assertIn("Banking from the till sheet is *on*.", text)
-        self.assertIn("<https://portal.example.com/epos-qbo/company-a/daily-runs/|Daily runs>", text)
+        self.assertEqual(text, ":arrow_forward: *Nora Mart · Fri 2 Oct* · daily run started (sales, bills, banking, "
+                               "checks) · summary to follow · <https://portal.example.com/epos-qbo/company-a/daily-runs/|Daily runs>")
+
+    def test_bills_waiting_reads_the_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "review.csv").write_text(
+                "PO,EPOS Supplier,EPOS Total Inc,Bill Total,Status,Reasons,Warnings\n"
+                "3967,UNCLE SAM'S BAKERY AND CAFE,27000.00,27000.00,READY,,\n"
+                "3969,UNCLE'S SAM BAKERY AND CAFE,27000.00,27000.00,READY,,possible duplicate receipt of EPOS PO 3967\n"
+                "3970,FLOURISH COOL WATER,20000.00,20000.00,HOLD,supplier not approved,\n")
+            (out / "results.csv").write_text("PO,status,Total\n3967,POSTED,27000.0\n")
+            got = dr.bills_waiting(out, {}, [{"display_name": "FLOURISH COOL WATER", "state": "HOLD_NEAR_MATCH",
+                                             "detail": "looks like an existing QBO vendor (best 0.90): 64 FLOURISH (0.90)"}])
+        self.assertEqual(got["posted_total"], "27000.0")
+        self.assertEqual([w["po"] for w in got["waiting_items"]], ["3969", "3970"])
+        self.assertEqual(got["waiting_items"][1]["vendor_hint"], "FLOURISH")
 
     def test_previous_guard_alert_reads_the_last_real_run(self):
         with tempfile.TemporaryDirectory() as tmp:

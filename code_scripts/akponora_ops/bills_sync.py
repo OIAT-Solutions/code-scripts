@@ -264,7 +264,43 @@ def default_from() -> str:
 
 
 # ---------------------------------------------------------------- EPOS (view only)
-def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str = COMPANY) -> tuple[list, dict]:
+PO_CACHE = "po_detail_cache.jsonl"
+
+
+def po_fingerprint(order: dict) -> str:
+    """The PO list row as EPOS shows it: any change (received again, edited, re-totalled) changes this."""
+    return json.dumps(order, sort_keys=True, default=str)
+
+
+def load_po_cache(path: Path) -> dict:
+    """{OrderRef: {"fingerprint", "detail"}}; the last line for a ref wins. A bad line is skipped."""
+    out = {}
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+            out[str(row["ref"])] = row
+        except (ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+def cached_details(orders: list, cache: dict, cacheable) -> dict:
+    """Details of earlier (look-back) POs whose list row is unchanged since they were opened."""
+    out = {}
+    for o in orders:
+        ref = str(o.get("OrderRef"))
+        hit = cache.get(ref)
+        if hit and cacheable(o) and hit.get("fingerprint") == po_fingerprint(o):
+            out[ref] = hit["detail"]
+    return out
+
+
+def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str = COMPANY,
+                 cacheable=lambda o: False, cache_path: Path | None = None) -> tuple[list, dict]:
     """View-only EPOS capture. Opens the PO list for an order-date range, then the Details page of
     each order ``want(order)`` selects (rows are matched by the OrderRef in the row text).
     Clicks only login, the date filter + Apply and Details. Resumable via ``po_details.jsonl``."""
@@ -313,9 +349,15 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         body = lists[-1]
         orders = body.get("orders") or []
         dump_json(ev / "po_list_raw.json", {"order_from": order_from, "order_to": order_to, "body": body})
+        cached = {}
+        if cache_path is not None:
+            cached = {ref: d for ref, d in cached_details(orders, load_po_cache(cache_path), cacheable).items()
+                      if ref not in details}
+            details.update(cached)
         needed = {str(o["OrderRef"]) for o in orders if want(o)} - set(details)
-        print(f"EPOS: {len(orders)} POs ordered {order_from}..{order_to}; {len(needed)} detail page(s) to open",
-              flush=True)
+        print(f"EPOS: {len(orders)} POs ordered {order_from}..{order_to}; {len(needed)} detail page(s) to open"
+              + (f" ({len(cached)} earlier PO(s) unchanged, read from the cache)" if cached else ""), flush=True)
+        by_ref = {str(o["OrderRef"]): o for o in orders}
         for _ in range(3):
             if not needed:
                 break
@@ -349,6 +391,10 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
                     fh.write(json.dumps(d) + "\n")
                 details[ref] = d
                 needed.discard(ref)
+                if cache_path is not None and ref in by_ref:
+                    with open(cache_path, "a", encoding="utf-8") as fh:
+                        fh.write(json.dumps({"ref": ref, "fingerprint": po_fingerprint(by_ref[ref]), "detail": d})
+                                 + "\n")
                 print(f"PO {ref}: {len(d.get('Products') or [])} line(s)", flush=True)
                 open_list(page)
         browser.close()
@@ -988,7 +1034,11 @@ def collect_pos(a, ev: Path, window: tuple[str, str]) -> tuple[list, list]:
     else:
         order_from = (date.fromisoformat(lookback_from) - timedelta(days=7)).isoformat()
         order_to = (date.fromisoformat(window[1]) + timedelta(days=1)).isoformat()
-        orders, details = capture_epos(ev, order_from=order_from, order_to=order_to, want=want)
+        # Earlier POs are only read for the duplicate check and never posted: an unchanged one is read
+        # from the cache. POs in the window (the ones that get posted) are always opened live.
+        orders, details = capture_epos(ev, order_from=order_from, order_to=order_to, want=want,
+                                       cacheable=lambda o: recv_date(o) < window[0],
+                                       cache_path=state_dir(TOOL) / PO_CACHE)
     pos, lookback = [], []
     for o in orders:
         d = recv_date(o)
