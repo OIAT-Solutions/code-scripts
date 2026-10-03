@@ -24,6 +24,9 @@ Every new product gets a review level:
           child of a master that is itself on hold, product not in the live catalogue).
 CHANGED (name / tracked flag / VolumeOfSale vs mapping; cost / price / category vs the last
 snapshot) and REMOVED (mapped, gone from the live catalogue) are reported only.
+EXCLUDED: EPOS products listed in ``review_exclusions.csv`` (kind ``product``, next to the mapping)
+are never planned (no create, no mapping row) and are reported as ``excluded``; a child of an
+excluded master is HOLD ``MASTER_EXCLUDED``. Excluding a product does NOT make its till sales post.
 
 New tracked products: the current EPOS stock is read from the same Advanced Edit page. Non-zero stock
 is compared with October EPOS PO receipts (``bills_from_epos_pos.capture_pos``). Explained stock is
@@ -36,7 +39,13 @@ Subcommands (run from the repo root with ``.venv/bin/python -m code_scripts.akpo
              payloads.jsonl, proposed_mapping.csv, summary.json to --out (default
              outputs/catalogue_sync_<UTC stamp>/). Exit 0 = nothing to review, 3 = HOLD/REVIEW rows.
   apply      WRITES QBO items + installs the mapping. Manual: --plan-dir, --approval-ref and
-             --expect-plan-sha (summary.json "plan_sha256"). Automated: --auto, only when
+             --expect-sha (alias --expect-plan-sha; summary.json "plan_sha256"). Selection (manual
+             only): --only ID,... and/or --exclude ID,... apply just those decisions; a child needs
+             its in-plan master selected too (else refused); every decision carries
+             decision_sha256 (summary.json "decision_shas", review.csv "Decision SHA") and a changed
+             decision is refused; --expect-decision-shas pid=sha,... pins each selected one. A plan
+             can be applied in parts (plan-dir applied_state.json); the receipt
+             (apply_receipt.json, "applied") lists exactly what was applied. Automated: --auto, only when
              OIAT_COMPANY_A_CATALOGUE_AUTO_CREATE=1 and OIAT_COMPANY_A_CATALOGUE_APPROVAL_REF is set;
              builds a fresh plan and applies AUTO rows only, capped by
              OIAT_COMPANY_A_CATALOGUE_AUTO_MAX_CREATES (default 25; above -> refuse, alert, exit 4).
@@ -63,6 +72,7 @@ from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
 
+from code_scripts.akponora_ops import review_exclusions
 from code_scripts.akponora_ops.common import (
     AKP_NS_SKU_PREFIX,
     AKP_SKU_PREFIX,
@@ -116,7 +126,7 @@ SNAPSHOT_FIELDS = ("Name", "IsStockTracked", "VolumeOfSale", "CostPriceExTax", "
 SHA_EXCLUDED_COLUMNS = {"Approved By", "Target QBO Item Id", "Review Status"}
 REVIEW_COLUMNS = ["EPOS Product ID", "EPOS Name", "Status", "Action", "Review", "Target Type", "Target SKU",
                   "Target Name", "Target QBO Item Id", "Multiplier", "Master EPOS ID", "EPOS amount",
-                  "EPOS stock", "Flags", "Reasons", "Notes"]
+                  "EPOS stock", "Flags", "Reasons", "Notes", "Decision SHA"]
 UNIT = {"each": ("each", Decimal(1)), "g": ("g", Decimal(1)), "kg": ("g", Decimal(1000)),
         "ml": ("ml", Decimal(1)), "cl": ("ml", Decimal(10)), "l": ("ml", Decimal(1000)),
         "ltr": ("ml", Decimal(1000)), "": ("each", Decimal(1))}
@@ -491,7 +501,7 @@ def classify_tracked(pid, p, scrape, catalogue) -> dict:
     return d
 
 
-def classify_untracked(pid, p, scrape, catalogue, by_pid, tracked_decisions) -> dict:
+def classify_untracked(pid, p, scrape, catalogue, by_pid, tracked_decisions, excluded_ids=None) -> dict:
     d = new_decision(pid, p)
     rows, problem = link_rows(scrape)
     if problem:
@@ -536,6 +546,9 @@ def classify_untracked(pid, p, scrape, catalogue, by_pid, tracked_decisions) -> 
                  canonical_unit=clean(master_row.get("Canonical Unit")))
     else:
         md = tracked_decisions.get(mid)
+        if mid in (excluded_ids or ()):
+            hold(d, f"MASTER_EXCLUDED({mid}) - master is in review_exclusions; map or exclude this child too")
+            return d
         if md is None or md["review"] == HOLD:
             hold(d, f"MASTER_NOT_CREATABLE({mid})")
             return d
@@ -746,6 +759,16 @@ def plan_digest(decisions: list[dict]) -> str:
     return w7.sha256_text(w7.canonical_json(body))
 
 
+def decision_digest(d: dict) -> str:
+    """sha256 of ONE decision: what apply would do for this EPOS product (action, review level, flags,
+    QBO payload, item to adopt, master, mapping row without approver / Id / review status). A portal
+    approval of one decision carries this sha; apply refuses when it no longer matches."""
+    body = {"pid": d["pid"], "action": d["action"], "review": d["review"], "flags": sorted(d["flags"]),
+            "master_pid": d["master_pid"], "adopt_qbo_id": d["adopt_qbo_id"], "payload": d["payload"],
+            "mapping": {k: v for k, v in mapping_row(d, "", "").items() if k not in SHA_EXCLUDED_COLUMNS}}
+    return w7.sha256_text(w7.canonical_json(body))
+
+
 def review_rows(plan: dict) -> list[dict]:
     rows = []
     for d in plan["decisions"]:
@@ -755,7 +778,12 @@ def review_rows(plan: dict) -> list[dict]:
                      "Target Name": d["target"]["name"], "Target QBO Item Id": d["target"]["qbo_id"],
                      "Multiplier": d["multiplier"], "Master EPOS ID": d["master_pid"], "EPOS amount": d["master_amount"],
                      "EPOS stock": st.get("units", ""), "Flags": "; ".join(d["flags"]),
-                     "Reasons": "; ".join(d["reasons"]), "Notes": "; ".join(d["notes"])})
+                     "Reasons": "; ".join(d["reasons"]), "Notes": "; ".join(d["notes"]),
+                     "Decision SHA": d.get("decision_sha256", "")})
+    for x in plan.get("excluded", []):
+        rows.append({"EPOS Product ID": x["pid"], "EPOS Name": x["name"], "Status": "EXCLUDED", "Action": "NONE",
+                     "Review": "EXCLUDED", "Notes": f"review_exclusions: {x['reason']} (by {x['added_by']}"
+                                                   + (f", until {x['expires_at']}" if x["expires_at"] else "") + ")"})
     for c in plan["changed"]:
         rows.append({"EPOS Product ID": c["pid"], "EPOS Name": c["name"], "Status": "CHANGED", "Action": "REPORT_ONLY",
                      "Review": "INFO", "Target SKU": c["target_sku"], "Target QBO Item Id": c["target_id"],
@@ -798,7 +826,8 @@ def counts_of(plan: dict) -> dict:
             "adopt_existing": sum(bool(d["adopt_qbo_id"]) for d in ds),
             "auto": sum(d["review"] == AUTO for d in ds), "review": sum(d["review"] == REVIEW for d in ds),
             "hold": sum(d["review"] == HOLD for d in ds),
-            "unexplained_stock": sum("UNEXPLAINED_STOCK" in d["flags"] for d in ds)}
+            "unexplained_stock": sum("UNEXPLAINED_STOCK" in d["flags"] for d in ds),
+            "excluded": len(plan.get("excluded", []))}
 
 
 def needs_attention(plan: dict) -> bool:
@@ -806,11 +835,23 @@ def needs_attention(plan: dict) -> bool:
     return bool(c["hold"] or c["review"] or plan["run_problems"])
 
 
+def excluded_entry(pid: str, product: dict | None, exclusions) -> dict:
+    row = exclusions.get("product", pid) or {}
+    return {"pid": pid, "name": (product or {}).get("Name", ""), "reason": row.get("reason", ""),
+            "added_by": row.get("added_by", ""), "added_at": row.get("added_at", ""),
+            "expires_at": row.get("expires_at", "")}
+
+
 def build_plan(*, out: Path, catalogue: list[dict], mapping_path: Path, state: Path, epos, client=None,
-               only_ids=None) -> dict:
-    """Read-only plan. ``client`` is a GET-only ``QBOClient`` (None = skip the QBO checks)."""
+               only_ids=None, exclusions=None) -> dict:
+    """Read-only plan. ``client`` is a GET-only ``QBOClient`` (None = skip the QBO checks).
+
+    ``exclusions`` (``review_exclusions.Exclusions``; default: the file next to the mapping): excluded
+    EPOS products are never planned; they are listed in ``plan["excluded"]``."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    if exclusions is None:
+        exclusions = review_exclusions.load(review_exclusions.path_near(mapping_path))
     cat = catalogue_index(catalogue)
     mapping_rows = read_csv(mapping_path)
     if not mapping_rows or list(mapping_rows[0].keys()) != MAPPING_COLUMNS:
@@ -821,6 +862,9 @@ def build_plan(*, out: Path, catalogue: list[dict], mapping_path: Path, state: P
     new_ids, changed, removed = diff_catalogue(cat, mapping_rows, snapshot, only_ids)
     if snapshot is None and only_ids is None:
         dump_json(snap_path, snapshot_of(cat))
+    excluded_ids = exclusions.keys("product")
+    excluded = [excluded_entry(pid, cat.get(pid), exclusions) for pid in new_ids if pid in excluded_ids]
+    new_ids = [pid for pid in new_ids if pid not in excluded_ids]
     in_cat = [pid for pid in new_ids if pid in cat]
     scrapes = epos.scrape(in_cat) if in_cat else {}
     masters = set()
@@ -829,6 +873,10 @@ def build_plan(*, out: Path, catalogue: list[dict], mapping_path: Path, state: P
             for r in link_rows(scrapes.get(pid))[0] or []:
                 mid = canonical_product_id(r.get("master_id"))
                 if (cat.get(mid) or {}).get("IsStockTracked") and mid not in by_pid and mid not in in_cat:
+                    if mid in excluded_ids:
+                        if mid not in {x["pid"] for x in excluded}:
+                            excluded.append(excluded_entry(mid, cat.get(mid), exclusions))
+                        continue
                     masters.add(mid)
     if masters:
         extra = sorted(masters, key=lambda x: (len(x), x))
@@ -848,7 +896,7 @@ def build_plan(*, out: Path, catalogue: list[dict], mapping_path: Path, state: P
             decisions.append(tracked[pid])
     for pid in in_cat:
         if not cat[pid]["IsStockTracked"]:
-            decisions.append(classify_untracked(pid, cat[pid], scrapes.get(pid), cat, by_pid, tracked))
+            decisions.append(classify_untracked(pid, cat[pid], scrapes.get(pid), cat, by_pid, tracked, excluded_ids))
     apply_stock_check(decisions, epos)
     check_batch_names(decisions, mapping_rows)
     propagate(decisions)
@@ -861,14 +909,18 @@ def build_plan(*, out: Path, catalogue: list[dict], mapping_path: Path, state: P
     for d in decisions:
         if d["payload"] is not None:
             d["payload_sha256"] = w7.sha256_text(w7.canonical_json(d["payload"]))
+        d["decision_sha256"] = decision_digest(d)
     plan = {"tool": TOOL, "company": COMPANY, "created_at": now_iso(), "only_ids": sorted(only_ids) if only_ids else None,
             "inputs": {"mapping": {"path": str(mapping_path), "sha256": sha256_file(mapping_path), "rows": len(mapping_rows)},
-                       "catalogue_products": len(cat), "snapshot": str(snap_path) if snapshot is not None else None},
+                       "catalogue_products": len(cat), "snapshot": str(snap_path) if snapshot is not None else None,
+                       "exclusions": {"path": str(exclusions.path or ""), "sha256": exclusions.sha256(),
+                                      "active": len(exclusions.rows)}},
             "qbo": {k: v for k, v in qbo.items() if k != "collisions"}, "qbo_collisions": qbo.get("collisions", []),
             "run_problems": qbo.get("run_problems", []), "decisions": decisions, "changed": changed, "removed": removed,
-            "_snapshot": snapshot_of(cat)}
+            "excluded": excluded, "_snapshot": snapshot_of(cat)}
     plan["counts"] = counts_of(plan)
     plan["plan_sha256"] = plan_digest(decisions)
+    plan["decision_shas"] = {d["pid"]: d["decision_sha256"] for d in decisions if d["review"] != HOLD}
     write_plan_outputs(out, plan, mapping_rows)
     return plan
 
@@ -880,6 +932,9 @@ def plan_text(plan: dict, out: Path) -> str:
              f"mapping-only {c['mapping_only']} (adopt {c['adopt_existing']}); AUTO {c['auto']}, REVIEW {c['review']}, "
              f"HOLD {c['hold']}, unexplained stock {c['unexplained_stock']}",
              f"  plan sha256 {plan['plan_sha256']}"]
+    if plan.get("excluded"):
+        lines.append(f"  EXCLUDED (review_exclusions, not planned) {len(plan['excluded'])}: "
+                     + ", ".join(f"{x['pid']} {x['name']!r}" for x in plan["excluded"][:20]))
     for d in plan["decisions"]:
         if d["review"] != AUTO:
             lines.append(f"  {d['review']} {d['pid']} {d['name']!r} {d['action']}: "
@@ -920,17 +975,84 @@ def create_or_adopt(client, d: dict) -> tuple[str, str]:
     raise StopRun(f"{d['target']['sku']}: create failed {resp.status_code}: {resp.text[:500]}")
 
 
-def select_for_apply(plan: dict, automated: bool) -> list[dict]:
-    allowed = {AUTO} if automated else {AUTO, REVIEW}
-    chosen = [d for d in plan["decisions"] if d["review"] in allowed]
-    ids = {d["pid"] for d in chosen}
+APPLIED_STATE = "applied_state.json"
+
+
+def select_for_apply(plan: dict, automated: bool, *, only=None, exclude=None, excluded_now=frozenset(),
+                     already=frozenset(), mapped=frozenset()) -> tuple[list[dict], list[dict]]:
+    """(selected decisions, not selected [{pid, name, why}]).
+
+    Without ``only`` / ``exclude`` every AUTO (automated) or AUTO+REVIEW (manual) decision is taken and
+    a child whose in-plan master is not taken is dropped silently. With an explicit selection the
+    dependencies are enforced: a MAPPING_ONLY child whose master is created by this plan needs the
+    master selected too (or applied earlier from this plan / already in the installed mapping),
+    else ``ApplyRefused``. ``excluded_now`` (review_exclusions added after the plan) and ``already``
+    (applied by an earlier partial apply of this plan) are never selected."""
+    explicit = only is not None or exclude is not None
     by_pid = {d["pid"]: d for d in plan["decisions"]}
-    return [d for d in chosen if not (d["action"] == MAPPING_ONLY and d["master_pid"] in by_pid and d["master_pid"] not in ids)]
+    if explicit:
+        if automated:
+            raise ApplyRefused("--only / --exclude are for a manual apply, not --auto")
+        unknown = sorted((set(only or ()) | set(exclude or ())) - set(by_pid))
+        if unknown:
+            raise ApplyRefused(f"EPOS id(s) {', '.join(unknown)} are not decisions in this plan "
+                               f"(excluded / already mapped / not new?)")
+        held = sorted(pid for pid in (only or ()) if by_pid[pid]["review"] == HOLD)
+        if held:
+            raise ApplyRefused("cannot apply HOLD decision(s) " + "; ".join(
+                f"{pid}: {'; '.join(by_pid[pid]['reasons'])}" for pid in held))
+        both = sorted(set(only or ()) & set(exclude or ()))
+        if both:
+            raise ApplyRefused(f"EPOS id(s) {', '.join(both)} are in both --only and --exclude")
+    allowed = {AUTO} if automated else {AUTO, REVIEW}
+    chosen, skipped = [], []
+    for d in plan["decisions"]:
+        if d["review"] not in allowed:
+            continue
+        if only is not None and d["pid"] not in only:
+            skipped.append({"pid": d["pid"], "name": d["name"], "why": "not in --only"})
+        elif exclude is not None and d["pid"] in exclude:
+            skipped.append({"pid": d["pid"], "name": d["name"], "why": "--exclude"})
+        elif d["pid"] in excluded_now:
+            skipped.append({"pid": d["pid"], "name": d["name"], "why": "excluded in review_exclusions since the plan"})
+        elif d["pid"] in already:
+            skipped.append({"pid": d["pid"], "name": d["name"], "why": "already applied from this plan"})
+        else:
+            chosen.append(d)
+    ids = {d["pid"] for d in chosen}
+    out, problems = [], []
+    for d in chosen:
+        mid = d["master_pid"]
+        if d["action"] != MAPPING_ONLY or mid not in by_pid or mid in ids or mid in already or mid in mapped:
+            out.append(d)
+            continue
+        why = "excluded in review_exclusions" if mid in excluded_now else (
+            "on HOLD" if by_pid[mid]["review"] == HOLD else "not selected")
+        if explicit:
+            problems.append(f"{d['pid']} {d['name']!r} maps onto master {mid} {by_pid[mid]['name']!r}, which this "
+                            f"plan creates but is {why}; select {mid} too (or apply it first)")
+        else:
+            skipped.append({"pid": d["pid"], "name": d["name"], "why": f"master {mid} {why}"})
+    if problems:
+        raise ApplyRefused("dependency: " + "; ".join(problems))
+    return out, skipped
+
+
+def read_applied_state(plan_dir: Path) -> dict:
+    path = Path(plan_dir) / APPLIED_STATE
+    return json.loads(path.read_text()) if path.exists() else {"mapping_sha256": "", "applied": {}}
 
 
 def apply_plan(plan_dir: Path, *, approval_ref: str, expect_sha: str, automated: bool, client, mapping_path: Path,
-               state: Path, slack: bool = True, max_creates: int | None = None) -> dict:
-    """Create the plan's items, fill Ids, validate and install the new mapping. Fail-closed."""
+               state: Path, slack: bool = True, max_creates: int | None = None, only=None, exclude=None,
+               expect_decision_shas: dict | None = None, exclusions=None) -> dict:
+    """Create the plan's items, fill Ids, validate and install the new mapping. Fail-closed.
+
+    Selection contract (manual apply): ``only`` / ``exclude`` (EPOS ids) pick decisions; each selected
+    decision's stored ``decision_sha256`` must equal its recomputed digest (and ``expect_decision_shas``
+    when given). A plan may be applied in several parts: ``applied_state.json`` in the plan folder
+    records what was applied and the mapping sha it installed, which a later apply of the same plan
+    accepts as the current mapping."""
     plan_dir = Path(plan_dir)
     if not clean(approval_ref):
         raise ApplyRefused("apply requires an approval reference (chat yes, or OIAT_COMPANY_A_CATALOGUE_APPROVAL_REF)")
@@ -938,10 +1060,41 @@ def apply_plan(plan_dir: Path, *, approval_ref: str, expect_sha: str, automated:
     digest = plan_digest(plan["decisions"])
     if digest != plan["plan_sha256"] or digest != clean(expect_sha):
         raise ApplyRefused(f"plan sha mismatch: plan.json gives {digest}, expected {expect_sha or '(none)'}; re-review the plan")
+    only = {canonical_product_id(x) for x in only} if only is not None else None
+    exclude = {canonical_product_id(x) for x in exclude} if exclude is not None else None
+    expect_decision_shas = {canonical_product_id(k): clean(v) for k, v in (expect_decision_shas or {}).items()}
+    mismatched = [d["pid"] for d in plan["decisions"]
+                  if "decision_sha256" in d and d["decision_sha256"] != decision_digest(d)]
+    if mismatched:
+        raise ApplyRefused(f"decision(s) {', '.join(mismatched)} changed since the plan (decision_sha256 differs); "
+                           "re-run plan")
+    if (only is not None or exclude is not None or expect_decision_shas) and any(
+            "decision_sha256" not in d for d in plan["decisions"]):
+        raise ApplyRefused("this plan has no per-decision digests (built by an older catalogue_sync); re-run plan "
+                           "before a selective apply")
+    applied_state = read_applied_state(plan_dir)
     current = sha256_file(mapping_path)
-    if current != plan["inputs"]["mapping"]["sha256"]:
+    if current not in {plan["inputs"]["mapping"]["sha256"], applied_state.get("mapping_sha256")}:
         raise ApplyRefused("the installed mapping changed since the plan was built; re-run plan")
-    selected = select_for_apply(plan, automated)
+    if exclusions is None:
+        exclusions = review_exclusions.load(review_exclusions.path_near(mapping_path))
+    mapping_by_pid = {canonical_product_id(r.get("EPOS Product ID")): r for r in read_csv(mapping_path)}
+    excluded_now = {d["pid"] for d in plan["decisions"] if exclusions.get("product", d["pid"])}
+    already = set(applied_state.get("applied", {}))
+    selected, not_selected = select_for_apply(plan, automated, only=only, exclude=exclude, excluded_now=excluded_now,
+                                              already=already, mapped=set(mapping_by_pid))
+    for d in selected:
+        want = expect_decision_shas.get(d["pid"])
+        if expect_decision_shas and want is None:
+            raise ApplyRefused(f"{d['pid']} is selected but has no expected decision sha")
+        if want is not None and want != d.get("decision_sha256"):
+            raise ApplyRefused(f"{d['pid']}: decision changed (plan {d.get('decision_sha256')}, approved {want}); "
+                               "re-review it")
+        mid = d["master_pid"]
+        if d["action"] == MAPPING_ONLY and not d["target"]["qbo_id"] and mid not in {x["pid"] for x in selected}:
+            row = mapping_by_pid.get(mid)  # master applied earlier from this plan
+            if row is not None and clean(row.get("Target QBO SKU")) == d["target"]["sku"]:
+                d["target"]["qbo_id"] = clean(row.get("Target QBO Item Id"))
     selected_ids = {d["pid"] for d in selected}
     creates = [d for d in selected if d["action"] in CREATE_ACTIONS]
     new_creates = [d for d in creates if not d["adopt_qbo_id"]]
@@ -959,7 +1112,17 @@ def apply_plan(plan_dir: Path, *, approval_ref: str, expect_sha: str, automated:
                          for d in plan["decisions"] if d["review"] == HOLD],
                "unexplained_stock": [{"pid": d["pid"], "name": d["name"], "stock": (d["stock"] or {}).get("units")}
                                      for d in selected if "UNEXPLAINED_STOCK" in d["flags"]],
-               "changed": plan["changed"], "removed": plan["removed"], "installed": None, "stopped": None}
+               "changed": plan["changed"], "removed": plan["removed"], "installed": None, "stopped": None,
+               "selection": {"mode": "explicit" if only is not None or exclude is not None else "all",
+                             "only": sorted(only) if only is not None else None,
+                             "exclude": sorted(exclude) if exclude is not None else None,
+                             "selected": sorted(selected_ids, key=lambda x: (len(x), x)),
+                             "decision_shas": {d["pid"]: d.get("decision_sha256", "") for d in selected}},
+               "not_selected": not_selected, "applied": [],
+               "excluded": list(plan.get("excluded", [])) + [
+                   {"pid": d["pid"], "name": d["name"], "reason": "excluded in review_exclusions after the plan"}
+                   for d in plan["decisions"] if d["pid"] in excluded_now],
+               "already_applied": sorted(already & ({d["pid"] for d in plan["decisions"]}))}
     if not selected:
         receipt["finished_at"] = now_iso()
         finish(receipt, plan_dir, state, plan, slack)
@@ -1000,6 +1163,16 @@ def apply_plan(plan_dir: Path, *, approval_ref: str, expect_sha: str, automated:
                 receipt["mapping_only"].append({"pid": d["pid"], "name": d["name"], "target_sku": d["target"]["sku"],
                                                 "qbo_id": d["target"]["qbo_id"], "multiplier": d["multiplier"]})
         receipt["installed"] = install_mapping(plan_dir, selected, approval_ref, mapping_path)
+        stamp = now_iso()
+        receipt["applied"] = [{"pid": d["pid"], "name": d["name"], "action": d["action"], "review": d["review"],
+                               "decision_sha256": d.get("decision_sha256", ""), "target_sku": d["target"]["sku"],
+                               "qbo_id": d["target"]["qbo_id"], "multiplier": d["multiplier"]} for d in selected]
+        applied_state["mapping_sha256"] = sha256_file(mapping_path)
+        for x in receipt["applied"]:
+            applied_state.setdefault("applied", {})[x["pid"]] = {
+                "qbo_id": x["qbo_id"], "decision_sha256": x["decision_sha256"], "approval_ref": approval_ref,
+                "at": stamp}
+        dump_json(plan_dir / APPLIED_STATE, applied_state)
     except StopRun as exc:
         receipt["stopped"] = str(exc)
         receipt["finished_at"] = now_iso()
@@ -1053,6 +1226,12 @@ def apply_text(receipt: dict) -> str:
     if receipt["skipped_review"]:
         lines.append(f"Needs manual review ({len(receipt['skipped_review'])}): " + ", ".join(
             f"{x['pid']} {x['name']!r} [{'; '.join(x['flags'])}]" for x in receipt["skipped_review"][:30]))
+    if receipt.get("not_selected"):
+        lines.append(f"Not selected ({len(receipt['not_selected'])}): " + ", ".join(
+            f"{x['pid']} {x['name']!r} [{x['why']}]" for x in receipt["not_selected"][:30]))
+    if receipt.get("excluded"):
+        lines.append(f"Excluded (review_exclusions) ({len(receipt['excluded'])}): " + ", ".join(
+            f"{x['pid']} {x['name']!r}" for x in receipt["excluded"][:20]))
     if receipt["holds"]:
         lines.append(f"HOLD ({len(receipt['holds'])}): " + ", ".join(
             f"{x['pid']} {x['name']!r} [{'; '.join(x['reasons'])}]" for x in receipt["holds"][:30]))
@@ -1084,10 +1263,12 @@ def plan_slack_text(plan: dict, out: Path) -> str:
 
 
 def finish(receipt: dict, plan_dir: Path, state: Path, plan: dict, slack: bool) -> None:
-    dump_json(plan_dir / "apply_receipt.json", receipt)
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d_%H%M%S_%fZ')
+    dump_json(plan_dir / "apply_receipt.json", receipt)  # latest (daily_run reads this one)
+    dump_json(plan_dir / f"apply_receipt_{stamp}.json", receipt)  # one per apply (partial applies)
     receipts = state / "receipts"
     receipts.mkdir(parents=True, exist_ok=True)
-    dump_json(receipts / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H%M%SZ')}.json", receipt)
+    dump_json(receipts / f"{stamp}.json", receipt)
     snap = plan_dir / "catalogue_snapshot.json"
     if not receipt["stopped"] and plan.get("only_ids") is None and snap.exists():
         shutil.copyfile(snap, state / "catalogue_snapshot.json")
@@ -1139,7 +1320,7 @@ def ensure_products_mapped(product_ids: set[str], *, out_dir, mapping_path=None,
     registry = ProductConversionRegistry.from_csv(mapping_path)
     unmapped = sorted(i for i in ids if i.casefold() not in registry.by_product_id)
     result = {"unmapped": unmapped, "unresolved": list(unmapped), "applied": False, "plan_sha256": "",
-              "holds": [], "review": [], "error": "", "out": ""}
+              "holds": [], "review": [], "excluded": [], "error": "", "out": ""}
     if not unmapped:
         return result
     out = run_dir(TOOL, out_dir)
@@ -1155,6 +1336,7 @@ def ensure_products_mapped(product_ids: set[str], *, out_dir, mapping_path=None,
                 send_slack(plan_slack_text(plan, out))
         result["plan_sha256"] = plan["plan_sha256"]
         result["holds"] = [d["pid"] for d in plan["decisions"] if d["review"] == HOLD]
+        result["excluded"] = [x["pid"] for x in plan.get("excluded", [])]
         result["review"] = [d["pid"] for d in plan["decisions"] if d["review"] == REVIEW]
     except StopRun as exc:
         result["error"] = str(exc)
@@ -1173,6 +1355,28 @@ def parse_ids(a) -> list[str] | None:
     if a.ids_file:
         ids += [x.strip() for x in Path(a.ids_file).read_text().splitlines() if x.strip()]
     return sorted({canonical_product_id(x) for x in ids}) if ids else None
+
+
+def split_ids(text) -> list[str] | None:
+    """``--only`` / ``--exclude``: None when the flag is absent; refuses an empty list."""
+    if text is None:
+        return None
+    ids = [canonical_product_id(x.strip()) for x in str(text).split(",") if x.strip()]
+    if not ids:
+        raise ApplyRefused("--only / --exclude need at least one EPOS Product ID")
+    return ids
+
+
+def parse_decision_shas(text) -> dict:
+    out = {}
+    for part in (x.strip() for x in str(text or "").split(",")):
+        if not part:
+            continue
+        pid, sep, sha = part.partition("=")
+        if not sep or not pid.strip() or not sha.strip():
+            raise ApplyRefused(f"--expect-decision-shas entry {part!r} is not pid=sha")
+        out[canonical_product_id(pid.strip())] = sha.strip()
+    return out
 
 
 def plan_kwargs(a) -> dict:
@@ -1208,7 +1412,13 @@ def main(argv=None) -> int:
     add_plan_args(ap_)
     ap_.add_argument("--plan-dir", help="folder of a reviewed plan (manual apply)")
     ap_.add_argument("--approval-ref", default="", help="chat-yes reference for this apply")
-    ap_.add_argument("--expect-plan-sha", default="", help="plan_sha256 from the reviewed summary.json")
+    ap_.add_argument("--expect-sha", "--expect-plan-sha", dest="expect_plan_sha", default="",
+                     help="plan_sha256 from the reviewed summary.json")
+    ap_.add_argument("--only", default=None, help="comma-separated EPOS Product IDs: apply only these decisions")
+    ap_.add_argument("--exclude", default=None, help="comma-separated EPOS Product IDs: apply all but these")
+    ap_.add_argument("--expect-decision-shas", default="",
+                     help="pid=decision_sha256,... (summary.json decision_shas); every selected decision must match")
+    ap_.add_argument("--json", action="store_true", help="print the apply receipt as JSON")
     ap_.add_argument("--auto", action="store_true", help=f"automated mode ({AUTO_ENV}=1 + {APPROVAL_ENV})")
     s = sub.add_parser("scheduled", help="ops_scheduler entry: apply --auto when enabled, else plan + Slack")
     add_plan_args(s)
@@ -1230,6 +1440,8 @@ def main(argv=None) -> int:
                 send_slack(plan_slack_text(plan, out))
             return 3 if needs_attention(plan) else 0
         if a.cmd == "scheduled" or (a.cmd == "apply" and a.auto):
+            if getattr(a, "only", None) or getattr(a, "exclude", None):
+                raise ApplyRefused("--only / --exclude are for a manual apply with --plan-dir, not --auto")
             out = run_dir(TOOL, a.out)
             if a.cmd == "scheduled" and not automated_mode_enabled():
                 plan = run_plan(out, mapping_path=mapping_path, state=state, **plan_kwargs(a))
@@ -1246,11 +1458,12 @@ def main(argv=None) -> int:
                 print(apply_text(receipt))
             return 3 if needs_attention(plan) else 0
         if not a.plan_dir:
-            raise ApplyRefused("manual apply needs --plan-dir (a reviewed plan), --approval-ref and --expect-plan-sha")
+            raise ApplyRefused("manual apply needs --plan-dir (a reviewed plan), --approval-ref and --expect-sha")
         receipt = apply_plan(Path(a.plan_dir), approval_ref=a.approval_ref, expect_sha=a.expect_plan_sha,
                              automated=False, client=w7.QBOClient.for_company_a(allow_writes=True),
-                             mapping_path=mapping_path, state=state, slack=slack)
-        print(apply_text(receipt))
+                             mapping_path=mapping_path, state=state, slack=slack, only=split_ids(a.only),
+                             exclude=split_ids(a.exclude), expect_decision_shas=parse_decision_shas(a.expect_decision_shas))
+        print(json.dumps(receipt, indent=1, default=str) if a.json else apply_text(receipt))
         return 0
     except ApplyRefused as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)

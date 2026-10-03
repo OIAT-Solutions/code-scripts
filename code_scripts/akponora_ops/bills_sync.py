@@ -17,9 +17,16 @@ Subcommands
     mapping and the vendor map, checks QBO for already-posted / manual / duplicate bills and
     writes ``plan.json``, ``review.csv`` (with an empty ``Approve`` column), ``review_lines.csv``,
     ``payloads.jsonl``, ``summary.json`` (sha256 of the payloads) and ``review.xlsx``.
+    ``STATE_ROOT/mappings/company_a/review_exclusions.csv`` (next to vendors.csv): a ``bill``
+    exclusion makes that PO ``EXCLUDED`` (resolved outside the tool, permanently); a ``vendor``
+    exclusion HOLDs the supplier's bills with reason ``supplier excluded`` and the supplier is never
+    auto-created. The file path + sha256 go into summary.json ``exclusions_file``.
 ``post`` (WRITES; needs a chat yes)
-    Posts the READY bills marked ``Approve=yes`` in ``--review`` (``skip`` = resolved by a human
-    outside this tool). Needs ``--approval-ref`` and ``--expect-sha``. Before each POST the
+    Posts the READY bills marked ``Approve=yes`` in ``--review`` (``skip`` / ``resolved`` = resolved
+    by a human outside this tool for THIS plan: never posted, counts as done for the cursor). Review
+    exclusions (``review_exclusions``, read from the file the plan recorded) win over Approve=yes:
+    an excluded PO is recorded ``RESOLVED`` and an excluded supplier ``HELD_LIVE``; neither posts.
+    Needs ``--approval-ref`` and ``--expect-sha``. Before each POST the
     DocNumber, manual near-duplicates, the vendor and every item are re-checked live; each Bill
     is re-read and verified; ``results.csv`` makes it resumable; the cursor advances only over
     business days whose POs are all done. ``--auto`` (no Approve column) only with
@@ -91,6 +98,7 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 from playwright.sync_api import sync_playwright
 
+from code_scripts.akponora_ops import review_exclusions
 from code_scripts.akponora_ops import vendors as vendor_ops
 from code_scripts.akponora_ops.common import (
     AKP_NS_SKU_PREFIX, AKP_SKU_PREFIX, ASSET_ID, CATCH_ALL_ITEM_ID, COMPANY, INV_START, LEGACY_PREFIX, REALM,
@@ -128,6 +136,7 @@ AUTO_MAX_COUNT_ENV = "OIAT_COMPANY_A_BILLS_AUTO_MAX_COUNT"
 APPROVE_YES = {"yes", "y", "true", "1", "approve", "approved"}
 APPROVE_SKIP = {"skip", "resolved"}
 DONE_RESULTS = {"POSTED", "ADOPTED", "RESOLVED"}
+PO_EXCLUDED_NOTE = "PO excluded in review_exclusions - resolved outside this tool"
 DEFAULT_HISTORY = REPO_ROOT / "outputs" / "grni_2026-09"
 
 VENDOR_COLS = vendor_ops.VENDOR_COLS
@@ -580,8 +589,12 @@ def expected_total(lines: list[dict]) -> Decimal:
 
 # ---------------------------------------------------------------- plan (pure)
 def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str, str], tax_mode: str = "gross",
-               lookback: list[dict] = (), dup_days: int = 14, dup_min_value: Decimal = Decimal("50000")) -> list[dict]:
-    """One entry per PO received in ``window``. No HTTP."""
+               lookback: list[dict] = (), dup_days: int = 14, dup_min_value: Decimal = Decimal("50000"),
+               exclusions=None) -> list[dict]:
+    """One entry per PO received in ``window``. No HTTP.
+
+    ``exclusions`` (``review_exclusions.Exclusions``): an excluded PO (kind ``bill``) is ``EXCLUDED``
+    (resolved outside the tool, never posted); an excluded supplier (kind ``vendor``) HOLDs."""
     items, vendors, bills = ctx["items"], ctx["vendors"], ctx["bills"]
     bills_by_doc = defaultdict(list)
     for b in bills:
@@ -601,6 +614,15 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
             e["status"] = "EXCLUDED"
             reasons.append(SEPTEMBER_NOTE)
             continue
+        po_excluded = exclusions.describe("bill", po["ref"]) if exclusions is not None else ""
+        if po_excluded:
+            e["status"] = "EXCLUDED"
+            reasons.append(f"{PO_EXCLUDED_NOTE}: {po_excluded}")
+            continue
+        supplier_excluded = (exclusions.describe("vendor", po["supplier"])
+                             if exclusions is not None and clean(po["supplier"]) else "")
+        if supplier_excluded:
+            reasons.append(f"supplier excluded: {supplier_excluded}")
         if po["status"].casefold() not in RECEIVED_STATUSES:
             reasons.append(f"EPOS status '{po['status']}' is not received")
         if not po["has_detail"]:
@@ -778,6 +800,7 @@ def payload_lines(entries: list[dict]) -> list[dict]:
 
 
 REASON_CATEGORIES = (
+    ("supplier excluded", "supplier excluded (review_exclusions)"),
     ("not approved in vendors.csv", "vendor not in vendors.csv"),
     ("no supplier on the EPOS PO note", "no supplier on PO note"),
     ("QBO vendor", "QBO vendor problem"),
@@ -895,14 +918,19 @@ def unmapped_suppliers(pos: list[dict], vmap, window: tuple[str, str]) -> list[d
 
 
 def vendor_stage(pos, vmap, ctx, *, window, vendors_path: Path, create: bool, write_client=None,
-                 history: Path | None = None) -> list[dict]:
+                 history: Path | None = None, exclusions=None) -> list[dict]:
     """Score unmapped suppliers; in ``create`` mode (scheduled) create genuinely new vendors when the
-    auto gates allow. Updates ``ctx['vendors']`` with created vendors. Returns the actions."""
+    auto gates allow (never an excluded supplier). Updates ``ctx['vendors']`` with created vendors.
+    Returns the actions."""
     suppliers = unmapped_suppliers(pos, vmap, window)
+    if exclusions is not None:
+        po_skip = exclusions.keys("bill")
+        suppliers = [s for s in suppliers if not set(s["po_refs"]) <= po_skip]
     if not suppliers:
         return []
     hist = history_suppliers(history) if history and Path(history).exists() else {}
-    actions = vendor_ops.plan_actions(suppliers, ctx["vendors"], history=hist, bill_counts=ctx.get("bill_counts"))
+    actions = vendor_ops.plan_actions(suppliers, ctx["vendors"], history=hist, bill_counts=ctx.get("bill_counts"),
+                                      exclusions=exclusions)
     if not create:
         for act in actions:
             if act["state"] == vendor_ops.CREATE:
@@ -990,14 +1018,18 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
     vmap = load_vendor_map(read_csv(vpath))
     ctx["bill_counts"] = Counter((b.get("VendorRef") or {}).get("value") for b in ctx["bills"])
     history = Path(a.history) if getattr(a, "history", None) else (DEFAULT_HISTORY if hasattr(a, "history") else None)
+    xpath = Path(getattr(a, "exclusions", None) or review_exclusions.path_near(vpath))
+    exclusions = review_exclusions.load(xpath)
     vendor_actions = vendor_stage(pos, vmap, ctx, window=window, vendors_path=vpath,
                                   create=bool(getattr(a, "create_vendors", False)), write_client=write_client,
-                                  history=history)
+                                  history=history, exclusions=exclusions)
     if any(act["state"] == vendor_ops.CREATED for act in vendor_actions):
         vmap = load_vendor_map(read_csv(vpath))
     entries = plan_bills(pos, registry=registry, ctx=ctx, vmap=vmap, window=window, tax_mode=a.tax_mode,
-                         lookback=lookback, dup_days=a.dup_days, dup_min_value=Decimal(a.dup_min_value))
-    by_key = {act["key"]: act for act in vendor_actions if act["state"] != vendor_ops.CREATED}
+                         lookback=lookback, dup_days=a.dup_days, dup_min_value=Decimal(a.dup_min_value),
+                         exclusions=exclusions)
+    by_key = {act["key"]: act for act in vendor_actions
+              if act["state"] not in (vendor_ops.CREATED, vendor_ops.EXCLUDED)}
     for e in entries:
         act = by_key.get(vendor_key(e["po"]["supplier"]))
         if act and e["status"] == "HOLD":
@@ -1008,6 +1040,8 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
             "closed_through": min(window[1], (business_date(captured_at) - timedelta(days=1)).isoformat()),
             "mapping": {"path": str(Path(a.mapping) if a.mapping else mapping_file()), "sha256": registry.source_sha256},
             "vendors_file": {"path": str(vpath), "sha256": sha256_file(vpath)},
+            "exclusions_file": {"path": str(xpath), "sha256": exclusions.sha256(),
+                                "active": len(exclusions.rows)},
             "lookback_pos": len(lookback), "qbo_bills_checked": len(ctx["bills"]), "book_close": ctx["book_close"],
             "qbo_requests": client.requests,
             "vendor_actions": [{k: act[k] for k in ("state", "epos_name", "display_name", "vendor_id", "best_score",
@@ -1200,6 +1234,9 @@ def run_post(plan_dir: Path, *, client: QBOClient, registry, approval_ref: str, 
         cap, max_count = None, None
     results_path = plan_dir / "results.csv"
     results = load_results(results_path)
+    xinfo = summary.get("exclusions_file") or {}
+    exclusions = review_exclusions.load(Path(xinfo["path"])) if xinfo.get("path") else review_exclusions.empty()
+    supplier_of = {e["po"]["ref"]: clean(e["po"].get("supplier")) for e in plan["entries"]}
     counts = Counter()
     stop = None
     for p in sorted(approved, key=lambda x: (x["received_date"], x["po"])):
@@ -1208,6 +1245,17 @@ def run_post(plan_dir: Path, *, client: QBOClient, registry, approval_ref: str, 
             continue
         base = {"ts": now_iso(), "PO": p["po"], "DocNumber": p["doc_number"], "payload_sha256": p["payload_sha256"],
                 "requestid": p["requestid"], "approval_ref": approval_ref, "mode": "auto" if auto else "review"}
+        # exclusions added after the plan win over an approval: never post an excluded PO / supplier
+        why = exclusions.describe("bill", p["po"])
+        if why:
+            counts["EXCLUDED"] += 1
+            append_result(results_path, {**base, "status": "RESOLVED", "detail": f"{PO_EXCLUDED_NOTE}: {why}"})
+            continue
+        why = exclusions.describe("vendor", supplier_of.get(p["po"])) if supplier_of.get(p["po"]) else ""
+        if why:
+            counts["HELD_LIVE"] += 1
+            append_result(results_path, {**base, "status": "HELD_LIVE", "detail": f"supplier excluded: {why}"})
+            continue
         if auto and (Decimal(p["bill_total"]) > cap or counts["POSTED"] >= max_count):
             counts["CAPPED"] += 1
             append_result(results_path, {**base, "status": "CAPPED", "Total": p["bill_total"],
