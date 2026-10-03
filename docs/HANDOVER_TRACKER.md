@@ -11,7 +11,7 @@ Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP
 | Thing | Location |
 | --- | --- |
 | Main repo (this Mac) | `/Users/marvinmokolo/Developer Projects/OIAT/code-scripts` |
-| Main working branch | `cursor/post-akponora-qbo-writes-51f3` (PR **#62** → `master`). Local tip `d98255b` + docs; **pushed up to `3d08bb0`**. Commits after that are local only: stock snapshot, approval contracts, deposits spec, this tracker. Push before the server pulls |
+| Main working branch | `cursor/post-akponora-qbo-writes-51f3` (PR **#62** → `master`). **Everything is pushed** (as of `1a960a5` with this tracker). The server runs `0ad7a1f` until the next deploy |
 | Portal redesign branch | `codex/portal-redesign-phase1`, in worktree **`/private/tmp/oiat-portal-redesign-phase1`**. ⚠️ It lives under `/private/tmp`, which can be wiped on reboot. **Push it or copy it before any restart.** It contains all main-branch work up to `d98255b` plus Codex's portal pages. Checkpoint `07a6e82` = Codex's unfinished WIP (Codex hit its usage limit and will **not** resume) |
 | Evidence/data (never commit) | `code-scripts/outputs/…`, `code-scripts/runtime/…`, `../MISC/AKPONORA Investigation/COGS Analysis/As of 30th September 2026/` |
 | Mac QBO token | **Retired** (`runtime/code_scripts/qbo_tokens.sqlite.retired`). **Never call QuickBooks from the Mac.** The server owns the tokens |
