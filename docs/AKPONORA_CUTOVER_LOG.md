@@ -104,3 +104,11 @@ Company: AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `934145
 - **9 October POs** (1–2 Oct, ₦237,350) planned READY (`outputs/bills_sync_2026-10-02/`). **Not posted**: left for the first `daily_run` to post as its live test. PO 3969 (Uncle Sam's bread, same products as 3967) is judged a genuine daily delivery but is expected to hold for review.
 - **W5b rename**: the remaining 437 active legacy Inventory items renamed `LEGACY — …` (10-item test + 427, 0 failures, IA `77` unchanged at ₦146,891,340.84). Active Inventory is now 3,938 `AKP-` + 4,316 `LEGACY —`, 0 other (`outputs/w5b_legacy_rename_2026-10-02/`). The server's webhook handler posted "invalid_grant" Slack alerts during the rename because its token is stale. This is expected until the server gets the token (`docs/SERVER_SETUP.md` §4).
 - 1 Oct FIFO cost of sales confirmed booked: IA `77` ₦148,824,877.40 → ₦146,891,340.84 (₦1,933,536.56).
+
+## 3 Oct 2026, early hours: server go-live (owner chat yes)
+
+- OIAT server (`oiat-srv-01`, Docker on Windows) moved to branch commit `0ad7a1f`. Server Company A config replaced with the repo version (conversion on, `fail_closed_from` 2026-10-01, auto-fix off) and synced into the portal DB (no drift).
+- Copied to `/data`: installed mapping (sha `b4d8c640…`), `vendors.csv` (sha `ae1c9cb2…`), ops cursors. **The server now owns the Company A QBO token**; the Mac copy is retired (`runtime/code_scripts/qbo_tokens.sqlite.retired`). Company B token untouched.
+- Smoke tests: the first found the missing `openpyxl` in the image and a false "deposit mismatch" on re-runs of posted October days (fixed in `0ad7a1f`). The second dry-run on 1 Oct was clean: catalogue OK, 2 POs READY (₦34,650), 6 posted receipts skipped, 0 failures. Guard showed 437 `legacy_renamed` alerts from the pre-rename snapshot (expected).
+- Server `.env` (backup `.env.bak_20261003`): Company A daily run on at 06:00 Lagos with standing approvals and caps for sales, catalogue (25), vendors (5) and bills (₦2M/bill, 20/run). `COMPOSE_PROFILES=akponora-ops`. The `akponora-ops` container logs `Scheduled daily_run at '0 6 * * *' (Africa/Lagos)`.
+- Docker builds over SSH fail on Windows (credential store needs a desktop session): run `docker compose build` from an interactive PowerShell on the server.

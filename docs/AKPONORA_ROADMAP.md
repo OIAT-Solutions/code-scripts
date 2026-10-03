@@ -12,12 +12,12 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | --- | --- | --- |
 | [x] 2026-10-02 | Finish renaming the remaining 437 legacy items `LEGACY — …` (`outputs/w5b_legacy_rename_2026-10-02/`): all 4,316 legacy Inventory items now `LEGACY —`, IA unchanged | Agent |
 | [x] 2026-10-02 | Merge `daily_run` and the safety/clean-up branches; full tests green | Agent |
-| [ ] | Push to PR #62 | Agent (needs Marvin's yes) |
-| [ ] | Server: pull the branch, `docker compose build && up` | Marvin / Team |
-| [ ] | Server: copy `runtime/mappings/company_a/approved.csv`, `vendors.csv` and ops cursors into the server's `/data` (see `SERVER_SETUP.md`) | Marvin |
-| [ ] | Server: copy `runtime/code_scripts/qbo_tokens.sqlite`, run one read-only check on the server, then retire the Mac's copy (`.retired`). From then on **only the server refreshes tokens** | Marvin |
-| [ ] | Server `.env`: Company A switches (`OIAT_COMPANY_A_DAILY_RUN_ENABLED`, `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED`, `OIAT_COMPANY_A_STANDING_APPROVAL_REF`, catalogue/vendor/bills auto switches + caps) | Marvin |
-| [ ] | Server smoke test: `daily_run --dry-run --date <yesterday>` | Marvin / Agent on server |
+| [x] 2026-10-03 | Push to PR #62 | Agent (needs Marvin's yes) |
+| [x] 2026-10-03 | Server: pull the branch, `docker compose build && up` | Marvin / Team |
+| [x] 2026-10-03 | Server: copy `runtime/mappings/company_a/approved.csv`, `vendors.csv` and ops cursors into the server's `/data` (see `SERVER_SETUP.md`) | Marvin |
+| [x] 2026-10-03 | Server: copy `runtime/code_scripts/qbo_tokens.sqlite`, run one read-only check on the server, then retire the Mac's copy (`.retired`). From then on **only the server refreshes tokens** | Marvin |
+| [x] 2026-10-03 | Server `.env`: Company A switches (`OIAT_COMPANY_A_DAILY_RUN_ENABLED`, `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED`, `OIAT_COMPANY_A_STANDING_APPROVAL_REF`, catalogue/vendor/bills auto switches + caps) | Marvin |
+| [x] 2026-10-03 | Server smoke test: `daily_run --dry-run --date <yesterday>` | Marvin / Agent on server |
 | [ ] | First real `daily_run`: expect 8 of the 9 October POs (1–2 Oct, ₦237,350) to post as unpaid bills, and PO 3969 (possible duplicate) to be held for review | Server |
 
 ## 2. First week of October
