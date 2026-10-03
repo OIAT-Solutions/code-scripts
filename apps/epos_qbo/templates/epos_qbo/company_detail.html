@@ -112,6 +112,13 @@
         </div>
     </div>
 
+    {% if company_a_card %}
+    {% include "components/company_a_card.html" with card=company_a_card %}
+    {% endif %}
+    {% if company_a_holds_alerts %}
+    {% include "components/company_a_holds_alerts.html" with hold=company_a_holds_alerts.hold guard=company_a_holds_alerts.guard %}
+    {% endif %}
+
     <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
         <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-600">
             <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">

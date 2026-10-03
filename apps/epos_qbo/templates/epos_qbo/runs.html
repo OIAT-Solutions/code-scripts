@@ -247,6 +247,30 @@
         </table>
         </div>
     </section>
+
+    <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden" id="company-a-daily-runs-panel">
+        <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-600 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Company A daily runs</h2>
+                <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Products → bills → sales → health check → deposits, run by the akponora-ops container (read-only).</p>
+            </div>
+            <a href="{% url 'epos_qbo:company-a-runs' %}" class="btn btn-secondary text-xs">View all</a>
+        </div>
+        {% if company_a_recent_runs %}
+        <ul class="divide-y divide-slate-100 dark:divide-slate-700">
+            {% for r in company_a_recent_runs %}
+            <li class="px-5 py-3 flex flex-wrap items-center gap-2 text-sm">
+                <a class="font-medium text-emerald-700 dark:text-emerald-400 hover:underline" href="{% url 'epos_qbo:company-a-run-detail' r.business_date r.run_id %}">{{ r.business_date }}</a>
+                <span class="text-xs text-slate-500 dark:text-slate-400">{{ r.mode_label }}</span>
+                {% include "components/company_a_badge.html" with status=r.status text=r.status_label icon=r.icon %}
+                {% for s in r.steps %}{% include "components/company_a_badge.html" with status=s.status text=s.label icon=s.icon %}{% endfor %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="px-5 py-4 text-sm text-slate-500 dark:text-slate-400">No Company A daily-run evidence found.</p>
+        {% endif %}
+    </section>
 </div>
 {% endblock %}
 

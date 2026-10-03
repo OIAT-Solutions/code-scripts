@@ -136,6 +136,12 @@
                     Runs
                 </a>
 
+                <a href="{% url 'epos_qbo:company-a-runs' %}"
+                    class="group flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md {% if 'company-a-' in request.resolver_match.url_name %}bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-100 dark:border-slate-600{% else %}text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100 transition-colors{% endif %}">
+                    <iconify-icon icon="solar:checklist-minimalistic-linear" class="text-slate-400 dark:text-slate-500 transition-colors" width="20"></iconify-icon>
+                    Company A daily
+                </a>
+
                 <a href="{% url 'epos_qbo:schedules' %}"
                     class="group flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md {% if request.resolver_match.url_name == 'schedules' %}bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-100 dark:border-slate-600{% else %}text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100 transition-colors{% endif %}">
                     <iconify-icon icon="solar:calendar-linear"

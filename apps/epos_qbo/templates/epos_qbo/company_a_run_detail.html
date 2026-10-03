@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}Company A run {{ run.business_date }} • EPOS → QBO{% endblock %}
+
+{% block topbar %}
+{% include "components/topbar.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 flex flex-wrap items-center gap-2">
+            Company A daily run {{ run.business_date }}
+            {% include "components/company_a_badge.html" with status=run.status text=run.status_label icon=run.icon %}
+            {% if run.dry_run %}{% include "components/company_a_badge.html" with status='skipped' text='Dry run — nothing written to QBO' %}{% endif %}
+        </h1>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">{{ run.run_id }}{% if run.finished_at %} · finished {{ run.finished_at|date:"Y-m-d H:i T" }}{% endif %}</p>
+        {% if run.error %}<p class="text-sm text-red-700 dark:text-red-400 mt-2">summary.json {{ run.error }}{% if run.status == 'incomplete' %} — the run may still be in progress or crashed before writing it.{% endif %}</p>{% endif %}
+    </div>
+
+    {% include "components/company_a_hold_banner.html" with hold=hold %}
+
+    <section id="waiting" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Waiting for review ({{ run.waiting|length }})</h2>
+        {% if run.waiting %}
+        <ul class="mt-3 space-y-1.5 text-sm text-amber-800 dark:text-amber-300 list-disc pl-5">
+            {% for line in run.waiting %}<li class="break-words">{{ line }}</li>{% endfor %}
+        </ul>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-3">Approving from the portal comes in phase 2; follow docs/AKPONORA_DAILY_OPERATIONS.md for now.</p>
+        {% else %}
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">Nothing waiting.</p>
+        {% endif %}
+    </section>
+
+    {% for item in steps %}
+    {% with s=item.step %}
+    <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden" id="step-{{ s.name }}">
+        <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-600 flex flex-wrap items-center gap-2">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">{{ forloop.counter }}. {{ s.label }}</h2>
+            <span class="text-xs font-mono text-slate-500 dark:text-slate-400">{{ s.name }}</span>
+            {% include "components/company_a_badge.html" with status=s.status text=s.status icon=s.icon %}
+            {% if s.exit_code is not None %}<span class="text-xs text-slate-500 dark:text-slate-400">exit {{ s.exit_code }}</span>{% endif %}
+        </div>
+        <div class="p-5 space-y-4">
+            {% if s.detail %}<p class="text-sm text-slate-700 dark:text-slate-200 break-words">{{ s.detail }}</p>{% endif %}
+            {% if s.key_facts %}
+            <dl class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                {% for label, value in s.key_facts %}
+                <div><dt class="text-xs text-slate-500 dark:text-slate-400">{{ label }}</dt><dd class="font-medium text-slate-900 dark:text-slate-100 break-words">{{ value }}</dd></div>
+                {% endfor %}
+            </dl>
+            {% endif %}
+            {% if s.extra_counts %}
+            <details>
+                <summary class="text-xs text-slate-500 dark:text-slate-400 cursor-pointer">Other fields ({{ s.extra_counts|length }})</summary>
+                <dl class="mt-2 space-y-1 text-xs">
+                    {% for key, value in s.extra_counts %}<div><dt class="inline font-mono text-slate-500 dark:text-slate-400">{{ key }}:</dt> <dd class="inline break-words">{{ value }}</dd></div>{% endfor %}
+                </dl>
+            </details>
+            {% endif %}
+            {% if s.review %}
+            <div>
+                <p class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Review items</p>
+                <ul class="space-y-1 text-sm text-amber-800 dark:text-amber-300 list-disc pl-5">{% for line in s.review %}<li class="break-words">{{ line }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            {% if item.log_tail %}
+            <details>
+                <summary class="text-xs text-slate-500 dark:text-slate-400 cursor-pointer">log.txt (last lines)</summary>
+                <pre class="mt-2 text-xs bg-slate-50 dark:bg-slate-900 p-3 rounded-md overflow-x-auto max-h-96 whitespace-pre-wrap break-words">{{ item.log_tail }}</pre>
+            </details>
+            {% endif %}
+        </div>
+    </section>
+    {% endwith %}
+    {% empty %}
+    <p class="text-sm text-slate-500 dark:text-slate-400">No step results in this run.</p>
+    {% endfor %}
+
+    <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5" id="evidence">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-slate-100">Evidence files</h2>
+        {% if files %}
+        <ul class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-1 text-sm">
+            {% for f in files %}
+            <li><a class="font-mono text-xs text-emerald-700 dark:text-emerald-400 hover:underline" href="{% url 'epos_qbo:company-a-evidence' run.business_date run.run_id %}?path={{ f.path|urlencode }}">{{ f.path }}</a> <span class="text-[11px] text-slate-400">{{ f.size|filesizeformat }}</span></li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No viewable files.</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

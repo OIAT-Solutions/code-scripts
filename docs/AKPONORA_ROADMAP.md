@@ -54,6 +54,10 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | **Manual bill import** inside `bills_sync` for purchases outside EPOS POs (from the old bill importer) | Agent |
 | [ ] | `qbo_inv_manager`: keep only read-only item checks; drop start-date editing for Company A | Agent |
 | [ ] | Remove each temporary safety guard once its tool is refactored | Agent |
+| [x] | **Portal phase 1 (read-only)**: Company A daily run on Schedules, Company A daily-runs list + run detail (steps, review items, log tails, evidence viewer), Overview card, Holds & alerts panel | Agent |
+| [ ] | **Portal phase 2 — Review & Approvals inbox**: approve / skip held bills, new vendors, new products (catalogue review) and deposits, each with who/why audit; clear the posting hold with approver + reason (archives the hold file as `clear-hold` does); "Run now" for the daily run (whole run or `--only` steps, dry-run first) | Agent |
+| [ ] | **Portal phase 3 — Products & Stock / Suppliers / Deposits pages**: Products & Stock (see above), Suppliers (vendor mapping, created / held vendors, PO supplier names), Deposits (Undeposited Funds balance, days since last deposit, proposed deposits once the deposits step is real) | Agent |
+| [ ] | **Portal phase 3 — settings and mapping editors with audit**: daily-run env toggles / caps, product and vendor mappings, each change recorded (who, when, before/after) and synced to the files the ops jobs read | Agent |
 
 ## 5. Platform / team
 
@@ -61,6 +65,7 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | --- | --- | --- |
 | [ ] | Each team member: QBO **sandbox** profile for development (`./build/run-sandbox.sh`); no production tokens on laptops | Team |
 | [ ] | Production work happens on the server (server Claude session, SSH over Tailscale, or portal "Run now") | Team |
+| [ ] | Portal as the single UI for Company A: phase 2 (approvals inbox, hold clear, Run now) and phase 3 (Products & Stock, Suppliers, Deposits, settings/mapping editors) from §4; until then approvals stay on the CLI | Agent / Marvin |
 | [ ] | Optional: read-only token endpoint on the server (1-hour access tokens, never the refresh token) if laptops need production lookups | Agent |
 | [ ] | Public ingress for QBO webhooks (portal is tailnet-only) so webhook item lookups work | Marvin / Team |
 | [ ] | Repo clean-up phase 2 (Codex): root shims, old scheduler pair, `akponora_canonical_catalog.py`, journal templates, `.env.example` completeness | Codex |
