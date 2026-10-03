@@ -197,6 +197,7 @@ class FakeQBO:
             self.next_id += 1
             dep = {**body, "Id": str(self.next_id), "SyncToken": "0",
                    "TotalAmt": round(sum(ln["Amount"] for ln in body["Line"]), 2)}
+            dep.pop("DocNumber", None)  # like the live company (3 Oct 2026): Deposits keep no DocNumber
             self.deposits[dep["Id"]] = dep
             for ln in body["Line"]:
                 rec = self.receipts[ln["LinkedTxn"][0]["TxnId"]]
@@ -220,6 +221,9 @@ class FakeQBO:
             m = re.search(r"DocNumber = '([^']*)'", sql)
             if m:
                 return {"Deposit": [d for d in self.deposits.values() if d.get("DocNumber") == m.group(1)]}
+            m = re.search(r"TxnDate = '([^']*)'", sql)
+            if m:
+                return {"Deposit": page([d for d in self.deposits.values() if d["TxnDate"] == m.group(1)])}
             lo = re.search(r"TxnDate >= '([^']*)'", sql).group(1)
             return {"Deposit": page([d for d in self.deposits.values() if d["TxnDate"] >= lo])}
         if "from Transfer" in sql:
@@ -572,6 +576,32 @@ class PostTests(NoNetwork):
         d = self.plan(fake, google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])["days"][0]
         self.assertEqual(d["status"], ufd.DONE, d["reasons"])
         self.assertEqual(d["post_command"], "")
+
+    def test_partial_day_without_docnumbers_resumes_on_the_next_plan(self):
+        """3 Oct 2026: QBO kept no DocNumber on Deposit 80514; the next plan must recognise it by its memo
+        tag, plan only the remaining banks, and finish the day with no duplicate deposit."""
+        fake = FakeQBO(DAY1_RECEIPTS)
+        day_dir, sha = self.ready_day(fake)
+        planned = [json.loads(line) for line in (day_dir / "payloads.jsonl").read_text().splitlines() if line.strip()]
+        deposits = [p for p in planned if p["kind"] == "deposit"]
+        state, dep, _ = ufd.post_one(client(fake, True), deposits[0], "owner yes 3 Oct")
+        self.assertEqual(state, "POSTED")
+        self.assertNotIn("DocNumber", fake.deposits[dep["Id"]])  # like the live company
+        self.assertEqual(ufd.deposit_key(fake.deposits[dep["Id"]]), deposits[0]["key"])
+        # the same payload again is adopted, not re-posted
+        n = len(fake.posts())
+        self.assertEqual(ufd.post_one(client(fake, True), deposits[0], "owner yes 3 Oct")[0], "ADOPTED")
+        self.assertEqual(len(fake.posts()), n)
+        # a fresh plan keeps the posted deposit and plans only the rest
+        d = self.plan(fake, google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.READY, d["reasons"])
+        res = ufd.post_day(Path(d["dir"]), client=client(fake, True), approval_ref="owner yes 3 Oct",
+                           expect_sha=d["payloads_sha256"])
+        self.assertTrue(res["complete"], res)
+        self.assertEqual(len(fake.deposits), len(deposits))  # no duplicate for the first bank
+        self.assertEqual(fake.uf_balance(), 0)
+        d = self.plan(fake, google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.DONE, d["reasons"])
 
     def test_receipt_changed_after_plan_stops_before_posting(self):
         fake = FakeQBO(DAY1_RECEIPTS)

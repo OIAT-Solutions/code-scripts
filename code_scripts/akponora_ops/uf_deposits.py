@@ -38,7 +38,8 @@ Per business day:
      Transfer -> transfer banks (Kind column), mixed tenders (``Card/Cash`` ...) -> the union of
      their pools; within the pool the bank whose remaining target fits the receipt best, else the
      bank with the most target left (= sheet proportions);
-   * one Bank Deposit per bank (``DocNumber UF<yymmdd><bank no>``, ``LinkedTxn`` SalesReceipt with
+   * one Bank Deposit per bank (tag ``UF<yymmdd><bank no>``, sent as DocNumber and in the memo; QBO drops
+     the DocNumber on Deposits here, so the memo tag ``| UF... ->`` is what identifies them), ``LinkedTxn`` SalesReceipt with
      ``TxnLineId 0``, minorversion 65 - the form that worked on 26 Sep);
    * then Bank->Bank true-up Transfers (largest surplus to largest deficit) so every bank's day
      total equals its target exactly. No transfer when the receipts already fit. Each transfer's
@@ -165,6 +166,24 @@ def deposit_doc(day: str, bank_no: str, n: int = 1) -> str:
 def is_own_deposit_doc(doc: str, day: str | None = None) -> bool:
     m = re.fullmatch(r"UF(\d{6})\d{6}(-\d+)?", clean(doc))
     return bool(m) and (day is None or m.group(1) == yymmdd(day))
+
+
+def deposit_key(dep: dict) -> str:
+    """Our tag for a Deposit: its DocNumber, else the ``| UF<yymmdd><bank no>[-n] ->`` tag in the memo.
+
+    This QBO company does not keep DocNumber on Deposits (found 3 Oct 2026: Deposit 80514 and the 26 Sep
+    deposits read back with DocNumber null), so the memo tag is what identifies our deposits."""
+    doc = clean(dep.get("DocNumber"))
+    if doc:
+        return doc
+    m = re.search(r"\| (UF\d{12}(?:-\d+)?) ->", clean(dep.get("PrivateNote")))
+    return m.group(1) if m else ""
+
+
+def own_deposits(client: QBOClient, day: str, key: str) -> list[dict]:
+    """Live Deposits dated ``day`` that carry ``key`` (DocNumber or memo tag)."""
+    rows = client.query_all(f"select * from Deposit where TxnDate = '{day}'", "Deposit")
+    return [d for d in rows if deposit_key(d) == key]
 
 
 def transfer_tag(day: str, src_no: str, dst_no: str) -> str:
@@ -526,7 +545,7 @@ def deposit_links(deposits: list[dict]) -> dict:
     """{SalesReceipt Id: deposit info} from every Deposit line's LinkedTxn."""
     out = {}
     for dep in deposits:
-        info = {"deposit_id": clean(dep.get("Id")), "doc": clean(dep.get("DocNumber")),
+        info = {"deposit_id": clean(dep.get("Id")), "doc": deposit_key(dep),
                 "bank_id": clean((dep.get("DepositToAccountRef") or {}).get("value")),
                 "txn_date": clean(dep.get("TxnDate"))}
         for line in dep.get("Line") or []:
@@ -749,7 +768,7 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
 
 def build_actions(day: str, rec: dict, alloc: dict, banks: dict, ctx: dict) -> tuple[list, list]:
     actions, conflicts = [], []
-    existing_docs = {clean(d.get("DocNumber")): d for d in ctx["deposits"] if clean(d.get("DocNumber"))}
+    existing_docs = {deposit_key(d): d for d in ctx["deposits"] if deposit_key(d)}
     by_bank_new = defaultdict(list)
     pending = {r["id"]: r for r in rec["pending"]}
     for rid, bank in alloc["assigned"].items():
@@ -943,8 +962,8 @@ def verify_deposit(dep: dict, p: dict) -> list[str]:
                         f"{want['DepositToAccountRef']['value']}")
     if clean(dep.get("TxnDate")) != want["TxnDate"]:
         problems.append(f"TxnDate {dep.get('TxnDate')} != {want['TxnDate']}")
-    if clean(dep.get("DocNumber")) != want["DocNumber"]:
-        problems.append(f"DocNumber {dep.get('DocNumber')} != {want['DocNumber']}")
+    if deposit_key(dep) != want["DocNumber"]:
+        problems.append(f"deposit tag {deposit_key(dep) or '(none)'} != {want['DocNumber']}")
     if abs(D(dep.get("TotalAmt"), Decimal(0)) - Decimal(p["amount"])) > CENT / 2:
         problems.append(f"TotalAmt {dep.get('TotalAmt')} != {p['amount']}")
     linked = sorted(clean(link.get("TxnId")) for line in dep.get("Line") or [] for link in line.get("LinkedTxn") or []
@@ -1002,7 +1021,7 @@ def post_one(client: QBOClient, p: dict, approval_ref: str) -> tuple[str, dict |
     payload = with_ref(p["payload"], approval_ref)
     if p["kind"] == "deposit":
         doc = p["key"]
-        existing = as_list(client.query(f"select * from Deposit where DocNumber = '{qbo_escape(doc)}'").get("Deposit"))
+        existing = own_deposits(client, p["payload"]["TxnDate"], doc)
         if existing:
             if len(existing) == 1 and not verify_deposit(existing[0], p):
                 return "ADOPTED", existing[0], f"Deposit {existing[0].get('Id')} already exists and matches"
@@ -1012,7 +1031,7 @@ def post_one(client: QBOClient, p: dict, approval_ref: str) -> tuple[str, dict |
             return "STOP", None, why
         resp = post_with_minorversion(client, "/deposit", payload, p["requestid"], DEPOSIT_MINORVERSION)
         if resp.status_code != 200:
-            again = as_list(client.query(f"select * from Deposit where DocNumber = '{qbo_escape(doc)}'").get("Deposit"))
+            again = own_deposits(client, p["payload"]["TxnDate"], doc)
             if len(again) == 1 and not verify_deposit(again[0], p):
                 return "POSTED", again[0], ""
             return "STOP", None, f"POST /deposit failed {resp.status_code}: {resp.text[:400]}"
