@@ -60,6 +60,7 @@ from .models import (
     RunScheduleEvent,
 )
 from . import portal_settings
+from . import views_company_a as company_a_views
 from .services.config_sync import (
     apply_advanced_payload,
     build_basic_payload,
@@ -1710,6 +1711,7 @@ def overview(request):
     context["quick_sync_target_date"] = _quick_sync_default_target_date()
     context["quick_sync_timezone"] = context.get("business_timezone_display", get_business_timezone_display())
     context["dashboard_timezone_display"] = get_dashboard_timezone_display()
+    context["company_a_card"] = company_a_views.safe_overview_card()
     context.update(_nav_context())
     context.update(
         _breadcrumb_context(
@@ -2371,6 +2373,7 @@ def schedules_page(request):
         "company_target_all": RunScheduleForm.COMPANY_TARGET_ALL,
         "company_target_one": RunScheduleForm.COMPANY_TARGET_ONE,
         "scheduler_status": get_scheduler_status(),
+        "company_a_schedule": company_a_views.safe_schedule_row(),
     }
     context.update(_nav_context())
     context.update(
@@ -2624,6 +2627,7 @@ def runs_list(request):
         "active_run_ids": active_run_ids_list,
         "categories_by_company": categories_by_company,
         "active_run_ids_json": json.dumps(active_run_ids_list),
+        "company_a_recent_runs": company_a_views.safe_recent_runs(5),
     }
     context.update(_nav_context())
     context.update(
@@ -4760,6 +4764,9 @@ def company_detail(request, company_key):
         "recent_runs": recent_runs,
         "recent_artifacts": recent_artifacts,
     }
+    if company_key == company_a_views.ops.COMPANY_KEY:
+        context["company_a_card"] = company_a_views.safe_overview_card()
+        context["company_a_holds_alerts"] = company_a_views.safe_holds_alerts()
     context.update(_nav_context())
     context.update(
         _breadcrumb_context(

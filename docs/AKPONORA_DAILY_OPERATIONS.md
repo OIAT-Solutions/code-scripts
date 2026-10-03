@@ -29,6 +29,18 @@ Until the server is on, sales are still posted by hand from this repo (dry-run, 
 
 ---
 
+## Portal (read-only view of the daily run)
+
+The OIAT Portal shows Company A without any new write action (phase 1). It reads the same `STATE_ROOT` as the `akponora-ops` container:
+
+- **Schedules**: a system-managed row "Company A daily run (products → bills → sales → health check → deposits)" with enabled/disabled (`OIAT_COMPANY_A_DAILY_RUN_ENABLED`), cron and timezone (`OIAT_COMPANY_A_DAILY_RUN_CRON`, `SCHEDULE_TZ`), next run, and the last run's result. It is not editable in the portal.
+- **Company A daily** (sidebar; `/epos-qbo/company-a/daily-runs/`): every run newest first, real vs dry, overall status, a chip per step, sales posted ₦, bills posted (count / ₦), items / vendors created, items waiting. A run's page shows each step's summary, its review items, the last lines of each step's `log.txt`, and links to view its CSV / JSON evidence in the page (only files inside that run's folder under `STATE_ROOT/ops/company_a`).
+- **Overview** and the **Company A company page**: a Company A card (last real run, what posted, what is waiting, Undeposited Funds step) and a red banner when the posting hold is in place. The company page also has a Holds & alerts panel (posting hold details, latest item-guard alerts by check).
+
+Approvals, clearing the hold and "Run now" are not in the portal yet (see the roadmap §4/§5). Do them as described below.
+
+---
+
 ## Catalogue sync
 
 ```bash

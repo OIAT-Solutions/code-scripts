@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views, webhooks
+from . import views, views_company_a, webhooks
 
 app_name = "epos_qbo"
 
@@ -20,6 +20,17 @@ urlpatterns = [
     path("runs/<uuid:job_id>/logs", views.run_logs, name="run-logs"),
     path("api/runs/active", views.run_active_ids, name="run-active-ids"),
     path("api/runs/status", views.run_status_check, name="run-status-check"),
+    path("company-a/daily-runs/", views_company_a.company_a_runs, name="company-a-runs"),
+    path(
+        "company-a/daily-runs/<str:business_date>/<str:run_id>/",
+        views_company_a.company_a_run_detail,
+        name="company-a-run-detail",
+    ),
+    path(
+        "company-a/daily-runs/<str:business_date>/<str:run_id>/file/",
+        views_company_a.company_a_evidence,
+        name="company-a-evidence",
+    ),
     path("logs/", views.logs_list, name="logs"),
     path("schedules/", views.schedules_page, name="schedules"),
     path("schedules/status/", views.schedule_status_api, name="schedule-status"),

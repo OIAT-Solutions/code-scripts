@@ -1,0 +1,9 @@
+{# Red banner when the Company A posting hold is in place. Var: hold #}
+{% if hold.active %}
+<div class="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-200 px-4 py-3 text-sm" role="alert" data-company-a-hold="active">
+    <p class="font-semibold">❌ Company A posting hold is in place — sales posting is paused.</p>
+    <p class="mt-1">Since {% if hold.at %}{{ hold.at|date:"Y-m-d H:i" }}{% else %}{{ hold.at_raw|default:"?" }}{% endif %} · business date {{ hold.business_date|default:"?" }} · source {{ hold.source|default:"?" }}</p>
+    {% if hold.reason %}<p class="mt-1">Reason: {{ hold.reason }}</p>{% endif %}
+    <p class="mt-1 text-xs">Clearing needs a human approval: <code class="font-mono">python -m code_scripts.operations_controls clear-hold --approved-by NAME --reason TEXT</code> (clearing from the portal comes in phase 2).</p>
+</div>
+{% endif %}

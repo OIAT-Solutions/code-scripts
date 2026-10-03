@@ -38,6 +38,12 @@
     </div>
 </div>
 
+{% if company_a_card %}
+<div class="mt-6">
+    {% include "components/company_a_card.html" with card=company_a_card %}
+</div>
+{% endif %}
+
 <div id="overview-panels-root" data-panels-url="{% url 'epos_qbo:overview-panels' %}">
     {% include "components/overview_refresh.html" %}
 </div>
