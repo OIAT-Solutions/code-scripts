@@ -234,7 +234,7 @@ def home_context(company_key="", now=None, token_health=None):
             issue = "Some review records could not be read. Check Needs your attention."
         connection = (token_health or {}).get(key, {})
         if connection.get("severity") == "critical":
-            connection_issue = "QuickBooks connection needs attention. Ask an administrator to check it."
+            connection_issue = "QuickBooks connection needs attention. Check the connection in Admin."
             issue = f"{issue} {connection_issue}".strip()
         label = "Needs attention" if issue else "Needs your decision" if waiting else "Up to date" if latest else "Not checked yet"
         history_url = reverse("epos_qbo:runs") + "?" + urlencode({"company": key})

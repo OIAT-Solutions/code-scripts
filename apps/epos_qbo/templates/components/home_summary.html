@@ -19,7 +19,7 @@
 <div class="lg:col-span-3"><p class="portal-eyebrow">Next scheduled run</p><p class="text-sm mt-2">{% if row.next_run %}{% timezone "Africa/Lagos" %}{{ row.next_run|date:"j F, H:i" }}{% endtimezone %} · Lagos{% elif row.scheduled %}Time not available{% else %}No active schedule recorded{% endif %}</p></div>
 <div class="lg:col-span-2 lg:text-right"><a class="btn btn-secondary" href="{{ row.action_url }}">{{ row.action_label }}</a></div>
 </article>
-{% empty %}<div class="p-8"><p class="font-medium">No companies to show</p><p class="portal-muted mt-2">Choose another company filter, or ask an administrator to add a company.</p></div>{% endfor %}
+{% empty %}<div class="p-8"><p class="font-medium">No companies to show</p><p class="portal-muted mt-2">Choose another company filter, or add a company from Admin.</p></div>{% endfor %}
 </section>
 {% for error in home_errors %}<p role="alert" class="text-sm text-red-800 dark:text-red-200">{{ error }}</p>{% endfor %}
 </div>
