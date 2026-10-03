@@ -836,7 +836,7 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(step["status"], dr.REVIEW)  # 2 Oct waits for the sheet (blank CASH box)
         self.assertEqual(summary["exit_code"], 3)
         self.assertEqual([d["day"] for d in step["counts"]["deposited"]], ["2026-10-01"])
-        text = self.slack[0]
+        text = dr.technical_text(summary)
         self.assertIn("*uf* [review] auto-post; deposited 1 day(s): 2026-10-01 N3199500.00 (100100 N", text)
         self.assertIn("100202 N", text)
         self.assertIn("not deposited 1 day(s) (2026-10-02); first 2026-10-02: CASH (System 1) box is blank", text)
@@ -847,6 +847,11 @@ class DailyRunUFTests(NoNetwork):
         self.assertTrue(any(line.startswith("uf 2026-10-02 WAITING_SHEET") for line in summary["waiting_for_review"]))
         self.assertEqual(self.day_states()["2026-10-01"], ufd.DEPOSITED)
         self.assertEqual(self.day_states()["2026-10-02"], ufd.WAITING_SHEET)
+        human = self.slack[-1]
+        self.assertIn("*Banking*   ₦3,199,500 banked for 1 Oct", human)
+        self.assertIn("*Waiting on the store*", human)
+        self.assertIn("• cash box blank: 2 Oct", human)
+        self.assertIn("Still in Undeposited Funds: ₦3,199,500", human)
 
     def test_plan_only_and_dry_run(self):
         fake, source = self.sources()
@@ -856,7 +861,8 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(step["counts"]["mode"], "plan only")
         self.assertEqual(fake.posts(), [])
         self.assertTrue(any("READY" in line and "post --plan-dir" in line for line in summary["waiting_for_review"]))
-        self.assertIn("Waiting to deposit: 1 Oct.", self.slack[0])
+        self.assertIn("Waiting to deposit: 1 Oct.", dr.technical_text(summary))
+        self.assertIn("waits for your approval", self.slack[-1])
         summary = self.run_uf(AUTO, fake, source, dry=True)
         self.assertEqual({s["name"]: s for s in summary["steps"]}["uf"]["counts"]["mode"], "dry-run (plan only)")
         self.assertEqual(fake.posts(), [])

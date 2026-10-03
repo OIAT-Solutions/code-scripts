@@ -134,7 +134,9 @@ class DailyRunTests(unittest.TestCase):
         for env in runner.envs:
             self.assertEqual(env["OIAT_RUN_LOCK_HELD"], "1")
             self.assertEqual(env["SLACK_WEBHOOK_URL_A"], "")
-        self.assertEqual(len(self.slack), 1)
+        self.assertEqual(len(self.slack), 2)  # a start message, then one summary
+        self.assertIn("daily run started", self.slack[0])
+        self.assertIn("*Nora Mart daily run · Fri 2 Oct 2026*: finished", self.slack[1])
 
     def test_catalogue_crash_still_runs_bills_and_sales(self):
         runner = FakeRunner(raise_on={"catalogue"})
@@ -192,7 +194,8 @@ class DailyRunTests(unittest.TestCase):
         self.assertIn("--dry-run", cmds["sales"])
         self.assertIn("--no-state", cmds["guard"])
         self.assertTrue(summary["dry_run"])
-        self.assertTrue(dr.slack_text(summary).splitlines()[0].count("DRY RUN"))
+        self.assertTrue(dr.technical_text(summary).splitlines()[0].count("DRY RUN"))
+        self.assertIn("practice run, nothing posted", dr.slack_text(summary).splitlines()[0])
 
     def test_dry_run_main_sends_no_slack_by_default(self):
         runner = FakeRunner()
@@ -214,7 +217,7 @@ class DailyRunTests(unittest.TestCase):
 
     def test_slack_summary_lists_counts_vendors_and_review_paths(self):
         summary = self.make(FakeRunner(codes={"bills": 3})).execute()
-        text = self.slack[0]
+        text = dr.technical_text(summary)
         self.assertIn("Akponora daily run 2026-10-02", text)
         self.assertIn("items created 2", text)
         self.assertIn("mapping installed", text)
@@ -254,7 +257,10 @@ class DailyRunTests(unittest.TestCase):
         self.assertEqual(step["status"], dr.OK)
         self.assertEqual(step["counts"]["by_status"]["DIFFERENT"], 41)
         self.assertEqual(summary["exit_code"], 0)
-        self.assertIn("*stock* [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks", self.slack[0])
+        self.assertIn("*stock* [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks",
+                      dr.technical_text(summary))
+        self.assertIn("*Stock*   3,812 items match EPOS · 41 differ (30 likely timing) · 11 negative in QuickBooks",
+                      self.slack[-1])
 
     def test_stock_step_is_read_only_in_dry_run_too(self):
         runner = FakeRunner()
@@ -305,7 +311,7 @@ class LockTests(unittest.TestCase):
         rc = dr.main(["--date", "2026-10-02"], runner=runner, slack=slack.append, sleep=lambda s: None)
         self.assertEqual(rc, 2)
         self.assertEqual(runner.calls, [])
-        self.assertIn("lock", slack[0])
+        self.assertIn("did not start", slack[0])
 
     def test_lock_is_held_during_the_run_and_released_after(self):
         from code_scripts.run_lock import GlobalRunLock
@@ -528,3 +534,91 @@ class PaymentHintTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SlackMessageTests(unittest.TestCase):
+    """The plain-English Slack messages (start + summary)."""
+
+    def summary(self, **over):
+        steps = [
+            {"name": "catalogue", "status": dr.OK, "counts": {"new_products": 0, "items_created": 0, "mapping_only": 0,
+                                                              "review": 0, "hold": 0}},
+            {"name": "bills", "status": dr.OK, "counts": {
+                "pos": 9, "ready": 8, "ready_total": "217350.00", "posted": 8, "hold": 1, "hold_total_inc": "20000.00",
+                "capped": 0, "vendors_created": 0,
+                "holds": [{"po": "3970", "supplier": "FLOURISH COOL WATER, ALPINE FRESH WATER", "total": "20000.00",
+                           "reason": "supplier not approved in vendors.csv"}],
+                "vendor_holds": [{"name": "FLOURISH COOL WATER, ALPINE FRESH WATER", "state": "HOLD_NEAR_MATCH",
+                                  "detail": "looks like an existing QBO vendor (best 0.90): 64 FLOURISH (0.90); "
+                                            "261 ALPINE FRESH TABLE WATER (0.58)"}]}},
+            {"name": "sales", "status": dr.OK, "counts": {"mode": "post", "uploaded": 6, "skipped": 0, "failed": 0,
+                                                          "reconcile_status": "MATCH", "epos_total": 4857550.0,
+                                                          "qbo_total": 4857550.0}},
+            {"name": "guard", "status": dr.REVIEW, "counts": {"alert": 437, "warn": 18}},
+            {"name": "stock", "status": dr.OK, "counts": {"by_status": {"MATCH": 3242, "DIFFERENT": 669, "NEGATIVE_QBO": 11},
+                                                          "likely_timing": 273}},
+            {"name": "uf", "status": dr.REVIEW, "counts": {
+                "mode": "auto-post", "uf_balance": "18073049.99",
+                "deposited": [{"day": "2026-09-27", "total": "4080500.00"}, {"day": "2026-09-28", "total": "3113300.00"},
+                              {"day": "2026-09-30", "total": "3965950.00"}],
+                "ready": [], "held": [{"day": d, "status": "WAITING_SHEET",
+                                       "reason": "CASH (System 1) box is blank (type 0 if there was no cash)"}
+                                      for d in ("2026-09-25", "2026-09-26", "2026-09-29", "2026-10-01")]}},
+        ]
+        base = {"business_date": "2026-10-02", "dry_run": False, "exit_code": 3, "steps": steps,
+                "started_at": "2026-10-03T17:00:00+00:00", "finished_at": "2026-10-03T17:12:10+00:00",
+                "previous_guard_alert": 437,
+                "links": dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_170000Z")}
+        base.update(over)
+        return base
+
+    def test_summary_reads_like_a_person_wrote_it(self):
+        text = dr.slack_text(self.summary())
+        lines = text.splitlines()
+        self.assertEqual(lines[0], ":large_yellow_circle: *Nora Mart daily run · Fri 2 Oct 2026*: finished, 1 thing needs you")
+        self.assertIn(":white_check_mark: *Sales*   ₦4,857,550 posted (6 receipts) · matches EPOS", text)
+        self.assertIn("*Bills*   8 posted (₦217,350), left unpaid · :double_vertical_bar: 1 held (₦20,000)", text)
+        self.assertIn("*Banking*   ₦11,159,750 banked for 27, 28, 30 Sep", text)
+        self.assertIn("• cash box blank: 25, 26, 29 Sep and 1 Oct", text)
+        self.assertIn("1. PO 3970 · ₦20,000: supplier “FLOURISH COOL WATER, ALPINE FRESH WATER” isn't set up in "
+                      "QuickBooks yet (looks like FLOURISH). Link it or create it → <https://portal.example.com/epos-qbo/attention/|Inbox>", text)
+        self.assertIn(":heavy_minus_sign: *Item check*   437 alerts, no new ones", text)
+        self.assertIn("Still in Undeposited Funds: ₦18,073,049.99 · took 12 min · "
+                      "<https://portal.example.com/epos-qbo/company-a/daily-runs/2026-10-02/run_170000Z/|Open this run>", text)
+        self.assertNotIn("/data/", text)  # no file paths or commands in Slack
+
+    def test_new_item_alerts_and_failures_change_the_headline(self):
+        text = dr.slack_text(self.summary(previous_guard_alert=430))
+        self.assertIn("437 alerts, 7 new since the last run", text)
+        self.assertIn("2 things need you", text)
+        s = self.summary()
+        s["steps"][2] = {"name": "sales", "status": dr.FAILED, "detail": "run_pipeline exited 1", "counts": {}}
+        self.assertTrue(dr.slack_text(s).startswith(":red_circle: *Nora Mart daily run · Fri 2 Oct 2026*: Sales didn't finish"))
+
+    def test_all_good_is_green(self):
+        s = self.summary(previous_guard_alert=437)
+        s["steps"][1]["counts"].update(hold=0, holds=[], vendor_holds=[])
+        s["steps"][5]["counts"]["held"] = []
+        text = dr.slack_text(s)
+        self.assertTrue(text.startswith(":large_green_circle:"))
+        self.assertIn("finished, all good", text)
+        self.assertNotIn("Needs you", text)
+
+    def test_start_message(self):
+        text = dr.start_text("2026-10-02", banking_on=True,
+                             links=dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_x"))
+        self.assertIn("*Nora Mart daily run started · Fri 2 Oct 2026*", text)
+        self.assertIn("Running: Products → Bills → Sales → Item check → Stock → Banking", text)
+        self.assertIn("Banking from the till sheet is *on*.", text)
+        self.assertIn("<https://portal.example.com/epos-qbo/company-a/daily-runs/|Daily runs>", text)
+
+    def test_previous_guard_alert_reads_the_last_real_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for day, run, alert in (("2026-09-30", "run_170000Z", 420), ("2026-10-01", "run_170000Z", 430),
+                                    ("2026-10-01", "run_180000Z_dry", 999)):
+                (root / day / run).mkdir(parents=True)
+                (root / day / run / "summary.json").write_text(json.dumps(
+                    {"steps": [{"name": "guard", "status": dr.REVIEW, "counts": {"alert": alert}}]}))
+            self.assertEqual(dr.previous_guard_alert(root, "2026-10-02"), 430)
+            self.assertIsNone(dr.previous_guard_alert(root, "2026-09-30"))

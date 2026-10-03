@@ -161,6 +161,7 @@ class DailyRun:
         self.day_dir = Path(root) if root else _daily_root() / business_day
         self.run_dir = self.day_dir / (f"run_{stamp}" + ("_dry" if dry_run else ""))
         self.results: list[StepResult] = []
+        self.started_at = ""
 
     # ------------------------------------------------------------ helpers
     def step_dir(self, name: str) -> Path:
@@ -240,6 +241,11 @@ class DailyRun:
                       "held_live": posted.get("HELD_LIVE", 0),
                       "vendors_created": sum(v.get("state") == "CREATED" for v in vendors),
                       "vendors_held": sum(str(v.get("state", "")).startswith("HOLD") for v in vendors)}
+        res.counts["holds"] = [{"po": h.get("po"), "supplier": h.get("supplier") or "", "total": h.get("total_inc"),
+                                "reason": (h.get("reasons") or [""])[0]} for h in (summary.get("holds") or [])[:10]]
+        res.counts["vendor_holds"] = [{"name": v.get("display_name") or "", "state": v.get("state"),
+                                       "detail": v.get("detail") or ""} for v in vendors
+                                      if str(v.get("state", "")).startswith("HOLD") or v.get("state") == "FAILED"]
         res.counts["vendors"] = [f"{v.get('state')}: {v.get('display_name')}"
                                  + (f" -> QBO {v['vendor_id']}" if v.get("vendor_id") else "") for v in vendors]
         if sched.get("stopped"):
@@ -408,6 +414,13 @@ class DailyRun:
     # ------------------------------------------------------------ orchestration
     def execute(self) -> dict:
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.started_at = _now_utc()
+        if self.send_slack:
+            try:
+                self.slack(start_text(self.date, dry_run=self.dry_run, only=self.only,
+                                      banking_on=truthy(self.base_env.get(UF_ENV)), links=self.links()))
+            except Exception:  # noqa: BLE001 - Slack must never break the run
+                pass
         for name in STEPS:
             res = StepResult(name=name, started_at=_now_utc())
             if name not in self.only:
@@ -423,6 +436,9 @@ class DailyRun:
             self.results.append(res)
         return self.finish()
 
+    def links(self) -> dict:
+        return portal_links(self.base_env, self.date, self.run_dir.name)
+
     def overall_exit(self) -> int:
         statuses = {r.status for r in self.results}
         if FAILED in statuses:
@@ -435,7 +451,9 @@ class DailyRun:
         code = self.overall_exit()
         summary = {"tool": TOOL, "company": COMPANY, "business_date": self.date, "dry_run": self.dry_run,
                    "exit_code": code, "status": {0: "clean", 2: "failed", 3: "review"}[code],
-                   "run_dir": str(self.run_dir), "finished_at": _now_utc(),
+                   "run_dir": str(self.run_dir), "started_at": self.started_at, "finished_at": _now_utc(),
+                   "previous_guard_alert": previous_guard_alert(self.day_dir.parent, self.date),
+                   "links": self.links(),
                    "steps": [asdict(r) for r in self.results],
                    "waiting_for_review": [line for r in self.results for line in r.review]}
         dump_json(self.run_dir / "summary.json", summary)
@@ -505,7 +523,8 @@ def step_line(r: dict) -> str:
     return f"{ICON.get(r['status'], '')} *{name}* [{r['status']}] {body}".rstrip()
 
 
-def slack_text(summary: dict) -> str:
+def technical_text(summary: dict) -> str:
+    """The full technical summary (counts, paths, commands): printed to the log / container output."""
     head = {0: ":white_check_mark: all clean", 3: ":warning: waiting for review", 2: ":x: a step FAILED"}[
         summary["exit_code"]]
     lines = [f"Akponora daily run {summary['business_date']}{' (DRY RUN - nothing written)' if summary['dry_run'] else ''}: {head}"]
@@ -515,6 +534,318 @@ def slack_text(summary: dict) -> str:
         lines += [f"- {line}" for line in summary["waiting_for_review"][:20]]
     lines.append(f"Evidence: {summary['run_dir']}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- the Slack messages (plain English)
+STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "guard": "Item check",
+              "stock": "Stock", "uf": "Banking"}
+SHEET_URL = "https://docs.google.com/spreadsheets/d/{}"
+
+
+def human_day(day: str) -> str:
+    """'2026-10-02' -> 'Fri 2 Oct 2026'."""
+    try:
+        d = date.fromisoformat(str(day)[:10])
+    except ValueError:
+        return str(day)
+    return f"{d:%a} {d.day} {d:%b %Y}"
+
+
+def day_list(days) -> str:
+    """['2026-09-25', '2026-09-26', '2026-10-01'] -> '25, 26 Sep and 1 Oct'."""
+    groups: list[tuple[str, list[str]]] = []
+    for day in sorted(set(days)):
+        try:
+            d = date.fromisoformat(str(day)[:10])
+        except ValueError:
+            continue
+        month = f"{d:%b}"
+        if groups and groups[-1][0] == month:
+            groups[-1][1].append(str(d.day))
+        else:
+            groups.append((month, [str(d.day)]))
+    parts = [f"{', '.join(n)} {m}" for m, n in groups]
+    return " and ".join([", ".join(parts[:-1]), parts[-1]]) if len(parts) > 1 else (parts[0] if parts else "")
+
+
+def naira_text(value) -> str:
+    """₦4,857,550 (kobo shown only when there are any). Unknown -> 'unknown'."""
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        amount = Decimal(str(value).replace(",", "").replace("N", "").replace("₦", ""))
+    except (InvalidOperation, ValueError):
+        return "unknown"
+    return f"₦{amount:,.0f}" if amount == amount.to_integral_value() else f"₦{amount:,.2f}"
+
+
+def portal_links(env: dict, day: str, run_id: str) -> dict:
+    """Links for the Slack message: the run page, the daily-runs list, the inbox, the till sheet."""
+    base = (env.get("OIAT_PORTAL_BASE_URL") or "").strip().rstrip("/")
+    if not base and (env.get("PORTAL_DOMAIN") or "").strip():
+        base = f"https://{env['PORTAL_DOMAIN'].strip().rstrip('/')}"
+    sheet_id = (env.get("OIAT_COMPANY_A_TILL_SHEET_ID") or "").strip()
+    if not sheet_id:
+        try:
+            from code_scripts.akponora_ops.till_sheet import DEFAULT_SHEET_ID as sheet_id
+        except Exception:  # noqa: BLE001
+            sheet_id = ""
+    links = {"till_sheet": SHEET_URL.format(sheet_id) if sheet_id else ""}
+    if base:
+        links.update(run=f"{base}/epos-qbo/company-a/daily-runs/{day}/{run_id}/",
+                     runs=f"{base}/epos-qbo/company-a/daily-runs/", inbox=f"{base}/epos-qbo/attention/")
+    return links
+
+
+def link(url: str, label: str) -> str:
+    return f"<{url}|{label}>" if url else label
+
+
+def previous_guard_alert(daily_root: Path, day: str) -> int | None:
+    """Item-check ALERT count of the last real (not dry) run before ``day``; None when there is none."""
+    try:
+        days = sorted((p for p in Path(daily_root).iterdir() if p.is_dir() and p.name < day), reverse=True)
+    except OSError:
+        return None
+    for folder in days:
+        runs = sorted((p for p in folder.glob("run_*") if not p.name.endswith("_dry")), reverse=True)
+        for run in runs:
+            summary = read_json(run / "summary.json", {}) or {}
+            guard = next((s for s in summary.get("steps") or [] if s.get("name") == "guard"), None)
+            if guard and guard.get("status") in (OK, REVIEW) and "alert" in (guard.get("counts") or {}):
+                return int(guard["counts"]["alert"])
+    return None
+
+
+def start_text(day: str, *, dry_run: bool = False, only=None, banking_on: bool = False, links=None) -> str:
+    links = links or {}
+    steps = [STEP_LABEL[n] for n in ("catalogue", "bills", "sales", "guard", "stock", "uf") if not only or n in only]
+    lines = [f":arrow_forward: *Nora Mart daily run started · {human_day(day)}*"
+             + (" _(practice run, nothing will be posted)_" if dry_run else ""),
+             "",
+             f"Running: {' → '.join(steps)}"]
+    if "Banking" in steps:
+        lines.append("Banking from the till sheet is " + ("*on*." if banking_on else "*off*."))
+    lines += ["", "I'll post the summary here when it finishes · " + link(links.get("runs", ""), "Daily runs")]
+    return "\n".join(lines)
+
+
+def _vendor_hint(detail: str) -> str:
+    """'... looks like an existing QBO vendor (best 0.90): 64 FLOURISH (0.90); ...' -> 'FLOURISH'."""
+    import re
+
+    m = re.search(r"\d+ ([^();:]+?) \((?:0|1)\.\d+\)", detail or "")
+    return m.group(1).strip() if m else ""
+
+
+def _short_reason(reason: str) -> str:
+    text = (reason or "").strip()
+    if "box is blank" in text:
+        return "cash box blank"
+    if "no SalesReceipts" in text:
+        return "sales not posted yet"
+    if "sheet" in text.lower() and ("missing" in text.lower() or "not found" in text.lower()):
+        return "day not on the till sheet yet"
+    return text[:120]
+
+
+def slack_text(summary: dict) -> str:
+    """One short, plain-English summary for Slack. The technical version is ``technical_text``."""
+    steps = {s["name"]: s for s in summary.get("steps") or []}
+    links = summary.get("links") or {}
+    dry = bool(summary.get("dry_run"))
+    inbox = link(links.get("inbox", ""), "Inbox")
+    rows: list[str] = []      # one line per step
+    store: list[str] = []     # waiting on the store (till sheet)
+    needs: list[str] = []     # things a person has to do
+    failed = [STEP_LABEL.get(n, n) for n, s in steps.items() if s.get("status") == FAILED]
+    footer: list[str] = []
+
+    def row(icon: str, name: str, text: str) -> None:
+        rows.append(f"{icon} *{STEP_LABEL[name]}*   {text}")
+
+    def failed_row(name: str) -> None:
+        s = steps[name]
+        row(":x:", name, "didn't finish")
+        needs.append(f"{STEP_LABEL[name]} didn't finish ({(s.get('detail') or 'see the run')[:140]}). "
+                     f"Open the run before re-running.")
+
+    s = steps.get("sales")
+    if s and s["status"] not in (SKIPPED, DISABLED):
+        c = s.get("counts") or {}
+        if s["status"] == FAILED:
+            failed_row("sales")
+        elif dry:
+            row(":white_check_mark:", "sales", "practice run built, nothing posted")
+        elif s["status"] == REVIEW:
+            row(":double_vertical_bar:", "sales", "not posted")
+            needs.append(f"Sales for {human_day(summary['business_date'])} were not posted: "
+                         f"{(s.get('detail') or 'see the run')[:160]}.")
+        else:
+            uploaded, skipped = c.get("uploaded") or 0, c.get("skipped") or 0
+            status = c.get("reconcile_status") or ""
+            amount = naira_text(c.get("qbo_total")) if c.get("qbo_total") is not None else ""
+            what = (f"{amount} posted ({uploaded} receipts)" if uploaded
+                    else f"already in QuickBooks ({skipped} receipts){' · ' + amount if amount else ''}" if skipped
+                    else "nothing to post")
+            if status == "MATCH":
+                row(":white_check_mark:", "sales", f"{what} · matches EPOS")
+            elif status:
+                row(":warning:", "sales", f"{what} · EPOS {naira_text(c.get('epos_total'))} vs "
+                                          f"QuickBooks {naira_text(c.get('qbo_total'))}")
+                needs.append("Sales don't match EPOS for this day. Open the run and check before anything else.")
+            else:
+                row(":white_check_mark:", "sales", what)
+
+    s = steps.get("bills")
+    if s and s["status"] not in (SKIPPED, DISABLED):
+        c = s.get("counts") or {}
+        if s["status"] == FAILED:
+            failed_row("bills")
+        else:
+            posted, ready, hold = c.get("posted", 0) or 0, c.get("ready", 0) or 0, c.get("hold", 0) or 0
+            bits = []
+            if dry:
+                bits.append(f"{ready} ready ({naira_text(c.get('ready_total'))})" if ready else "no new purchase orders")
+            elif posted:
+                bits.append(f"{posted} posted" + (f" ({naira_text(c.get('ready_total'))})" if posted == ready else "")
+                            + ", left unpaid")
+            elif not hold:
+                bits.append("no new purchase orders")
+            if c.get("vendors_created"):
+                bits.append(f"{c['vendors_created']} new supplier(s) added")
+            if c.get("capped"):
+                bits.append(f"{c['capped']} over the automatic limit")
+                needs.append(f"{c['capped']} bill(s) are over the automatic limit and wait for your approval → {inbox}")
+            if hold:
+                bits.append(f":double_vertical_bar: {hold} held ({naira_text(c.get('hold_total_inc'))})")
+            row(":white_check_mark:" if not hold and not c.get("capped") else ":warning:", "bills", " · ".join(bits))
+            vendor_holds = {v.get("name"): v for v in c.get("vendor_holds") or []}
+            mentioned = set()
+            for h in c.get("holds") or []:
+                v = vendor_holds.get(h.get("supplier"))
+                if v:
+                    mentioned.add(h.get("supplier"))
+                    hint = _vendor_hint(v.get("detail", ""))
+                    needs.append(f"PO {h.get('po')} · {naira_text(h.get('total'))}: supplier “{h.get('supplier')}” "
+                                 f"isn't set up in QuickBooks yet{f' (looks like {hint})' if hint else ''}. "
+                                 f"Link it or create it → {inbox}")
+                else:
+                    needs.append(f"PO {h.get('po')} · {naira_text(h.get('total'))} is held: "
+                                 f"{(h.get('reason') or 'see the run')[:140]} → {inbox}")
+            for name, v in vendor_holds.items():
+                if name not in mentioned:
+                    needs.append(f"Supplier “{name}” needs linking or creating → {inbox}")
+
+    s = steps.get("uf")
+    if s and s["status"] not in (SKIPPED,):
+        c = s.get("counts") or {}
+        if s["status"] == DISABLED:
+            row(":zzz:", "uf", "off")
+        elif s["status"] == FAILED and not c:
+            failed_row("uf")
+        else:
+            deposited, ready = c.get("deposited") or [], c.get("ready") or []
+            from decimal import Decimal
+
+            def total(items):
+                return sum((Decimal(str(d.get("total") or 0)) for d in items), Decimal(0))
+
+            if deposited:
+                row(":white_check_mark:", "uf", f"{naira_text(total(deposited))} banked for "
+                                                f"{day_list(d['day'] for d in deposited)}")
+            elif ready and dry:
+                row(":white_check_mark:", "uf", f"would bank {naira_text(total(ready))} for "
+                                                f"{day_list(d['day'] for d in ready)}")
+            else:
+                row(":white_check_mark:" if s["status"] != FAILED else ":x:", "uf", "nothing new banked")
+            if ready and not dry:
+                needs.append(f"Banking {naira_text(total(ready))} for {day_list(d['day'] for d in ready)} "
+                             f"waits for your approval → {inbox}")
+            by_reason: dict[str, list[str]] = {}
+            for d in c.get("held") or []:
+                if d.get("status") == "WAITING_SHEET":
+                    by_reason.setdefault(_short_reason(d.get("reason")), []).append(d["day"])
+                elif d.get("status") == "HELD":
+                    needs.append(f"Banking for {human_day(d['day'])} is on hold: {_short_reason(d.get('reason'))}.")
+            for reason, days in by_reason.items():
+                store.append(f"{reason}: {day_list(days)}")
+            if s["status"] == FAILED:
+                needs.append(f"Banking stopped part-way ({(s.get('detail') or '')[:120]}). Nothing is repeated; "
+                             "open the run before retrying.")
+            if c.get("uf_balance") not in (None, ""):
+                footer.append(f"Still in Undeposited Funds: {naira_text(c['uf_balance'])}")
+
+    s = steps.get("stock")
+    if s and s["status"] not in (SKIPPED, DISABLED):
+        if s["status"] == FAILED:
+            failed_row("stock")
+        else:
+            b = (s.get("counts") or {}).get("by_status") or {}
+            timing = (s.get("counts") or {}).get("likely_timing") or 0
+            row(":white_check_mark:", "stock", f"{b.get('MATCH', 0):,} items match EPOS · {b.get('DIFFERENT', 0):,} differ"
+                                               + (f" ({timing:,} likely timing)" if timing else "")
+                                               + f" · {b.get('NEGATIVE_QBO', 0):,} negative in QuickBooks")
+
+    s = steps.get("catalogue")
+    if s and s["status"] not in (SKIPPED, DISABLED):
+        c = s.get("counts") or {}
+        if s["status"] == FAILED:
+            failed_row("catalogue")
+        else:
+            created = (c.get("items_created") or 0) + (c.get("mapping_only") or 0)
+            waiting = (c.get("review") or 0) + (c.get("hold") or 0)
+            text = (f"{created} new product(s) added to QuickBooks" if created
+                    else "no new EPOS products" if not c.get("new_products") else f"{c['new_products']} new EPOS product(s)")
+            row(":warning:" if waiting else ":white_check_mark:", "catalogue", text)
+            if waiting:
+                needs.append(f"{waiting} new EPOS product(s) need a decision → {inbox}")
+
+    s = steps.get("guard")
+    if s and s["status"] not in (SKIPPED, DISABLED):
+        if s["status"] == FAILED:
+            failed_row("guard")
+        else:
+            alert = (s.get("counts") or {}).get("alert", 0) or 0
+            prev = summary.get("previous_guard_alert")
+            if not alert:
+                row(":white_check_mark:", "guard", "no alerts")
+            elif prev is None:
+                row(":heavy_minus_sign:", "guard", f"{alert:,} alerts (first check on record)")
+            elif alert > prev:
+                row(":warning:", "guard", f"{alert:,} alerts, {alert - prev:,} new since the last run")
+                needs.append(f"{alert - prev:,} new item alert(s) since the last run → "
+                             f"{link(links.get('run', ''), 'open the run')}")
+            else:
+                row(":heavy_minus_sign:", "guard", f"{alert:,} alerts, no new ones")
+
+    if failed:
+        icon, head = ":red_circle:", f"{' and '.join(failed)} didn't finish"
+    elif needs:
+        icon, head = ":large_yellow_circle:", f"finished, {len(needs)} thing{'s' if len(needs) != 1 else ''} need{'' if len(needs) != 1 else 's'} you"
+    else:
+        icon, head = ":large_green_circle:", "finished, all good"
+    lines = [f"{icon} *Nora Mart daily run · {human_day(summary['business_date'])}*: {head}"
+             + (" _(practice run, nothing posted)_" if dry else ""), ""]
+    lines += rows
+    if store:
+        lines += ["", f":hourglass_flowing_sand: *Waiting on the store* ({link(links.get('till_sheet', ''), 'till sheet')})"]
+        lines += [f"• {x}" for x in store]
+    if needs:
+        lines += ["", "*Needs you*"] + [f"{i}. {x}" for i, x in enumerate(needs, 1)]
+    duration = _minutes(summary.get("started_at"), summary.get("finished_at"))
+    footer += ([f"took {duration}"] if duration else []) + ([link(links["run"], "Open this run")] if links.get("run") else [])
+    if footer:
+        lines += ["", " · ".join(footer)]
+    return "\n".join(lines)
+
+
+def _minutes(start: str | None, end: str | None) -> str:
+    try:
+        secs = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
+    except (TypeError, ValueError):
+        return ""
+    return f"{max(1, round(secs / 60))} min"
 
 
 def sales_stats(day: str, *, since: float | None = None) -> dict:
@@ -606,8 +937,9 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
     wait = float(os.getenv(LOCK_WAIT_ENV, "").strip() or 30)
     lock = acquire_lock(f"akponora_daily_run:{day}{':dry' if a.dry_run else ''}", wait_minutes=wait, sleep=sleep)
     if lock is None:
-        text = (f":x: Akponora daily run {day}: the global run lock stayed busy for {wait:g} min "
-                "(another run_pipeline / ops job); nothing ran. Re-run when it finishes.")
+        text = (f":red_circle: *Nora Mart daily run · {human_day(day)}*: did not start\n\n"
+                f"Another pipeline job was still running after {wait:g} minutes, so nothing ran. "
+                "Re-run the daily run from the portal once it has finished.")
         print(text)
         if send:
             try:
@@ -621,7 +953,7 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
         summary = run.execute()
     finally:
         lock.release()
-    print(slack_text(summary))
+    print(technical_text(summary))
     return summary["exit_code"]
 
 
