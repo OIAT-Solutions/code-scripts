@@ -40,6 +40,9 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 - [ ] **Deposits: banks equal the till sheet exactly** (agreed with Marvin 3 Oct). The sheet − sales difference goes to a Cash Over/Short line, plus one clean-up journal for the days posted with receipts-scaled targets. Details: `HANDOVER_TRACKER.md` §4 item 4a.
 - [ ] **Investigate the daily till sheet vs EPOS sales difference** (§4 item 4b).
 
+- [ ] **Deposits: aged-hold alert** after about 7 days (Slack + portal inbox). See tracker §4 item 4c.
+- [ ] **1 Oct read-only re-check** so the portal Home stops flagging it (tracker §4 item 4d).
+
 ## 3. Staff / EPOS data fixes (not blocking)
 
 | Done | Item | Owner |
