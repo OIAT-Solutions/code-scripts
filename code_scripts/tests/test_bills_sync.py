@@ -458,3 +458,15 @@ class PoDetailCacheTests(unittest.TestCase):
         got = bs.cached_details([old, edited, today], cache, lambda o: o["DateReceived"] < "2026-10-01")
         self.assertEqual(set(got), {"3850"})  # edited row and in-window PO are opened live
         self.assertEqual(bs.load_po_cache(Path("/nonexistent/x.jsonl")), {})
+
+    def test_cache_is_pruned_to_the_current_window(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / bs.PO_CACHE
+            rows = [{"ref": str(r), "fingerprint": "f", "detail": {"OrderRef": r}} for r in (3700, 3850, 3850, 3851)]
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            self.assertEqual(bs.prune_po_cache(path, {"3850", "3851", "3999"}), 2)
+            self.assertEqual(sorted(bs.load_po_cache(path)), ["3850", "3851"])
+            self.assertEqual(len(path.read_text().splitlines()), 2)  # duplicates collapsed, old POs dropped

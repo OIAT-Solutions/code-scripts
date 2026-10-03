@@ -288,6 +288,20 @@ def load_po_cache(path: Path) -> dict:
     return out
 
 
+def prune_po_cache(path: Path, keep_refs) -> int:
+    """Keep only POs still in this run's EPOS list (about 3 weeks), one line each, so the cache never
+    grows past one look-back window. Returns the number of POs kept."""
+    keep = {str(r) for r in keep_refs}
+    rows = [row for ref, row in load_po_cache(path).items() if ref in keep]
+    try:
+        tmp = Path(path).with_suffix(".tmp")
+        tmp.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+    return len(rows)
+
+
 def cached_details(orders: list, cache: dict, cacheable) -> dict:
     """Details of earlier (look-back) POs whose list row is unchanged since they were opened."""
     out = {}
@@ -398,6 +412,8 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
                 print(f"PO {ref}: {len(d.get('Products') or [])} line(s)", flush=True)
                 open_list(page)
         browser.close()
+    if cache_path is not None and Path(cache_path).exists():
+        prune_po_cache(cache_path, by_ref)
     if needed:
         print(f"EPOS: detail not captured for {sorted(needed)}", flush=True)
     return orders, details
