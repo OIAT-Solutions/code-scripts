@@ -51,6 +51,20 @@ link_path() {
   ln -s "${src}" "${dst}"
 }
 
+# Seed once, never replace an installed approval (even an intentionally empty file).
+mkdir -p "${STATE_ROOT}/mappings/company_a"
+if [ ! -e "${STATE_ROOT}/mappings/company_a/approved.csv" ]; then
+  cp "${APP_ROOT}/templates/product_conversion_empty.csv" "${STATE_ROOT}/mappings/company_a/approved.csv"
+fi
+# Till sheet line -> QBO bank map for the Undeposited Funds deposits (uf_deposits). Seed once,
+# never replace an edited copy. The service-account key goes in ${STATE_ROOT}/secrets/ (by hand).
+if [ ! -e "${STATE_ROOT}/mappings/company_a/till_accounts.csv" ]; then
+  cp "${APP_ROOT}/templates/till_accounts_company_a.csv" "${STATE_ROOT}/mappings/company_a/till_accounts.csv"
+fi
+mkdir -p "${STATE_ROOT}/secrets"
+chmod 700 "${STATE_ROOT}/secrets" 2>/dev/null || true
+export COMPANY_A_PRODUCT_CONVERSION_FILE="${COMPANY_A_PRODUCT_CONVERSION_FILE:-${STATE_ROOT}/mappings/company_a/approved.csv}"
+
 seed_file_if_empty "${STATE_ROOT}/db.sqlite3" "${SEED_ROOT}/db.sqlite3"
 seed_file_if_empty "${STATE_ROOT}/code_scripts/qbo_tokens.sqlite" "${SEED_ROOT}/code_scripts/qbo_tokens.sqlite"
 seed_dir_if_empty "${COMPANIES_ROOT}" "${SEED_ROOT}/code_scripts/companies"

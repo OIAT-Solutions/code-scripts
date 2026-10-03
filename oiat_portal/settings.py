@@ -126,6 +126,9 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": STATE_ROOT / "db.sqlite3",
+        # Wait for a busy database instead of failing at once (3 Oct 2026: the scheduler crashed on
+        # "database is locked" while a migration ran; Django's default is 5 seconds).
+        "OPTIONS": {"timeout": 20},
     }
 }
 

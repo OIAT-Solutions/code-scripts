@@ -226,8 +226,15 @@ class WriteReportTest(unittest.TestCase):
 
 
 class _FakeConfig:
-    company_key = "company_a"
+    company_key = "company_b"
     realm_id = "REALM"
+    display_name = "Company B"
+    slack_webhook_url = None
+
+
+class _FakeCompanyAConfig:
+    company_key = "company_a"
+    realm_id = "9341455406194328"
     display_name = "Company A"
     slack_webhook_url = None
 
@@ -243,15 +250,15 @@ def _stub_load_qbo_inventory_item_rows(rows: list[dict]) -> "object":
     return _Stub()
 
 
-def _common_main_patches(rows):
+def _common_main_patches(rows, config=None):
     """Yield context managers that stub out config + QBO snapshot load."""
     # `_resolve_qbo_csv` shells out to either fetch_qbo_inventory_items_snapshot
     # or to a path on disk; easier to bypass entirely with a fixed Path return.
     return [
-        mock.patch.object(cleanup, "load_company_config", return_value=_FakeConfig()),
+        mock.patch.object(cleanup, "load_company_config", return_value=config or _FakeConfig()),
         mock.patch.object(cleanup, "ensure_company_runtime_compatible"),
         mock.patch.object(
-            cleanup, "get_available_companies", return_value=["company_a"]
+            cleanup, "get_available_companies", return_value=["company_a", "company_b"]
         ),
         mock.patch.object(cleanup, "_resolve_qbo_csv", return_value=Path("/dev/null")),
         mock.patch.object(
@@ -278,10 +285,10 @@ class ApplyModeGuardsTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _run(self, argv, qbo_rows):
+    def _run(self, argv, qbo_rows, config=None):
         out_path = self.tmp_path / "report.csv"
         full_argv = argv + ["--output", str(out_path)]
-        patches = _common_main_patches(qbo_rows)
+        patches = _common_main_patches(qbo_rows, config=config)
         for p in patches:
             p.start()
         try:
@@ -296,7 +303,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
 
     def test_apply_without_max_items_returns_2(self):
         rc, _out, err, _ = self._run(
-            ["--company", "company_a", "--qbo-csv", "x", "--apply"],
+            ["--company", "company_b", "--qbo-csv", "x", "--apply"],
             qbo_rows=[],
         )
         self.assertEqual(rc, 2)
@@ -304,7 +311,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
 
     def test_apply_with_zero_max_items_returns_2(self):
         rc, _out, err, _ = self._run(
-            ["--company", "company_a", "--qbo-csv", "x", "--apply", "--max-items", "0"],
+            ["--company", "company_b", "--qbo-csv", "x", "--apply", "--max-items", "0"],
             qbo_rows=[],
         )
         self.assertEqual(rc, 2)
@@ -312,7 +319,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
 
     def test_apply_and_dry_run_together_returns_2(self):
         rc, _out, err, _ = self._run(
-            ["--company", "company_a", "--qbo-csv", "x", "--apply", "--max-items", "1", "--dry-run"],
+            ["--company", "company_b", "--qbo-csv", "x", "--apply", "--max-items", "1", "--dry-run"],
             qbo_rows=[],
         )
         self.assertEqual(rc, 2)
@@ -326,7 +333,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
         with mock.patch.object(cleanup, "_post_inactivate") as post_mock, \
              mock.patch.object(cleanup, "_fetch_item_with_sync_token") as fetch_mock:
             rc, out, _err, _path = self._run(
-                ["--company", "company_a", "--qbo-csv", "x", "--dry-run"],
+                ["--company", "company_b", "--qbo-csv", "x", "--dry-run"],
                 qbo_rows=rows,
             )
         self.assertEqual(rc, 0)
@@ -364,7 +371,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
              mock.patch.object(cleanup, "TokenManager"), \
              mock.patch.object(cleanup, "mark_qbo_snapshot_stale") as stale_mock:
             rc, out, _err, _path = self._run(
-                ["--company", "company_a", "--qbo-csv", "x", "--apply", "--max-items", "5"],
+                ["--company", "company_b", "--qbo-csv", "x", "--apply", "--max-items", "5"],
                 qbo_rows=rows,
             )
 
@@ -380,7 +387,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
         kwargs = stale_mock.call_args.kwargs
         args = stale_mock.call_args.args
         all_args = list(args) + list(kwargs.values())
-        self.assertIn("company_a", all_args)
+        self.assertIn("company_b", all_args)
         self.assertIn("pack_variant_cleanup_applied", all_args)
         # Apply summary line emitted.
         self.assertIn("Apply summary: attempted=1 succeeded=1", out)
@@ -405,7 +412,7 @@ class ApplyModeGuardsTest(unittest.TestCase):
              mock.patch.object(cleanup, "TokenManager"), \
              mock.patch.object(cleanup, "mark_qbo_snapshot_stale"):
             rc, out, _err, _path = self._run(
-                ["--company", "company_a", "--qbo-csv", "x", "--apply", "--max-items", "2"],
+                ["--company", "company_b", "--qbo-csv", "x", "--apply", "--max-items", "2"],
                 qbo_rows=rows,
             )
 
@@ -413,6 +420,50 @@ class ApplyModeGuardsTest(unittest.TestCase):
         self.assertEqual(len(post_calls), 2)
         self.assertIn("succeeded=2", out)
         self.assertIn("skipped_due_to_cap=1", out)
+
+
+    def test_company_a_apply_is_refused_even_with_inventory_apply_env(self):
+        rows = [
+            _row(1, "WIDGET 330ml", qty=0),
+            _row(2, "WIDGET 330ml*12", qty=0),
+        ]
+        with mock.patch.object(cleanup, "_post_inactivate") as post_mock, \
+             mock.patch.object(cleanup, "_fetch_item_with_sync_token") as fetch_mock, \
+             mock.patch.object(cleanup, "TokenManager") as tm_mock:
+            rc, _out, err, _path = self._run(
+                ["--company", "company_a", "--qbo-csv", "x", "--apply", "--max-items", "5"],
+                qbo_rows=rows,
+                config=_FakeCompanyAConfig(),
+            )
+        self.assertEqual(rc, 2)
+        self.assertIn("Company A", err)
+        self.assertIn("AGENTS.md", err)
+        post_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+        tm_mock.assert_not_called()
+
+    def test_company_a_dry_run_plan_mode_still_works(self):
+        rows = [
+            _row(1, "WIDGET 330ml", qty=0),
+            _row(2, "WIDGET 330ml*12", qty=0),
+        ]
+        with mock.patch.object(cleanup, "_post_inactivate") as post_mock:
+            rc, out, _err, _path = self._run(
+                ["--company", "company_a", "--qbo-csv", "x", "--dry-run"],
+                qbo_rows=rows,
+                config=_FakeCompanyAConfig(),
+            )
+        self.assertEqual(rc, 0)
+        self.assertIn("[APPLY-PLAN]", out)
+        post_mock.assert_not_called()
+
+    def test_post_inactivate_refuses_company_a_realm(self):
+        from code_scripts.company_a_guard import CompanyAProtectedError
+
+        with mock.patch.object(cleanup, "_make_qbo_request") as req_mock:
+            with self.assertRaises(CompanyAProtectedError):
+                cleanup._post_inactivate(mock.Mock(), "9341455406194328", {"Id": "1"})
+        req_mock.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ docker compose run --rm --profile bootstrap bootstrap
 docker compose up -d caddy web scheduler
 ```
 
-For host migration notes, see [`docs/DOCKER_MIGRATION_READY.md`](docs/DOCKER_MIGRATION_READY.md).
+For host migration notes, see [`docs/archive/DOCKER_MIGRATION_READY.md`](docs/archive/DOCKER_MIGRATION_READY.md).
 
 ### Local / dev (high level)
 
@@ -206,7 +206,7 @@ Common paths (relative to state root):
 - **EPOS exports**: `code_scripts/exports/stock_reports/`
 - **QBO snapshots**: `code_scripts/exports/qbo_snapshots/`
 
-Retention/lifecycle plan: [`docs/ARTIFACT_RETENTION_PLAN.md`](docs/ARTIFACT_RETENTION_PLAN.md).
+Retention/lifecycle plan: [`docs/archive/ARTIFACT_RETENTION_PLAN.md`](docs/archive/ARTIFACT_RETENTION_PLAN.md) (archived proposal).
 
 ## Configuration
 
@@ -284,9 +284,8 @@ Setup (one-time):
 ## Documentation
 
 - [`docs/INVENTORY_SYNC.md`](docs/INVENTORY_SYNC.md)
-- [`docs/ARTIFACT_RETENTION_PLAN.md`](docs/ARTIFACT_RETENTION_PLAN.md)
-- [`docs/PORTAL_IMPROVEMENTS_AND_TRACKING.md`](docs/PORTAL_IMPROVEMENTS_AND_TRACKING.md)
-- [`docs/DOCKER_MIGRATION_READY.md`](docs/DOCKER_MIGRATION_READY.md)
+- [`docs/archive/`](docs/archive/README.md) — superseded/historical docs (retention plan, portal improvements log, COGS recovery plan, remediation notes)
+- [`docs/archive/DOCKER_MIGRATION_READY.md`](docs/archive/DOCKER_MIGRATION_READY.md)
 - [`docs/DEV_STAGE_SETUP.md`](docs/DEV_STAGE_SETUP.md)
 
 ## Safety / operations

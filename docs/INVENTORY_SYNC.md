@@ -1,5 +1,10 @@
 # Inventory Sync
 
+> **Company A (AKPONORA, `company_a`): do not use this workflow to change Company A inventory.** Company A went live on
+> 1 Oct 2026 on new AKP-/AKP-NS- items and is excluded from scheduled inventory runs. Catalogue/quantity apply,
+> pack-variant inactivation, InventoryAdjustment deletes and InvStartDate patches are refused for Company A in code.
+> Follow [`AGENTS.md`](../AGENTS.md) and [`AKPONORA_DAILY_OPERATIONS.md`](AKPONORA_DAILY_OPERATIONS.md).
+
 Inventory Sync is the operator-facing EPOS to QuickBooks inventory flow. From the Django Runs page, use the Inventory tab, choose a company, optionally choose a category or product filter, then click **Sync Inventory**.
 
 The unified pipeline:
@@ -194,4 +199,4 @@ Future improvement: derive base item price/cost from EPOS sale/cost fields or an
 
 Avoid manual QBO inventory edits while a run is active. The pipeline relies on a fresh QBO snapshot for its audit and preview outputs. After making manual QBO starting-value corrections, rerun the audit with a fresh QBO snapshot to confirm QBO matches EPOS.
 
-Retention and destructive cleanup are intentionally separate from this workflow. See `docs/ARTIFACT_RETENTION_PLAN.md`.
+Retention and destructive cleanup are intentionally separate from this workflow. See `docs/archive/ARTIFACT_RETENTION_PLAN.md` (archived proposal).

@@ -8,8 +8,9 @@ import re
 from pathlib import Path
 from typing import Any, List, Optional
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
+from code_scripts.akponora_ops.common import run_dir
 from code_scripts.load_env import load_env_file
 from code_scripts.slack_notify import (
     notify_pipeline_success,
@@ -23,6 +24,7 @@ from code_scripts.company_config import (
     get_available_companies,
     load_company_config,
 )
+from code_scripts.product_conversion import ProductConversionRegistry, canonical_product_id
 from code_scripts.token_manager import verify_realm_match
 from code_scripts.run_lock import hold_global_lock
 import pandas as pd
@@ -51,7 +53,13 @@ def company_dir_name(display_name: str) -> str:
     return "_".join(word.capitalize() for word in name.split())
 
 
-def run_step(label: str, script_name: str, args: list = None) -> None:
+def run_step(
+    label: str,
+    script_name: str,
+    args: list = None,
+    env_overrides: Optional[dict] = None,
+    env_remove: Optional[list] = None,
+) -> None:
     """
     Run a Python script in this repo as a module so that code_scripts imports work.
     Uses repo root (parent of code_scripts) as cwd and runs python -m code_scripts.<script>.
@@ -61,6 +69,8 @@ def run_step(label: str, script_name: str, args: list = None) -> None:
         label: Human-readable label for logging
         script_name: Name of the script file to run (e.g. epos_playwright.py)
         args: Optional list of command-line arguments to pass to the script
+        env_overrides: Optional env vars set for this subprocess only
+        env_remove: Optional env var names removed for this subprocess only
     """
     code_scripts_dir = Path(__file__).resolve().parent
     script_path = code_scripts_dir / script_name
@@ -80,6 +90,14 @@ def run_step(label: str, script_name: str, args: list = None) -> None:
     logging.info(f"\n=== {label} ===")
     logging.info(f"Running: {' '.join(cmd)}")
 
+    popen_kwargs = {}
+    if env_overrides or env_remove:
+        child_env = dict(os.environ)
+        for name in env_remove or []:
+            child_env.pop(name, None)
+        child_env.update({str(k): str(v) for k, v in (env_overrides or {}).items()})
+        popen_kwargs["env"] = child_env
+
     process = subprocess.Popen(
         cmd,
         cwd=str(actual_repo_root),
@@ -87,6 +105,7 @@ def run_step(label: str, script_name: str, args: list = None) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        **popen_kwargs,
     )
     if process.stdout is not None:
         for line in process.stdout:
@@ -1077,6 +1096,171 @@ def reconcile_company(company_key: str, target_date: str, config, repo_root: Pat
     return reconcile_result
 
 
+APPROVAL_FILE_ENV = "COMPANY_A_POSTING_APPROVAL_FILE"
+CATALOGUE_SYNC_BEFORE_SALES_ENV = "OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES"
+_RAW_PRODUCT_ID_COLUMNS = ("ProductId", "ProductID", "Product ID", "EPOS Product ID")
+
+
+def unmapped_raw_product_ids(raw_file: str, config) -> set[str]:
+    """EPOS Product IDs in a raw BookKeeping file that the installed mapping does not cover."""
+    registry = ProductConversionRegistry.from_csv(config.product_conversion_file, allow_name_fallback=False)
+    frame = pd.read_csv(raw_file, dtype=str, keep_default_na=False)
+    column = next((c for c in _RAW_PRODUCT_ID_COLUMNS if c in frame.columns), None)
+    if column is None:
+        return set()
+    ids = {canonical_product_id(v) for v in frame[column] if str(v).strip()}
+    return {pid for pid in ids if pid and pid not in registry.by_product_id}
+
+
+def catalogue_sync_before_transform(company_key: str, business_date: str, config, raw_file: str) -> None:
+    """Company A: map (and, when automated creates are on, create) new EPOS products sold today.
+
+    Opt-in via OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES=1. Never raises: if a product
+    stays unmapped, the transform fails the day closed exactly as it would without this hook.
+    """
+    if company_key != "company_a" or not bool(getattr(config, "product_conversion_enabled", False)):
+        return
+    if os.getenv(CATALOGUE_SYNC_BEFORE_SALES_ENV, "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        missing = unmapped_raw_product_ids(raw_file, config)
+        if not missing:
+            logging.info(f"Catalogue sync: every product sold on {business_date} is mapped")
+            return
+        logging.info(f"Catalogue sync: {len(missing)} unmapped product id(s) on {business_date}: {sorted(missing)}")
+        from code_scripts.akponora_ops.catalogue_sync import ensure_products_mapped
+
+        out_dir = run_dir(f"catalogue_sync_presales_{business_date}")
+        result = ensure_products_mapped(missing, out_dir=out_dir)
+        unresolved = sorted(result.get("unresolved") or [])
+        if unresolved:
+            logging.warning(
+                f"Catalogue sync left {len(unresolved)} product id(s) unmapped for {business_date}: {unresolved}. "
+                f"The transform will fail the day closed; review {out_dir}"
+            )
+        else:
+            logging.info(f"[OK] Catalogue sync mapped all {len(missing)} new product id(s) for {business_date}")
+    except Exception as exc:
+        logging.error(f"Catalogue sync before transform failed for {business_date}: {exc}")
+
+
+def standing_approval_for_day(company_key: str, business_date: str, config) -> Optional[dict]:
+    """Standing auto-approval settings when they apply to this Company A business day.
+
+    Applies only to Company A, product conversion on, business date on/after the
+    cutover, and both env vars set (see code_scripts/standing_approval.py).
+    Otherwise None: the day follows the manual-manifest path exactly as before.
+    """
+    if company_key != "company_a" or not bool(getattr(config, "product_conversion_enabled", False)):
+        return None
+    from code_scripts.operations_controls import is_controlled_business_date
+    if not is_controlled_business_date(business_date, getattr(config, "product_conversion_fail_closed_from", None)):
+        return None
+    from code_scripts.standing_approval import (
+        GATE_CAP,
+        StandingApprovalConfigError,
+        standing_approval_settings,
+    )
+    try:
+        return standing_approval_settings()
+    except StandingApprovalConfigError as exc:
+        _refuse_standing_approval(business_date, [{"gate": GATE_CAP, "detail": str(exc)}], {})
+    return None
+
+
+def _refuse_standing_approval(business_date: str, failures: list, summary: dict) -> None:
+    """Nothing is posted: write the posting hold (first hold kept) and fail the run."""
+    from code_scripts.operations_controls import HOLD_CLEAR_HINT, write_posting_hold
+    from code_scripts.standing_approval import format_failures
+    write_posting_hold(
+        business_date,
+        {"status": "AUTO_APPROVAL_REFUSED", "failed_gates": failures, "summary": summary},
+        source="standing_auto_approval",
+        overwrite=False,
+    )
+    message = (
+        f"[ERROR] Company A standing auto-approval refused {business_date}; nothing posted. "
+        f"Failed gate(s): {format_failures(failures)}. Posting hold in place; {HOLD_CLEAR_HINT}"
+    )
+    logging.error(message)
+    raise SystemExit(message)
+
+
+def run_standing_approval_upload(
+    label: str,
+    business_date: str,
+    config,
+    raw_file: str,
+    qbo_upload_args: list,
+    settings: dict,
+) -> dict:
+    """Dry-run, evaluate the automatic gates, then post with a per-subprocess manifest.
+
+    Any failed gate (including a failed dry-run preflight) writes the posting hold and
+    raises SystemExit before anything is posted.
+    """
+    from code_scripts.standing_approval import (
+        GATE_EVIDENCE,
+        evaluate_gates,
+        evidence_path,
+        write_auto_manifest,
+    )
+
+    logging.info(
+        f"Company A standing auto-approval ON for {business_date} (ref: {settings['ref']}); "
+        "dry-run preflight, then automatic gates"
+    )
+    started_at = datetime.now(timezone.utc)
+    try:
+        run_step(
+            f"{label} - standing approval dry-run",
+            "qbo_upload.py",
+            list(qbo_upload_args) + ["--dry-run"],
+            env_remove=[APPROVAL_FILE_ENV],
+        )
+    except SystemExit as exc:
+        _refuse_standing_approval(
+            business_date,
+            [{"gate": GATE_EVIDENCE, "detail": f"qbo_upload --dry-run preflight failed ({exc})"}],
+            {"business_date": business_date},
+        )
+
+    path = evidence_path(business_date, config.company_key)
+    try:
+        evidence = json.loads(path.read_text())
+    except (OSError, ValueError):
+        evidence = None
+    try:
+        raw_totals = _compute_raw_totals(Path(raw_file))
+    except Exception as exc:
+        logging.warning(f"Could not total raw EPOS file {raw_file}: {exc}")
+        raw_totals = None
+
+    result = evaluate_gates(
+        evidence,
+        business_date=business_date,
+        config=config,
+        raw_totals=raw_totals,
+        dry_run_started_at=started_at,
+        max_gross=settings.get("max_gross"),
+    )
+    if not result["passed"]:
+        _refuse_standing_approval(business_date, result["failures"], result["summary"])
+    logging.info(f"[OK] Standing auto-approval gates passed for {business_date}: {result['summary']}")
+
+    manifest = write_auto_manifest(
+        evidence, ref=settings["ref"], realm=str(config.realm_id), business_date=business_date
+    )
+    if manifest is None:
+        logging.info(f"No new receipts to approve for {business_date} (all already in QBO); posting nothing new")
+        run_step(label, "qbo_upload.py", qbo_upload_args, env_remove=[APPROVAL_FILE_ENV])
+    else:
+        logging.info(f"Auto-approval manifest written: {manifest}")
+        run_step(label, "qbo_upload.py", qbo_upload_args, env_overrides={APPROVAL_FILE_ENV: str(manifest)})
+    result["manifest"] = str(manifest) if manifest else None
+    return result
+
+
 def main(
     company_key: str,
     target_date: Optional[str] = None,
@@ -1085,6 +1269,7 @@ def main(
     skip_download: bool = False,
     verbose_logs: bool = False,
     inventory_sync_mode: Optional[str] = None,
+    upload_dry_run: bool = False,
 ) -> int:
     """
     Full pipeline for a specific company:
@@ -1115,6 +1300,8 @@ def main(
         to_date: End date for range mode in YYYY-MM-DD format (must be used with from_date)
         skip_download: If True, skip EPOS download and use existing split files in uploads/range_raw/ (range mode only)
         inventory_sync_mode: Optional CLI override for qbo_upload inventory sync mode (inline/upload_fast)
+        upload_dry_run: Single-day only. Pass --dry-run to qbo_upload (build payloads and write
+            October approval evidence, no POST), then stop before reconcile/archive.
     """
     # Load company configuration
     try:
@@ -1461,6 +1648,8 @@ def main(
                     used_raw_spill_for_day.append(raw_spill_path)
                     warnings.append(f"{day_date}: merged target split ({merge_stats['base_rows']} rows) + raw spill ({merge_stats['extra_rows']} rows) -> final ({merge_stats['total_rows']} rows)")
                 
+                catalogue_sync_before_transform(company_key, day_date, config, raw_file_to_use)
+
                 # Phase 2: Transform using raw file (combined or original)
                 run_step(
                     f"Phase 2: Transform to single CSV (transform) - {day_date}",
@@ -1491,11 +1680,22 @@ def main(
                     qbo_upload_args.extend(["--inventory-sync-mode", inventory_sync_mode])
                 if verbose_logs:
                     qbo_upload_args.append("--verbose-logs")
-                run_step(
-                    f"Phase 3: Upload to QBO (qbo_upload) - {day_date}",
-                    "qbo_upload.py",
-                    qbo_upload_args
-                )
+                standing = standing_approval_for_day(company_key, day_date, config)
+                if standing is not None:
+                    auto_result = run_standing_approval_upload(
+                        f"Phase 3: Upload to QBO (qbo_upload) - {day_date}",
+                        day_date, config, raw_file_to_use, qbo_upload_args, standing,
+                    )
+                    warnings.append(
+                        f"{day_date}: standing auto-approval posted "
+                        f"{auto_result['summary'].get('receipts_to_post', 0)} receipt(s)"
+                    )
+                else:
+                    run_step(
+                        f"Phase 3: Upload to QBO (qbo_upload) - {day_date}",
+                        "qbo_upload.py",
+                        qbo_upload_args
+                    )
                 
                 # Check upload stats after Phase 3
                 if metadata_path.exists():
@@ -1539,6 +1739,9 @@ def main(
                 if persist_reconcile_to_metadata(repo_root, config.metadata_file, reconcile_result):
                     logging.info(f"Persisted reconciliation payload to metadata for {day_date}")
                 
+                from code_scripts.operations_controls import require_reconciliation_match
+                require_reconciliation_match(company_key, reconcile_result, business_date=day_date)
+
                 # Phase 5: Archive files
                 logging.info(f"\n=== Phase 5: Archive Files - {day_date} ===")
                 try:
@@ -1784,6 +1987,8 @@ def main(
                 notify_pipeline_update(pipeline_name, log_file, watchdog_summary, config.slack_webhook_url)
                 watchdog_sent = True
             
+            catalogue_sync_before_transform(company_key, target_date, config, raw_file_to_use)
+
             # Phase 2: Transform using raw file (combined or original)
             run_step(
                 "Phase 2: Transform to single CSV (transform)",
@@ -1814,11 +2019,29 @@ def main(
                 qbo_upload_args.extend(["--inventory-sync-mode", inventory_sync_mode])
             if verbose_logs:
                 qbo_upload_args.append("--verbose-logs")
-            run_step(
-                "Phase 3: Upload to QBO (qbo_upload)",
-                "qbo_upload.py",
-                qbo_upload_args
-            )
+            if upload_dry_run:
+                qbo_upload_args.append("--dry-run")
+            standing = None if upload_dry_run else standing_approval_for_day(company_key, target_date, config)
+            if standing is not None:
+                auto_result = run_standing_approval_upload(
+                    "Phase 3: Upload to QBO (qbo_upload)",
+                    target_date, config, raw_file_to_use, qbo_upload_args, standing,
+                )
+                warnings.append(
+                    f"Standing auto-approval posted {auto_result['summary'].get('receipts_to_post', 0)} receipt(s)"
+                )
+            else:
+                run_step(
+                    "Phase 3: Upload to QBO (qbo_upload)",
+                    "qbo_upload.py",
+                    qbo_upload_args
+                )
+            if upload_dry_run:
+                logging.info(
+                    "Dry run: qbo_upload built payloads without posting; skipping reconcile and archive. "
+                    "Transformed CSV left in place for review."
+                )
+                return 0
             
             # Check upload stats after Phase 3 for partial failures
             if metadata_path.exists():
@@ -1857,6 +2080,9 @@ def main(
             # Persist reconcile payload into metadata before archive.
             if persist_reconcile_to_metadata(repo_root, config.metadata_file, reconcile_result):
                 logging.info("Persisted reconciliation payload to metadata")
+
+            from code_scripts.operations_controls import require_reconciliation_match
+            require_reconciliation_match(company_key, reconcile_result, business_date=target_date)
 
             # Phase 5: Archive files after successful upload and reconciliation
             logging.info("\n=== Phase 5: Archive Files ===")
@@ -2103,6 +2329,15 @@ Examples:
             "Default is company config/env; use only when intentionally overriding."
         ),
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Single-day only: pass --dry-run to qbo_upload (no QBO writes; writes Company A October "
+            "approval evidence), then stop before reconcile/archive."
+        ),
+    )
     args = parser.parse_args()
     
     if not args.company:
@@ -2112,6 +2347,9 @@ Examples:
     if (args.from_date is None) != (args.to_date is None):
         parser.error("--from-date and --to-date must be provided together")
     
+    if args.dry_run and (args.from_date is not None or args.to_date is not None):
+        parser.error("--dry-run supports single-day runs only (use --target-date)")
+
     # Validation: --skip-download only works in range mode
     if args.skip_download and (args.from_date is None or args.to_date is None):
         parser.error("--skip-download can only be used with --from-date and --to-date (range mode)")
@@ -2131,5 +2369,6 @@ Examples:
                 args.skip_download,
                 args.verbose_logs,
                 args.inventory_sync_mode,
+                args.dry_run,
             )
         )

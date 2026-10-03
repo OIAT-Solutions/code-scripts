@@ -14,20 +14,23 @@ Subcommands:
   import-products  Create QBO Items from a products CSV (uses Product.Mapping for accounts)
   inactivate-all   Set all active products (Items) to inactive; use before re-creating from a fresh list
 
+Company A (company_a / AKPONORA): set-invstart*, recreate-invstart, live inactivate-all and
+live import-products are refused (AGENTS.md). Read-only subcommands still work.
+
 Examples:
   python scripts/qbo_inv_manager.py --company company_a get --item-id 7220
   python scripts/qbo_inv_manager.py --company company_a get --name "NAN-OPTIPRO"
   python scripts/qbo_inv_manager.py --company company_a list-invstart --cutoff-date 2026-01-01 --export-csv reports/issues.csv
-  python scripts/qbo_inv_manager.py --company company_a set-invstart --item-id 7220 --date 2026-01-01
-  python scripts/qbo_inv_manager.py --company company_a set-invstart-bulk --cutoff-date 2026-01-01 --new-date 2026-01-01
-  python scripts/qbo_inv_manager.py --company company_a set-invstart-from-csv --csv reports/inventory_start_date_blockers_company_a_2026-01-01.csv --new-date 2026-01-01
+  python scripts/qbo_inv_manager.py --company company_b set-invstart --item-id 7220 --date 2026-01-01
+  python scripts/qbo_inv_manager.py --company company_b set-invstart-bulk --cutoff-date 2026-01-01 --new-date 2026-01-01
+  python scripts/qbo_inv_manager.py --company company_b set-invstart-from-csv --csv reports/inventory_start_date_blockers_company_b_2026-01-01.csv --new-date 2026-01-01
   python scripts/qbo_inv_manager.py --company company_a export-products --out exports/company_a_products.csv
   python scripts/qbo_inv_manager.py --company company_a export-products --out exports/company_a_inventory.csv --type Inventory
   python scripts/qbo_inv_manager.py --company company_a inactivate-all --dry-run
-  python scripts/qbo_inv_manager.py --company company_a inactivate-all --type Inventory --report-csv reports/inactivated_company_a.csv
+  python scripts/qbo_inv_manager.py --company company_b inactivate-all --type Inventory --report-csv reports/inactivated_company_b.csv
   python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --dry-run
-  python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --as-of-date 2026-01-01 --default-qty 10 --report-csv reports/imported_products.csv
-  python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --as-of-date 2026-01-01 --create
+  python scripts/qbo_inv_manager.py --company company_b import-products --csv exports/company_b_products.csv --as-of-date 2026-01-01 --default-qty 0 --report-csv reports/imported_products.csv
+  python scripts/qbo_inv_manager.py --company company_b import-products --csv exports/company_b_products.csv --as-of-date 2026-01-01 --create
   python scripts/qbo_inv_manager.py --company company_a import-products --csv exports/company_a_products.csv --inventory-only --dry-run
 """
 from __future__ import annotations
@@ -46,6 +49,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from code_scripts.company_a_guard import COMPANY_A_REALM_ID
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config, get_available_companies
 from code_scripts.token_manager import verify_realm_match
@@ -423,8 +427,24 @@ def cmd_list_invstart(args: argparse.Namespace, token_mgr: TokenManager, realm_i
     return 0
 
 
+def _refuse_company_a_invstart(args: argparse.Namespace, realm_id: Optional[str] = None) -> bool:
+    """Print a refusal and return True when an InvStartDate write targets Company A."""
+    if getattr(args, "company", "") == "company_a" or str(realm_id or "") == COMPANY_A_REALM_ID:
+        print(
+            "[ERROR] Company A set-invstart / set-invstart-bulk / set-invstart-from-csv is disabled. "
+            "Changing InvStartDate on legacy or AKP- Inventory items re-runs FIFO and rewrites COGS "
+            "(AGENTS.md non-negotiables). Use list-invstart (read-only) and raise it with the owner.",
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def cmd_set_invstart(args: argparse.Namespace, token_mgr: TokenManager, realm_id: str) -> int:
     """Set InvStartDate for one item."""
+    if _refuse_company_a_invstart(args, realm_id):
+        return 1
+
     try:
         new_date = _parse_date(args.date)
     except ValueError as e:
@@ -446,6 +466,9 @@ def cmd_set_invstart(args: argparse.Namespace, token_mgr: TokenManager, realm_id
 
 def cmd_set_invstart_bulk(args: argparse.Namespace, token_mgr: TokenManager, realm_id: str) -> int:
     """Find all items with InvStartDate > cutoff, patch each to new_date."""
+    if _refuse_company_a_invstart(args, realm_id):
+        return 1
+
     try:
         cutoff_date = _parse_date(args.cutoff_date)
         new_date = _parse_date(args.new_date)
@@ -505,6 +528,9 @@ def cmd_set_invstart_bulk(args: argparse.Namespace, token_mgr: TokenManager, rea
 
 def cmd_set_invstart_from_csv(args: argparse.Namespace, token_mgr: TokenManager, realm_id: str) -> int:
     """Patch InvStartDate for all item IDs listed in a CSV (e.g. blockers file)."""
+    if _refuse_company_a_invstart(args, realm_id):
+        return 1
+
     try:
         new_date = _parse_date(args.new_date)
     except ValueError as e:
@@ -563,6 +589,14 @@ def cmd_recreate_invstart(args: argparse.Namespace, token_mgr: TokenManager, rea
     with the same details and the given InvStartDate. Use when API patch does not update the UI.
     New item gets a new Id; update mappings if needed.
     """
+    if getattr(args, "company", "") == "company_a":
+        print(
+            "[ERROR] Company A Inventory recreate-invstart is disabled. Do not inactivate "
+            "legacy items or clone QtyOnHand on the sales path.",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
         new_date = _parse_date(args.date)
     except ValueError as e:
@@ -715,12 +749,20 @@ def cmd_import_products(args: argparse.Namespace, token_mgr: TokenManager, realm
     as_of_date = getattr(args, "as_of_date", None)
     if as_of_date and len(as_of_date) > 10:
         as_of_date = as_of_date[:10]
-    default_qty = getattr(args, "default_qty", 10)
+    default_qty = getattr(args, "default_qty", 0)
     force_inventory = not getattr(args, "inventory_only", False)  # default: treat all non-Category as Inventory
     taxcode_id_arg = getattr(args, "taxcode_id", None)
     taxcode_name_arg = getattr(args, "taxcode_name", None)
     if taxcode_name_arg is not None:
         taxcode_name_arg = (str(taxcode_name_arg).strip() or None)
+
+    if config.company_key == "company_a" and not dry_run:
+        print(
+            "[ERROR] Company A Inventory import is disabled. Oct catalogue creates are a "
+            "separate approved batch after chat yes; do not recreate January-style opening quantities.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         mapping_cache = load_category_account_mapping(config)
@@ -829,9 +871,9 @@ def cmd_import_products(args: argparse.Namespace, token_mgr: TokenManager, realm
             qty = _import_row_int(row, "QtyOnHand")
             if qty is None:
                 qty = default_qty
-            qty = max(10, qty)  # never 0 or less than 10 for import-products
+            qty = max(0, qty)
             try:
-                category_id = get_or_create_item_category_id(token_mgr, realm_id, category, cache=category_cache)
+                category_id = None if dry_run else get_or_create_item_category_id(token_mgr, realm_id, category, cache=category_cache)
             except (ValueError, RuntimeError) as e:
                 report.append({"Name": name, "Type": itype, "Status": "failed", "NewId": "", "Error": str(e)})
                 failed += 1
@@ -923,6 +965,14 @@ def cmd_inactivate_all(args: argparse.Namespace, token_mgr: TokenManager, realm_
     limit = getattr(args, "limit", None)
     dry_run = getattr(args, "dry_run", False)
     report_csv = getattr(args, "report_csv", None)
+
+    if getattr(args, "company", "") == "company_a" and not dry_run:
+        print(
+            "[ERROR] Company A inactivate-all is forbidden. QBO zeros QtyOnHand and can post "
+            "Shrinkage/COGS. Use sequenced W10 dry-run batches after Oct go-live only.",
+            file=sys.stderr,
+        )
+        return 1
 
     if dry_run:
         # Fast path: no SyncToken needed
@@ -1063,7 +1113,7 @@ def main() -> int:
     p_import = subparsers.add_parser("import-products", help="Create QBO Items from a products CSV (uses Product.Mapping for accounts)")
     p_import.add_argument("--csv", metavar="PATH", help="Input CSV path (default: exports/<company>_products.csv)")
     p_import.add_argument("--as-of-date", metavar="YYYY-MM-DD", help="InvStartDate (As of Date) for all created Inventory items (overrides CSV/config)")
-    p_import.add_argument("--default-qty", type=int, default=10, metavar="N", help="Default QtyOnHand when CSV value is missing (default: 10)")
+    p_import.add_argument("--default-qty", type=int, default=0, metavar="N", help="Default QtyOnHand when CSV value is missing (default: 0)")
     p_import.add_argument("--taxcode-name", metavar="NAME", help="TaxCode name to resolve (overrides company config; default: use config tax_code_id / tax_code_name)")
     p_import.add_argument("--taxcode-id", metavar="ID", help="TaxCode Id to use (overrides config and name lookup when set)")
     p_import.add_argument("--inventory-only", action="store_true", help="Only process rows with Type=Inventory in CSV (default: create all non-Category rows as Inventory)")

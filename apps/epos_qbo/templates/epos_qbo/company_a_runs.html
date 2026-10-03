@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Company A daily runs • EPOS → QBO{% endblock %}
+
+{% block topbar %}
+{% include "components/topbar.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+        <div>
+            <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Company A daily runs</h1>
+            <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">AKPONORA: products → bills → sales → health check → deposits. Runs in the {{ schedule.container }} container; this page is read-only.</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                {% if schedule.enabled %}Schedule: {{ schedule.time_label|default:schedule.cron }} ({{ schedule.cron }}) {{ schedule.timezone }}{% if schedule.next_run %} · next run {{ schedule.next_run|date:"Y-m-d H:i" }}{% endif %}{% else %}Schedule disabled ({{ schedule.enabled_env }} not set){% endif %}
+            </p>
+        </div>
+        <div class="flex items-center gap-2 text-sm">
+            {% if show_dry %}
+            <a href="?dry=0" class="btn btn-secondary text-xs">Hide dry runs</a>
+            {% else %}
+            <a href="?dry=1" class="btn btn-secondary text-xs">Show dry runs</a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% include "components/company_a_hold_banner.html" with hold=hold %}
+
+    <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden">
+        {% if runs %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-slate-50 dark:bg-slate-700/50 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600">
+                    <tr>
+                        <th class="text-left px-4 py-3 font-medium">Business date</th>
+                        <th class="text-left px-4 py-3 font-medium">Run</th>
+                        <th class="text-left px-4 py-3 font-medium">Status</th>
+                        <th class="text-left px-4 py-3 font-medium">Steps</th>
+                        <th class="text-right px-4 py-3 font-medium">Sales posted</th>
+                        <th class="text-right px-4 py-3 font-medium">Bills posted</th>
+                        <th class="text-right px-4 py-3 font-medium">Items / vendors created</th>
+                        <th class="text-right px-4 py-3 font-medium">Waiting</th>
+                    </tr>
+                </thead>
+                <tbody class="text-slate-900 dark:text-slate-200">
+                    {% for r in runs %}
+                    <tr class="border-b border-slate-100 dark:border-slate-700 align-top" data-run-id="{{ r.run_id }}">
+                        <td class="px-4 py-3"><a class="font-medium text-emerald-700 dark:text-emerald-400 hover:underline" href="{% url 'epos_qbo:company-a-run-detail' r.business_date r.run_id %}">{{ r.business_date }}</a></td>
+                        <td class="px-4 py-3">
+                            {% if r.dry_run %}{% include "components/company_a_badge.html" with status='skipped' text='Dry run' %}{% else %}<span class="text-xs font-medium">Real</span>{% endif %}
+                            <div class="text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-1">{{ r.run_id }}</div>
+                            {% if r.finished_at %}<div class="text-[11px] text-slate-500 dark:text-slate-400">{{ r.finished_at|date:"Y-m-d H:i" }}</div>{% endif %}
+                        </td>
+                        <td class="px-4 py-3">{% include "components/company_a_badge.html" with status=r.status text=r.status_label icon=r.icon %}{% if r.error %}<div class="text-[11px] text-red-600 dark:text-red-400 mt-1">{{ r.error }}</div>{% endif %}</td>
+                        <td class="px-4 py-3"><div class="flex flex-wrap gap-1">{% for s in r.steps %}{% include "components/company_a_badge.html" with status=s.status text=s.label icon=s.icon %}{% endfor %}</div></td>
+                        <td class="px-4 py-3 text-right">{{ r.totals.sales_posted|default:"—" }}</td>
+                        <td class="px-4 py-3 text-right">{% if r.totals.bills_ready_total %}{{ r.totals.bills_posted }} · {{ r.totals.bills_ready_total }}{% else %}—{% endif %}</td>
+                        <td class="px-4 py-3 text-right">{{ r.totals.items_created|default:"0" }} / {{ r.totals.vendors_created|default:"0" }}</td>
+                        <td class="px-4 py-3 text-right">{% if r.waiting %}<a class="text-amber-700 dark:text-amber-400 hover:underline" href="{% url 'epos_qbo:company-a-run-detail' r.business_date r.run_id %}#waiting">{{ r.waiting|length }}</a>{% else %}0{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="px-5 py-6 text-sm text-slate-500 dark:text-slate-400">No Company A daily-run evidence found under <code class="font-mono text-xs">{{ daily_root }}</code>.</p>
+        {% endif %}
+    </section>
+
+    {% include "components/company_a_holds_alerts.html" with hold=hold guard=guard %}
+</div>
+{% endblock %}

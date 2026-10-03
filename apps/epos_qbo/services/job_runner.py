@@ -21,7 +21,7 @@ from code_scripts.slack_notify import build_inventory_review_action_envelope
 from .. import portal_settings
 from ..models import RunJob, RunLock, RunSchedule, RunScheduleEvent
 from .artifact_ingestion import attach_recent_artifacts_to_job
-from .locking import release_run_lock
+from .locking import clear_if_stale, release_run_lock
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,13 @@ def build_command(cleaned: dict) -> list[str]:
         cmd.extend(["--stagger-seconds", str(int(cleaned.get("stagger_seconds") or portal_settings.get_default_stagger_seconds()))])
         if cleaned.get("continue_on_failure"):
             cmd.append("--continue-on-failure")
+        excluded_companies = cleaned.get("exclude_companies") or []
+        if isinstance(excluded_companies, str):
+            excluded_companies = [excluded_companies]
+        for company_key in excluded_companies:
+            company_key = str(company_key or "").strip()
+            if company_key:
+                cmd.extend(["--exclude-company", company_key])
 
     if date_mode == "target_date" and cleaned.get("target_date"):
         cmd.extend(["--target-date", cleaned["target_date"].strftime("%Y-%m-%d")])
@@ -292,6 +299,10 @@ def _build_inventory_command(python_exe: str, cleaned: dict) -> list[str]:
 
 
 def build_command_for_job(job: RunJob) -> list[str]:
+    if job.scope == RunJob.SCOPE_WORKSPACE_READ:
+        return [sys.executable, str(BASE_DIR / "manage.py"), "update_company_records", str(job.id)]
+    if job.scope == RunJob.SCOPE_PORTAL_REVIEW:
+        return [sys.executable, str(BASE_DIR / "manage.py"), "execute_portal_review", str(job.id)]
     if job.from_date and job.to_date:
         date_mode = "range"
     elif job.target_date:
@@ -310,6 +321,7 @@ def build_command_for_job(job: RunJob) -> list[str]:
         "stagger_seconds": job.stagger_seconds,
         "continue_on_failure": job.continue_on_failure,
         "inventory_options": job.inventory_options_json or {},
+        "exclude_companies": (job.inventory_options_json or {}).get("exclude_companies", []),
     }
     return build_command(cleaned)
 
@@ -337,7 +349,7 @@ def _monitor_process(job_id, popen: subprocess.Popen, log_handle):
             attach_started = time.monotonic()
             # Link artifacts before flipping the run out of RUNNING so dashboard completion
             # events observe status only after overview data is ready to refresh.
-            attached_artifacts = attach_recent_artifacts_to_job(job)
+            attached_artifacts = 0 if job.scope in {RunJob.SCOPE_PORTAL_REVIEW,RunJob.SCOPE_WORKSPACE_READ} else attach_recent_artifacts_to_job(job)
             attach_elapsed_ms = int((time.monotonic() - attach_started) * 1000)
 
             job.exit_code = exit_code
@@ -475,6 +487,7 @@ def dispatch_next_queued_job() -> tuple[RunJob | None, str]:
     while failure_count < DISPATCH_START_FAILURE_LIMIT:
         with transaction.atomic():
             lock, _ = RunLock.objects.select_for_update().get_or_create(id=1)
+            clear_if_stale(lock)  # a finished job's lock must never hold the queue
             if lock.active:
                 return None, "queued"
 

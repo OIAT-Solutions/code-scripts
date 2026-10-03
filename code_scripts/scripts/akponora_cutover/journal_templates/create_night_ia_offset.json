@@ -1,0 +1,11 @@
+{
+  "_comment": "DRAFT TEMPLATE - placeholder amount. CREATE-NIGHT-IA-OFFSET. Do not fill by hand: generate the real spec with `post_journal.py offset --w7-summary <w7 out>/summary_execute.json --approved-v <V>` (B + C - V via operations_controls.create_night_offset). DocNumber is INV-EQ-2026-10-01 because QBO caps DocNumber at 21 characters ('CREATE-NIGHT-IA-OFFSET' is 22). Dated 2026-10-01 = InvStartDate, so IA 77 as of 1 Oct equals V. Positive: Cr IA 77 / Dr 300150 (Id 86); negative swaps. Needs chat yes.",
+  "doc_number": "INV-EQ-2026-10-01",
+  "txn_date": "2026-10-01",
+  "status": "DRAFT - placeholder amount",
+  "private_note": "AKPONORA W7 create-night IA offset. B <B> + C <C> - V <V> = <AMOUNT>. Per chat approval <REF>.",
+  "lines": [
+    {"account_id": "86", "posting_type": "Debit", "amount": "0.00", "description": "Create-night offset: legacy IA balance not in 30 Sep EPOS opening (300150)"},
+    {"account_id": "77", "posting_type": "Credit", "amount": "0.00", "description": "Bring Inventory Asset 77 to approved 30 Sep EPOS opening V"}
+  ]
+}

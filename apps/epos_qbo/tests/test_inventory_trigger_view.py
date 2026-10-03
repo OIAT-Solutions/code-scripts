@@ -198,8 +198,9 @@ class InventoryTriggerViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Run Inventory Review", html)
-        self.assertIn("Run Sales Sync", html)
+        self.assertIn("Products &amp; Stock", html)
+        self.assertIn("Run a day or past dates", html)
+        self.assertNotIn(reverse("epos_qbo:run-trigger-inventory"), html)
         self.assertNotIn("Run Inventory Audit", html)
         self.assertNotIn("Preview Quantity Adjustments", html)
         self.assertNotIn("Preview Opening Balance Correction", html)

@@ -956,7 +956,7 @@ class OverviewUITemplateTests(TestCase):
             "environment": "production",
         }
 
-    def test_overview_renders_search_and_overview_script(self):
+    def test_home_renders_shared_filter_and_refresh_script(self):
         with (
             mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
             mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
@@ -966,11 +966,11 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn('id="overview-company-filter"', html)
+        self.assertIn('id="home-company"', html)
         self.assertIn(f'data-panels-url="{reverse("epos_qbo:overview-panels")}"', html)
-        self.assertIn("js/overview.js", html)
+        self.assertIn("js/home.js", html)
 
-    def test_overview_card_renders_separate_sales_inventory_and_token_statuses(self):
+    def test_home_does_not_treat_old_runs_or_stock_checks_as_confirmed_sales(self):
         sales_run = RunJob.objects.create(
             scope=RunJob.SCOPE_SINGLE,
             company_key="company_a",
@@ -1019,12 +1019,10 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Sales: Not reconciled", html)
-        self.assertIn("Inventory: In sync", html)
-        self.assertIn("Token: Connected", html)
-        self.assertIn("Products checked: 147", html)
-        self.assertIn("Blocked: 0", html)
-        self.assertIn("Access token expires in", html)
+        self.assertIn("No confirmed sales record yet", html)
+        self.assertNotIn("Last confirmed sales:", html)
+        self.assertNotIn("Products checked: 147", html)
+        self.assertNotIn("Access token expires in", html)
         self.assertNotIn("inventory_pipeline", html)
         self.assertNotIn("/tmp/inventory_pipeline_company_a_summary.json", html)
 
@@ -1040,7 +1038,7 @@ class OverviewUITemplateTests(TestCase):
         self.assertNotIn("Run Reliability", html)
         self.assertNotIn("Failure Sources (Last 60 Days)", html)
 
-    def test_live_log_uses_company_and_run_label_not_uuid(self):
+    def test_home_keeps_run_identifiers_out_of_company_summary(self):
         run = RunJob.objects.create(
             scope=RunJob.SCOPE_SINGLE,
             company_key="company_a",
@@ -1057,7 +1055,8 @@ class OverviewUITemplateTests(TestCase):
             response = self.client.get(reverse("epos_qbo:overview"))
 
         html = response.content.decode("utf-8")
-        self.assertIn(f"Company A: Run {run.friendly_id} succeeded", html)
+        self.assertIn("Company A", html)
+        self.assertNotIn(run.friendly_id, html)
         self.assertNotIn(str(run.id), html)
 
     def test_overview_panels_endpoint_renders_fragment(self):
@@ -1070,9 +1069,10 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("System Health", html)
-        self.assertIn('id="overview-company-filter"', html)
-        self.assertIn("Live Log", html)
+        self.assertIn("Confirmed sales", html)
+        self.assertIn("Your companies", html)
+        self.assertIn("Days not confirmed", html)
+        self.assertNotIn("Live Log", html)
         self.assertNotIn("Run Reliability", html)
 
     def test_overview_panels_respects_revenue_period_param(self):
@@ -1085,9 +1085,10 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn('<option value="90d" selected>', html)
+        self.assertEqual(response.context['revenue_period'], '90d')
+        self.assertIn('Confirmed sales', html)
 
-    def test_overview_panels_company_filter_keeps_revenue_company_options(self):
+    def test_home_refresh_respects_company_filter(self):
         CompanyConfigRecord.objects.create(
             company_key="company_b",
             display_name="Company B",
@@ -1107,10 +1108,11 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn('value="company_a">Company A</option>', html)
-        self.assertIn('value="company_b">Company B</option>', html)
+        self.assertEqual([r['company_key'] for r in response.context['home_rows']], ['company_a'])
+        self.assertIn('Company A', html)
+        self.assertNotIn('Company B', html)
 
-    def test_overview_topbar_uses_quick_sync_label(self):
+    def test_home_routes_run_controls_to_daily_runs(self):
         perm = Permission.objects.get(codename="can_trigger_runs")
         self.user.user_permissions.add(perm)
         with (
@@ -1122,10 +1124,9 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Quick Sync", html)
-        self.assertNotIn("Manual Sync", html)
-        self.assertIn('name="date_mode" value="target_date"', html)
-        self.assertIn('name="target_date"', html)
+        self.assertIn("View daily runs", html)
+        self.assertNotIn("Quick Sync", html)
+        self.assertNotIn('name="date_mode" value="target_date"', html)
 
     def test_overview_renders_consolidated_kpi_row(self):
         run_prev = RunJob.objects.create(
@@ -1166,14 +1167,8 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("System Health", html)
-        self.assertIn("Sales Synced", html)
-        self.assertIn("Run Success", html)
-        self.assertIn("Avg Runtime", html)
-        self.assertIn("Metrics are based on Target Date:", html)
-        self.assertIn("Last successful sync", html)
-        self.assertNotIn("KPI basis: trading day cutoff", html)
-        self.assertNotIn("Healthy Companies", html)
-        self.assertNotIn("Critical Errors", html)
-        self.assertNotIn("Records Synced (24h)", html)
-        self.assertNotIn("Active Runs", html)
+        self.assertIn("Confirmed sales", html)
+        self.assertIn("Waiting for your decision", html)
+        self.assertIn("Days not confirmed", html)
+        self.assertNotIn("Avg Runtime", html)
+        self.assertNotIn("Metrics are based on Target Date:", html)

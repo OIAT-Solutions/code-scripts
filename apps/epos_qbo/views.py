@@ -8,7 +8,7 @@ import sys
 
 import requests
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from math import ceil
 from pathlib import Path
@@ -60,6 +60,7 @@ from .models import (
     RunScheduleEvent,
 )
 from . import portal_settings
+from . import views_company_a as company_a_views
 from .services.config_sync import (
     apply_advanced_payload,
     build_basic_payload,
@@ -1701,23 +1702,27 @@ def overview(request):
     _ensure_company_records()
     revenue_period_param = request.GET.get("revenue_period")
     company_param = request.GET.get("company")
-    if (revenue_period_param or "").strip() or (company_param or "").strip():
+    if "company" in request.GET or (revenue_period_param or "").strip():
         revenue_period = _normalize_revenue_period(revenue_period_param)
         company_key = (company_param or "").strip() or None
     else:
         company_key, revenue_period = _get_user_overview_defaults(request)
     context = _overview_context(revenue_period, company_key=company_key)
+    from .services.experience import home_context
+    context.update(home_context(company_key or "", token_health={c["company_key"]: c.get("token_status", {}) for c in context["companies"]}))
+    from .services.attention import blockers
+    context["blockers"] = blockers()
     context["quick_sync_target_date"] = _quick_sync_default_target_date()
     context["quick_sync_timezone"] = context.get("business_timezone_display", get_business_timezone_display())
     context["dashboard_timezone_display"] = get_dashboard_timezone_display()
+    context["company_a_card"] = company_a_views.safe_overview_card()
     context.update(_nav_context())
     context.update(
         _breadcrumb_context(
             [
-                {"label": "Dashboard", "url": reverse("epos_qbo:overview")},
-                {"label": "Overview", "url": None},
+                {"label": "Home", "url": None},
             ],
-            show_overview_actions=True,
+            show_overview_actions=False,
         )
     )
     return render(request, "dashboard/overview.html", context)
@@ -1729,12 +1734,16 @@ def overview_panels(request):
     _ensure_company_records()
     revenue_period_param = request.GET.get("revenue_period")
     company_param = request.GET.get("company")
-    if (revenue_period_param or "").strip() or (company_param or "").strip():
+    if "company" in request.GET or (revenue_period_param or "").strip():
         revenue_period = _normalize_revenue_period(revenue_period_param)
         company_key = (company_param or "").strip() or None
     else:
         company_key, revenue_period = _get_user_overview_defaults(request)
     context = _overview_context(revenue_period, company_key=company_key)
+    from .services.experience import home_context
+    context.update(home_context(company_key or "", token_health={c["company_key"]: c.get("token_status", {}) for c in context["companies"]}))
+    from .services.attention import blockers
+    context["blockers"] = blockers()
     response = render(request, "components/overview_refresh.html", context)
     response["Cache-Control"] = "no-store"
     response["Pragma"] = "no-cache"
@@ -2244,6 +2253,7 @@ def _schedule_rows(schedules: list[RunSchedule], company_map: dict[str, str]) ->
                 "schedule": schedule,
                 "display_name": _operator_schedule_name(schedule),
                 "subtitle": _schedule_subtitle(schedule, company_map),
+                "business_subtitle": _schedule_subtitle(schedule, company_map).replace("Sales Sync", "Sales").replace("Inventory Sync", "Stock checks"),
                 "workflow": _schedule_workflow(schedule),
                 "company_target": _schedule_company_target(schedule),
                 "timing_primary": timing_primary,
@@ -2371,6 +2381,7 @@ def schedules_page(request):
         "company_target_all": RunScheduleForm.COMPANY_TARGET_ALL,
         "company_target_one": RunScheduleForm.COMPANY_TARGET_ONE,
         "scheduler_status": get_scheduler_status(),
+        "company_a_schedule": company_a_views.safe_schedule_row(),
     }
     context.update(_nav_context())
     context.update(
@@ -2624,6 +2635,7 @@ def runs_list(request):
         "active_run_ids": active_run_ids_list,
         "categories_by_company": categories_by_company,
         "active_run_ids_json": json.dumps(active_run_ids_list),
+        "company_a_recent_runs": company_a_views.safe_recent_runs(5),
     }
     context.update(_nav_context())
     context.update(
@@ -2636,6 +2648,31 @@ def runs_list(request):
             back_label="Overview",
         )
     )
+    from .services.experience import daily_rows, date_value, other_activity
+    from django.core.paginator import Paginator
+    selected = request.GET.get("company", "").strip()
+    start, end = date_value(request.GET.get("from")), date_value(request.GET.get("to"))
+    filter_error = ""
+    if (request.GET.get("from") and not start) or (request.GET.get("to") and not end) or (start and end and start > end):
+        filter_error = "Choose valid dates, with the start date before the end date."
+    rows = [] if filter_error else daily_rows(selected, start, end, request.GET.get("previews") == "1")
+    status_filter = request.GET.get("status", "")
+    if status_filter == "attention":
+        rows = [r for r in rows if r["tone"] in {"danger", "warning"} or r["latest_issue"]]
+    elif status_filter == "confirmed":
+        rows = [r for r in rows if r["confirmed"]]
+    elif status_filter == "pending":
+        rows = [r for r in rows if any(a["state"] in {"queued", "running"} for a in r["attempts"])]
+    elif status_filter in {"failed", "succeeded", "cancelled", "queued", "running"}:
+        rows = [r for r in rows if any(a["state"] == status_filter for a in r["attempts"])]
+    page = Paginator(rows, 20).get_page(request.GET.get("page"))
+    from urllib.parse import urlencode
+    filters = {k: request.GET[k] for k in ("company", "from", "to", "previews", "status") if request.GET.get(k)}
+    context.update(daily_page=page, daily_filter_company=selected, daily_filter_start=request.GET.get("from", ""),
+        daily_filter_end=request.GET.get("to", ""), daily_show_previews=request.GET.get("previews") == "1",
+        daily_query=urlencode(filters), daily_filter_error=filter_error, daily_status_filter=status_filter, other_activity=other_activity(selected))
+    context["breadcrumbs"] = [{"label": "Home", "url": reverse("epos_qbo:overview")}, {"label": "Daily runs", "url": None}]
+    context["back_label"] = "Home"
     return render(request, "epos_qbo/runs.html", context)
 
 
@@ -2827,6 +2864,9 @@ def run_detail(request, job_id):
             back_label="Runs",
         )
     )
+    from .services.messages import job_outcome
+    context["business_outcome"] = job_outcome(job, artifacts_list)
+    context["business_company"] = company_display_name or "Several companies"
     return render(request, "epos_qbo/run_detail.html", context)
 
 
@@ -4097,6 +4137,7 @@ def _batch_preload_companies_data(companies: list) -> dict:
 
 
 @login_required
+@require_GET
 def companies_list(request):
     """Companies management page with search, filter, sort; HTMX partial for list."""
     _ensure_company_records()
@@ -4149,8 +4190,24 @@ def companies_list(request):
         ]
     companies_data = _sort_companies_data(companies_data, sort_by)
     summary = _calculate_companies_summary(companies_data)
+    from .services import experience
+    health = {c["company"].company_key: c.get("token_info", {}) for c in companies_data}
+    positions = experience.home_context(token_health=health)["home_rows"]
+    keys = {c["company"].company_key for c in companies_data}
+    directory_rows = [r for r in positions if r["company_key"] in keys]
+    for row in directory_rows:
+        connection = health.get(row["company_key"], {})
+        row["connection_label"] = "Connected" if connection.get("connection_state") == "connected" else "Connection needs attention" if connection.get("severity") == "critical" else "Connection not checked"
+    state = request.GET.get("state", "")
+    if state == "attention":
+        directory_rows = [r for r in directory_rows if r["tone"] in {"danger", "warning"}]
+    elif state == "current":
+        directory_rows = [r for r in directory_rows if r["label"] == "Up to date"]
+    if sort_by == "last_run":
+        directory_rows.sort(key=lambda r: r["latest"] or date.min, reverse=True)
 
-    context = {
+    context = {"directory_rows": directory_rows, "directory_state": state,
+
         "companies_data": companies_data,
         "search": search,
         "filter_status": filter_status,
@@ -4171,7 +4228,7 @@ def companies_list(request):
     )
 
     if request.headers.get("HX-Request"):
-        return render(request, "components/company_cards.html", context)
+        return render(request, "components/company_directory.html", context)
     return render(request, "epos_qbo/companies.html", context)
 
 
@@ -4728,6 +4785,7 @@ def company_inventory_missing_create(request, company_key):
 
 
 @login_required
+@require_GET
 def company_detail(request, company_key):
     """Detail view for a single company."""
     company = get_object_or_404(CompanyConfigRecord, company_key=company_key)
@@ -4740,7 +4798,7 @@ def company_detail(request, company_key):
         RunArtifact.objects.filter(company_key=company_key)
         .filter(Q(run_job__status=RunJob.STATUS_SUCCEEDED) | Q(run_job__isnull=True))
         .select_related("run_job")
-        .order_by("-processed_at", "-imported_at", "-id")
+        .order_by("-processed_at", "-imported_at", "-id")[:500]
     ):
         if _is_sales_artifact(artifact):
             latest_successful_artifact = artifact
@@ -4760,6 +4818,9 @@ def company_detail(request, company_key):
         "recent_runs": recent_runs,
         "recent_artifacts": recent_artifacts,
     }
+    if company_key == company_a_views.ops.COMPANY_KEY:
+        context["company_a_card"] = company_a_views.safe_overview_card()
+        context["company_a_holds_alerts"] = company_a_views.safe_holds_alerts()
     context.update(_nav_context())
     context.update(
         _breadcrumb_context(
@@ -4772,6 +4833,9 @@ def company_detail(request, company_key):
             back_label="Companies",
         )
     )
+    from .services.company_workspace import page_context
+    context.update(page_context(company, request, _company_inventory_enabled(company),
+                                {company_key: company_data.get("token_info", {})}))
     return render(request, "epos_qbo/company_detail.html", context)
 
 

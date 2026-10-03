@@ -21,6 +21,11 @@ import re
 
 
 from code_scripts.company_config import load_company_config, get_available_companies
+from code_scripts.product_conversion import (
+    ProductConversionRegistry,
+    ProductResolutionError,
+    apply_product_conversion_to_sales,
+)
 
 # ------------------------------
 # Local helpers (self-contained)
@@ -81,7 +86,7 @@ _AGG_SUM_COLS = [
 ]
 
 
-def aggregate_product_rows(out: pd.DataFrame) -> pd.DataFrame:
+def aggregate_product_rows(out: pd.DataFrame, *, preserve_descriptions: bool = False) -> pd.DataFrame:
     """Collapse rows that share the same tender (``Memo``) and product name.
 
     For each group of duplicates the numeric / monetary columns are summed and
@@ -93,6 +98,8 @@ def aggregate_product_rows(out: pd.DataFrame) -> pd.DataFrame:
     rows at different clock times on the same business day aggregate correctly.
     """
     group_key = ["_date_str", "Memo", "Item(Product/Service)"]
+    if preserve_descriptions and "ItemDescription" in out.columns:
+        group_key.append("ItemDescription")
 
     # Separate sum-cols from first-value-cols to build a clean agg spec
     sum_cols = [c for c in _AGG_SUM_COLS if c in out.columns]
@@ -104,12 +111,37 @@ def aggregate_product_rows(out: pd.DataFrame) -> pd.DataFrame:
     for c in first_cols:
         agg_spec[c] = "first"
 
+    if "_Conversion Proof" in out.columns:
+        agg_spec["_Conversion Proof"] = lambda values: json.dumps([p for value in values for p in json.loads(value)], sort_keys=True)
+
     aggregated = out.groupby(group_key, sort=False, as_index=False).agg(agg_spec)
 
     # Restore original column order
     aggregated = aggregated[[c for c in out.columns if c in aggregated.columns]]
 
     return aggregated
+
+
+def drop_netted_zero_rows(out: pd.DataFrame) -> pd.DataFrame:
+    """Drop aggregated rows whose quantity and every money column sum to zero.
+
+    A sale and its same-tender refund/void (e.g. +1 and -1) carry no money and no
+    net stock movement, but the October Inventory path refuses non-positive
+    quantities. Any row with a non-zero quantity or amount is kept, so real
+    refunds still fail the day for reviewed handling.
+    """
+    sum_cols = [c for c in _AGG_SUM_COLS if c in out.columns]
+    if "ItemQuantity" not in sum_cols:
+        return out
+    numeric = out[sum_cols].apply(pd.to_numeric, errors="coerce")
+    zero = numeric["ItemQuantity"].abs().lt(1e-9)
+    for c in sum_cols:
+        if c != "ItemQuantity":
+            zero &= numeric[c].abs().lt(0.005)
+    if zero.any():
+        names = ", ".join(sorted(set(out.loc[zero, "Item(Product/Service)"].astype(str))))
+        print(f"[INFO] Dropped {int(zero.sum())} netted zero row(s) (sale and refund cancel out): {names}")
+    return out.loc[~zero]
 
 
 def parse_date(value: str) -> Optional[datetime]:
@@ -366,6 +398,53 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
         target_date: Optional target date in YYYY-MM-DD format (used when trading_day_enabled is True)
     """
     ensure_required_columns(df)
+
+    conversion_enabled = bool(getattr(config, "product_conversion_enabled", False))
+    if conversion_enabled:
+        if config.trading_day_enabled and target_date:
+            wanted = datetime.strptime(target_date, "%Y-%m-%d").date()
+            offset = timedelta(hours=int(getattr(config, "trading_day_start_hour", 5)),
+                               minutes=int(getattr(config, "trading_day_start_minute", 0)))
+            for raw_date in df["Date/Time"]:
+                source_date = parse_date(raw_date)
+                if source_date is None:
+                    raise ProductResolutionError("MISSING_TRANSACTION_DATE", "", "Invalid source date")
+                local = source_date.replace(tzinfo=WAT_TZ) if source_date.tzinfo is None else source_date.astimezone(WAT_TZ)
+                if (local - offset).date() != wanted:
+                    raise ProductResolutionError("SOURCE_DATE_OUTSIDE_BUSINESS_DAY", "", "Do not relabel a source day; split the raw export first")
+        mapping_path = getattr(config, "product_conversion_file", None)
+        if mapping_path is None:
+            raise ValueError(
+                "Product conversion is enabled but transform.product_conversion.file is blank"
+            )
+        registry = ProductConversionRegistry.from_csv(
+            mapping_path,
+            allow_name_fallback=bool(
+                getattr(config, "product_conversion_allow_name_fallback", False)
+            ),
+        )
+        catch_all_name = str(
+            getattr(config, "product_conversion_catch_all_name", "") or ""
+        ).strip()
+        fail_closed_from = getattr(config, "product_conversion_fail_closed_from", None)
+        if not catch_all_name and fail_closed_from is None:
+            raise ValueError(
+                "Product conversion is enabled but transform.product_conversion.catch_all_qbo_name is blank"
+            )
+        df = apply_product_conversion_to_sales(
+            df,
+            registry,
+            catch_all_name=catch_all_name,
+            fail_closed_from=fail_closed_from,
+            transaction_date_override=(datetime.strptime(target_date, "%Y-%m-%d").date()
+                                       if config.trading_day_enabled and target_date else None),
+        )
+        fallback_count = int(df["_Product Conversion Fallback"].sum())
+        if fallback_count:
+            print(
+                f"[WARN] Product conversion: {fallback_count} row(s) routed to "
+                f"catch-all {catch_all_name!r}; original EPOS names retained in descriptions."
+            )
     
     # Normalize and parse dates
     dates_dt = df["Date/Time"].apply(parse_date) if "Date/Time" in df.columns else pd.Series([None] * len(df))
@@ -383,6 +462,8 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
     
     # Build output columns
     out = pd.DataFrame()
+    if conversion_enabled:
+        out["_Conversion Proof"] = df["_Conversion Proof"]
     out["_parsed_date"] = dates
     out["_date_str"] = [d.strftime(config.date_format) for d in dates]
     out["Customer"] = df.get("Customer Full Name").fillna("")
@@ -426,7 +507,11 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
         out["Memo"] = ""
     
     out["Item(Product/Service)"] = df.get("Product").fillna("")
-    out["ItemDescription"] = df.get("Category").fillna("")
+    description_col = df.get("_QBO Line Description")
+    if isinstance(description_col, pd.Series):
+        out["ItemDescription"] = description_col.fillna("")
+    else:
+        out["ItemDescription"] = df.get("Category").fillna("")
     out["ItemQuantity"] = df.get("Quantity").fillna(0)
     out["ItemRate"] = ""
     
@@ -458,7 +543,7 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
     if config.tax_mode == "vat_inclusive_7_5":
         # Company A: infer tax code
         out["*ItemTaxCode"] = df.apply(
-            lambda r: "No VAT" if 'delivery' in str(r.get("Product", "")).lower() or 'pack' in str(r.get("Product", "")).lower() else "Sales Tax",
+            lambda r: "No VAT" if 'delivery' in str(r.get("_EPOS Product Original", r.get("Product", ""))).lower() or 'pack' in str(r.get("_EPOS Product Original", r.get("Product", ""))).lower() else "Sales Tax",
             axis=1
         )
     else:
@@ -482,19 +567,24 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
     if config.aggregate_products:
         pre_count = len(out)
 
-        # 1. Normalise names and expand quantities by multiplier
-        base_names = []
-        effective_qtys = []
-        for _, row in out.iterrows():
-            base, multiplier = strip_pack_multiplier(str(row["Item(Product/Service)"]))
-            base_names.append(base)
-            effective_qtys.append(row["ItemQuantity"] * multiplier)
+        if not conversion_enabled:
+            # Legacy compatibility only. The approved mapping path has already
+            # applied an explicit sale multiplier and must never be expanded a
+            # second time from the product name.
+            base_names = []
+            effective_qtys = []
+            for _, row in out.iterrows():
+                base, multiplier = strip_pack_multiplier(str(row["Item(Product/Service)"]))
+                base_names.append(base)
+                effective_qtys.append(row["ItemQuantity"] * multiplier)
 
-        out["Item(Product/Service)"] = base_names
-        out["ItemQuantity"] = effective_qtys
+            out["Item(Product/Service)"] = base_names
+            out["ItemQuantity"] = effective_qtys
 
         # 2. Collapse duplicate product rows within each tender group
-        out = aggregate_product_rows(out)
+        out = aggregate_product_rows(out, preserve_descriptions=conversion_enabled)
+        if conversion_enabled:
+            out = drop_netted_zero_rows(out)
         out = out.reset_index(drop=True)
 
         post_count = len(out)
@@ -569,6 +659,8 @@ def transform_dataframe_unified(df: pd.DataFrame, config, target_date: Optional[
         "ItemTaxAmount",
         "Service Date",
     ]
+    if conversion_enabled:
+        columns.append("_Conversion Proof")
     return out[columns]
 
 

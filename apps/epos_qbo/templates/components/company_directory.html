@@ -1,0 +1,9 @@
+<section class="portal-panel overflow-hidden" id="company-list">
+{% for row in directory_rows %}
+<article class="p-6 border-b last:border-b-0 border-slate-100 dark:border-slate-700 grid gap-5 md:grid-cols-12 items-start">
+<div class="md:col-span-3"><h2 class="font-semibold text-lg"><a class="hover:underline underline-offset-4" href="{{ row.company_url }}">{{ row.company }}</a></h2><div class="mt-3">{% include "components/business_status.html" with label=row.label tone=row.tone %}</div></div>
+<div class="md:col-span-6"><p class="text-sm font-medium">{% if row.latest %}Sales confirmed through {{ row.latest|date:"j F Y" }}{% else %}No confirmed sales record yet{% endif %}</p><p class="portal-muted mt-2">{% if row.issue %}{{ row.issue }}{% elif row.waiting %}{{ row.waiting }} item{{ row.waiting|pluralize }} waiting for your decision.{% else %}No outstanding work in the checked period.{% endif %}</p><p class="portal-muted mt-2">{% if row.connection_label == "Connected" %}Connected · {% endif %}{{ row.waiting }} waiting decision{{ row.waiting|pluralize }} · Checked {{ row.coverage_start|date:"j M" }}–{{ row.expected|date:"j M Y" }}</p></div>
+<div class="md:col-span-3 md:text-right"><a href="{{ row.company_url }}" class="btn btn-secondary">Open company</a></div>
+</article>
+{% empty %}<div class="p-8"><h2 class="font-semibold">No companies found</h2><p class="portal-muted mt-2">Try another name or clear the filter.</p><a class="portal-link inline-block mt-4" href="{% url 'epos_qbo:companies-list' %}">Clear filters</a></div>{% endfor %}
+</section>

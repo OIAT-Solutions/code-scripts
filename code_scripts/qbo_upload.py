@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from code_scripts.company_a_guard import assert_not_company_a
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import (
     ensure_company_runtime_compatible,
@@ -1180,7 +1181,12 @@ def get_or_create_item_category_id(
                 print(f"[INFO] Reused existing Category item: Name={category_normalized!r} Id={cat_id}")
                 return cat_id
 
-    # Create Category item
+    # Create Category item (never for Company A: the Oct catalogue is a separate approved batch)
+    assert_not_company_a(
+        "Category item create",
+        realm_id=realm_id,
+        reason="Company A catalogue changes go through the approved akponora_ops catalogue sync only.",
+    )
     create_url = f"{BASE_URL}/v3/company/{realm_id}/item?minorversion=70"
     payload = {
         "Name": category_normalized,
@@ -1254,8 +1260,18 @@ def create_inventory_item(
 
     Raises:
         ValueError: If category missing or accounts not found
-        RuntimeError: If QBO API call fails
+        RuntimeError: If QBO API call fails, or product conversion is enabled
     """
+    if bool(getattr(config, "product_conversion_enabled", False)):
+        raise RuntimeError(
+            "Cannot create QBO Inventory items while product conversion is enabled. "
+            "Oct catalogue creates are a separate approved batch job; the sales uploader will not auto-create."
+        )
+    if str(getattr(config, "company_key", "") or "") == "company_a":
+        raise RuntimeError(
+            "Company A Inventory item create is disabled on the sales path. "
+            "Use the approved Oct 1 catalogue batch after chat yes; do not recreate January-style opening quantities."
+        )
     # Build account references
     account_refs = build_account_refs_for_category(
         category, mapping_cache, account_cache, token_mgr, realm_id, config
@@ -1449,7 +1465,6 @@ def create_inventory_item_from_existing(
     Copies Name, Type, accounts, pricing, ParentRef/SubItem; sets InvStartDate to new_inv_start_date.
     Returns the new item Id.
     """
-    # Fields to omit when building create payload (read-only or create-specific)
     omit = {"Id", "SyncToken", "MetaData", "FullyQualifiedName", "Active"}
     payload = {k: v for k, v in existing_item.items() if k not in omit and v is not None}
     payload["InvStartDate"] = new_inv_start_date[:10]
@@ -1502,6 +1517,10 @@ def get_or_create_item_id(
     default_item_id = config.get_qbo_config().get("default_item_id", "1")
     default_income_account_id = config.get_qbo_config().get("default_income_account_id", "1")
     auto_create_items = True  # Can be made configurable later
+    conversion_mode = bool(getattr(config, "product_conversion_enabled", False))
+    if getattr(config, "company_key", "") == "company_a":
+        raise RuntimeError("Company A requires exact mapped Item Id preflight; name-only item resolution is forbidden")
+
     created_type = "existing"
     fallback_reason: Optional[str] = None
 
@@ -1510,6 +1529,10 @@ def get_or_create_item_id(
     name = re.sub(r"\s+", " ", name) if name else ""
 
     if not name:
+        if conversion_mode:
+            raise RuntimeError(
+                "Blank item name is not allowed in product conversion mode."
+            )
         print(f"[WARN] Blank item name → using DEFAULT_ITEM_ID")
         return (default_item_id, False, "Default", "blank_name")
 
@@ -1536,6 +1559,28 @@ def get_or_create_item_id(
             first = items[0]
             item_id = first.get("Id")
             item_type = first.get("Type") or ""
+            if conversion_mode:
+                approved_ids = {
+                    str(item).strip()
+                    for item in (getattr(config, "product_conversion_approved_item_ids", None) or set())
+                    if str(item).strip()
+                }
+                if item_type == "Inventory":
+                    if str(item_id) in approved_ids:
+                        cache[name] = item_id
+                        return (item_id, False, "existing_inventory", None)
+                    raise RuntimeError(
+                        f"Approved mapped item {name!r} collides with legacy QBO Type='Inventory' "
+                        f"Id={item_id}. Oct sales must use new Inventory Ids only; "
+                        "do not reuse, rename, merge or inactivate automatically."
+                    )
+                if item_type not in {"NonInventory", "Service"}:
+                    raise RuntimeError(
+                        f"Approved mapped item {name!r} collides with QBO Type={item_type!r}. "
+                        "Do not reuse, rename, merge or inactivate it automatically."
+                    )
+                cache[name] = item_id
+                return (item_id, False, "existing_non_inventory", None)
             if item_type == "Inventory":
                 created_type = "existing_inventory"
                 # PATCH existing Inventory: category (ParentRef/SubItem) and/or pricing/tax (UnitPrice, PurchaseCost, tax flags)
@@ -1671,6 +1716,12 @@ def get_or_create_item_id(
                 cache[name] = item_id
                 return (item_id, False, created_type, None)
 
+    if not item_id and conversion_mode:
+        raise RuntimeError(
+            f"Approved mapped QBO item {name!r} does not exist. "
+            "Catalogue creation is a separate dry-run/approval step; the sales uploader will not create it implicitly."
+        )
+
     if not item_id and auto_create_items:
         # Create item: Inventory if mapping_cache provided, Service if inventory disabled
         if mapping_cache is None:
@@ -1742,6 +1793,76 @@ def get_or_create_item_id(
     return (item_id, was_created, created_type, fallback_reason)
 
 
+def resolve_conversion_items(
+    unique_names: List[str],
+    config,
+    token_mgr: TokenManager,
+    realm_id: str,
+    item_result_by_name: Dict[str, Dict[str, Any]],
+    exact_targets=None,
+) -> Dict[str, int]:
+    """Resolve approved conversion targets without creating or patching QBO items."""
+    if exact_targets is None and getattr(config, "company_key", "") == "company_a":
+        raise RuntimeError("Company A upload requires exact conversion evidence")
+    if exact_targets is not None:
+        from code_scripts.conversion_contract import validate_live_item
+        for name in unique_names:
+            expected = exact_targets[name]
+            item_id = expected["Id"]
+            if not str(item_id).isdigit():
+                raise RuntimeError("QBO Item Id must be numeric")
+            url = f"{BASE_URL}/v3/company/{realm_id}/item/{item_id}?minorversion=70"
+            response = _make_qbo_request("GET", url, token_mgr)
+            if response.status_code != 200:
+                raise RuntimeError(f"Cannot verify mapped QBO Item Id {item_id}")
+            validate_live_item(response.json().get("Item") or {}, expected)
+            item_result_by_name[name] = {"item_id": item_id, "created": False,
+                "type_label": "existing_inventory" if expected["Type"] == "Inventory" else "existing_non_inventory",
+                "fallback_reason": None}
+        return {"resolved": len(unique_names)}
+    cache: Dict[str, str] = {}
+    resolved = 0
+    for raw_name in unique_names:
+        name = re.sub(r"\s+", " ", str(raw_name or "").strip())
+        if not name:
+            raise RuntimeError("Product conversion produced a blank QBO item name")
+        item_id, created, type_label, fallback_reason = get_or_create_item_id(
+            name,
+            token_mgr,
+            realm_id,
+            config,
+            cache,
+        )
+        if created:
+            raise RuntimeError(
+                f"Conversion target {name!r} was created by the sales uploader; that path is forbidden"
+            )
+        if type_label == "existing_inventory":
+            approved_ids = {
+                str(item).strip()
+                for item in (getattr(config, "product_conversion_approved_item_ids", None) or set())
+                if str(item).strip()
+            }
+            if item_id not in approved_ids:
+                raise RuntimeError(
+                    f"Conversion target {name!r} resolved to Inventory Id={item_id} "
+                    "which is not in the approved new-Id list (legacy name collision)"
+                )
+        elif type_label not in {"existing_non_inventory"}:
+            raise RuntimeError(
+                f"Conversion target {name!r} did not resolve to an approved Inventory Id "
+                "or an existing NonInventory/Service item"
+            )
+        item_result_by_name[name] = {
+            "item_id": item_id,
+            "created": False,
+            "type_label": type_label,
+            "fallback_reason": fallback_reason,
+        }
+        resolved += 1
+    return {"resolved": resolved}
+
+
 def resolve_all_unique_items(
     unique_names: List[str],
     desired_item_state: Dict[str, Dict[str, Any]],
@@ -1764,7 +1885,21 @@ def resolve_all_unique_items(
     """
     Resolve each unique item name once: use prefetch, patch if needed, or create.
     Fills item_result_by_name and patched_items. Returns counts for logging.
+
+    Legacy name-based Inventory create/patch path: refused for Company A and for any
+    company in product-conversion mode (those use resolve_conversion_items).
     """
+    assert_not_company_a(
+        "name-based Inventory item resolution (resolve_all_unique_items)",
+        company_key=getattr(config, "company_key", None),
+        realm_id=realm_id,
+        reason="October sales must map to exact approved AKP-/AKP-NS- Ids via product conversion.",
+    )
+    if bool(getattr(config, "product_conversion_enabled", False)):
+        raise RuntimeError(
+            "resolve_all_unique_items is not allowed in product conversion mode; "
+            "use resolve_conversion_items (exact approved Ids only)."
+        )
     default_item_id = config.get_qbo_config().get("default_item_id", "1")
     auto_fix = bool(allow_wrong_type_autofix and getattr(config, "auto_fix_wrong_type_items", False))
     stats = {
@@ -1985,6 +2120,63 @@ def resolve_all_unique_items(
     return stats
 
 
+COMPANY_A_REALM_ID = "9341455406194328"
+
+
+def _file_sha256(path) -> Optional[str]:
+    """SHA-256 of a file's bytes, or None when it cannot be read (evidence only)."""
+    if not path:
+        return None
+    try:
+        import hashlib
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _proof_mapping_shas(df) -> List[str]:
+    """Distinct mapping SHA-256 values recorded in the CSV's _Conversion Proof column."""
+    if "_Conversion Proof" not in getattr(df, "columns", []):
+        return []
+    shas: Set[str] = set()
+    for raw in df["_Conversion Proof"]:
+        try:
+            parts = json.loads(raw)
+        except (TypeError, ValueError):
+            shas.add("UNPARSEABLE")
+            continue
+        for part in parts if isinstance(parts, list) else []:
+            shas.add(str((part or {}).get("mapping_sha256") or "MISSING"))
+    return sorted(shas)
+
+
+def company_a_inventory_controlled(config, txn_date) -> bool:
+    """True when a receipt falls under the Company A October Inventory controls.
+
+    Controlled = product conversion on AND TxnDate >= fail_closed_from (clamped to
+    never be later than 2026-10-01). Controlled receipts need a positive quantity,
+    an exact-payload approval manifest, the proposal queue/requestid, and write the
+    posting hold on failure. Pre-cutover catch-all history keeps legacy behaviour.
+    Unparseable dates count as controlled (fail closed).
+    """
+    if not bool(getattr(config, "product_conversion_enabled", False)):
+        return False
+    from code_scripts.operations_controls import is_controlled_business_date
+    return is_controlled_business_date(
+        txn_date, getattr(config, "product_conversion_fail_closed_from", None)
+    )
+
+
+def _payload_is_controlled(payload: dict, realm_id: str, config=None) -> bool:
+    """Company A realm payloads on/after the cutover (or with no usable TxnDate)."""
+    if str(realm_id) != COMPANY_A_REALM_ID:
+        return False
+    from code_scripts.operations_controls import is_controlled_business_date
+    return is_controlled_business_date(
+        payload.get("TxnDate"), getattr(config, "product_conversion_fail_closed_from", None)
+    )
+
+
 def build_sales_receipt_payload(
     group: pd.DataFrame,
     token_mgr: TokenManager,
@@ -2040,6 +2232,7 @@ def build_sales_receipt_payload(
     memo = str(first_row[MEMO_COL])
     doc_number = str(first_row[DOCNUM_COL])
     location_name = str(first_row.get(LOCATION_COL, "")).strip()
+    inventory_controlled = company_a_inventory_controlled(config, txn_date)
 
     lines = []
     gross_total = 0.0
@@ -2079,13 +2272,34 @@ def build_sales_receipt_payload(
         cost_total = safe_numeric(row.get("Cost Price", 0))
         amount_gross = safe_numeric(row.get(AMOUNT_COL, 0))
         
-        # Quantity (default to 1 if missing/NaN or <=0)
-        try:
-            qty_val = safe_numeric(row.get(QTY_COL, 1))
-            if qty_val <= 0:
+        # Quantity (default to 1 if missing/NaN or <=0).
+        # Pre-cutover history (incl. Company A catch-all lines) keeps the legacy
+        # coercion: refunds/zero lines post with Qty 1 and their CSV amount (negative
+        # for refunds). On/after the Company A Inventory cutover a non-positive or
+        # invalid quantity is refused: this receipt fails, and the caller fails the
+        # whole day before any POST (returns/zero lines need a separate reviewed flow).
+        if inventory_controlled:
+            from code_scripts.conversion_contract import finite
+            try:
+                raw_qty = finite(row.get(QTY_COL))
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Invalid sale quantity {row.get(QTY_COL)!r} for {item_name!r} on {doc_number} "
+                    f"(TxnDate {txn_date}); October Inventory sales require a positive quantity"
+                ) from exc
+            if raw_qty <= 0:
+                raise RuntimeError(
+                    f"Non-positive sale quantity {row.get(QTY_COL)!r} for {item_name!r} on {doc_number} "
+                    f"(TxnDate {txn_date}); October Inventory returns/zero lines need separate reviewed handling"
+                )
+            qty_val = float(raw_qty)
+        else:
+            try:
+                qty_val = safe_numeric(row.get(QTY_COL, 1))
+                if qty_val <= 0:
+                    qty_val = 1.0
+            except (TypeError, ValueError):
                 qty_val = 1.0
-        except (TypeError, ValueError):
-            qty_val = 1.0
         
         # Per-unit gross prices (for logging and receipt line logic)
         unit_sales_price_gross = (total_sales / qty_val) if qty_val else 0.0
@@ -2101,6 +2315,10 @@ def build_sales_receipt_payload(
         elif item_result_by_name is not None:
             r = item_result_by_name.get(item_name)
             if r is None:
+                if bool(getattr(config, "product_conversion_enabled", False)):
+                    raise RuntimeError(
+                        f"Converted item {item_name!r} was not resolved during preflight; refusing default-item fallback"
+                    )
                 print(f"[WARN] Item name {item_name!r} not in item_result_by_name; using default item")
                 item_ref_id = default_item_id
                 item_was_created = False
@@ -2792,14 +3010,36 @@ def send_sales_receipt(payload: dict, token_mgr: TokenManager, realm_id: str, co
     
     Raises RuntimeError if the API returns a non-2xx status code (unless inventory rejection handled).
     """
+    # Company A October+ receipts: hold check, exact-payload approval, proposal
+    # queue and an Intuit requestid. Pre-cutover history posts exactly as before.
+    controlled = _payload_is_controlled(payload, realm_id, config)
+    proposal_queue = None
+    proposal_id = None
     url = f"{BASE_URL}/v3/company/{realm_id}/salesreceipt?minorversion=70"
+    if controlled:
+        from code_scripts.operations_controls import (
+            ProposalQueue,
+            assert_no_posting_hold,
+            require_posting_approval,
+        )
+        from code_scripts.paths import STATE_ROOT
+        if not payload.get("DocNumber") or not payload.get("TxnDate"):
+            raise ValueError("Sales receipt requires a stable document number and date")
+        assert_no_posting_hold()
+        digest = require_posting_approval(os.environ.get("COMPANY_A_POSTING_APPROVAL_FILE"), payload, realm_id, "SalesReceipt")
+        proposal_queue = ProposalQueue(STATE_ROOT / "company_a_proposals.sqlite")
+        source_key = str(payload.get("DocNumber")) + ":" + str(payload.get("TxnDate"))
+        proposal_id = proposal_queue.propose(
+            str(realm_id), "SalesReceipt", source_key, payload, {"approved_payload_sha256": digest})
+        url += f"&requestid={proposal_queue.http_request_id(proposal_id)}"
 
-    response = _make_qbo_request(
-        "POST",
-        url,
-        token_mgr,
-        json=payload,
-    )
+    try:
+        response = _make_qbo_request("POST", url, token_mgr, json=payload)
+    except Exception:
+        if controlled:
+            proposal_queue.record_result(proposal_id, "UNKNOWN", detail="Transport failed; reconcile before retry")
+        raise
+
 
     doc_number = str(payload.get("DocNumber", "") or "")
 
@@ -2809,6 +3049,22 @@ def send_sales_receipt(payload: dict, token_mgr: TokenManager, realm_id: str, co
     except Exception:
         body = None
     
+    if controlled:
+        receipt = body.get("SalesReceipt") if isinstance(body, dict) else None
+        receipt_id = str((receipt or {}).get("Id") or "")
+        if 200 <= response.status_code < 300 and receipt_id:
+            proposal_queue.record_result(proposal_id, "POSTED", qbo_id=receipt_id)
+        elif 200 <= response.status_code < 300:
+            proposal_queue.record_result(proposal_id, "UNKNOWN", detail="Success status missing SalesReceipt Id")
+            raise RuntimeError("QBO outcome uncertain: response has no SalesReceipt Id; reconcile before retry")
+        elif 400 <= response.status_code < 500:
+            # QBO rejected the request: nothing posted. A retry gets a fresh requestid.
+            proposal_queue.record_result(proposal_id, "FAILED", detail=f"HTTP {response.status_code}")
+        else:
+            # 5xx/other: outcome uncertain. A same-payload retry reuses the requestid,
+            # so QBO de-duplicates it if the first attempt actually landed.
+            proposal_queue.record_result(proposal_id, "UNKNOWN", detail=f"HTTP {response.status_code}")
+
     # Check for inventory-related errors/warnings
     inventory_warning = False
     inventory_rejection = False
@@ -2938,6 +3194,27 @@ def send_sales_receipt(payload: dict, token_mgr: TokenManager, realm_id: str, co
             print("[WARN] Sales Receipt response missing SalesReceipt object")
 
 
+def _write_october_posting_hold(config, group_key, controlled_receipt_dates, exc) -> bool:
+    """For a failed October+ Company A receipt: write the posting hold, stop the run.
+
+    Returns True when the caller must stop posting. Pre-cutover receipts return
+    False (legacy behaviour: that receipt fails, the rest of the day continues).
+    """
+    if getattr(config, "company_key", "") != "company_a" or group_key not in controlled_receipt_dates:
+        return False
+    from code_scripts.operations_controls import require_reconciliation_match
+    try:
+        require_reconciliation_match(
+            "company_a",
+            {"status": "POSTING_FAILED_OR_UNKNOWN", "doc_number": str(group_key), "reason": str(exc)[:200]},
+            business_date=controlled_receipt_dates[group_key],
+        )
+    except RuntimeError as hold_exc:
+        print(f"[ERROR] {hold_exc}")
+        return True
+    return False
+
+
 def main():
     global VERBOSE_PIPELINE_LOGS
     # Parse command line arguments
@@ -3041,7 +3318,18 @@ def main():
     print(f"INVENTORY SYNC MODE: {effective_inventory_sync_mode}")
     print("=" * 60)
 
-    inventory_enabled = bool(getattr(config, "inventory_enabled", False))
+    conversion_mode = bool(getattr(config, "product_conversion_enabled", False))
+    inventory_enabled = bool(getattr(config, "inventory_enabled", False)) and not conversion_mode
+    if config.company_key == "company_a" and not conversion_mode:
+        print(
+            "[ERROR] Company A sales upload is blocked until product conversion is enabled. "
+            "Posting to legacy Inventory items recreates FIFO COGS."
+        )
+        sys.exit(1)
+    if conversion_mode:
+        print("[INFO] Approved product-conversion mode: sales-path Inventory create/patch and auto-fix are disabled.")
+        print("[INFO] Oct path maps to approved new Inventory (AKP-) or non-stock NonInventory (AKP-NS-) Ids only; legacy names fail closed.")
+        print("[INFO] Catch-all is history-only; TxnDate on/after fail_closed_from does not use it.")
     if args.bypass_inventory_startdate and not inventory_enabled:
         print("Error: --bypass-inventory-startdate requires inventory items to be enabled for this company.")
         sys.exit(1)
@@ -3062,6 +3350,16 @@ def main():
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df)} rows")
 
+    conversion_targets = None
+    if conversion_mode:
+        from code_scripts.conversion_contract import validate_upload_frame
+        conversion_targets = validate_upload_frame(df, config)
+        if args.target_date and config.trading_day_enabled:
+            if not (df[DATE_COL].astype(str) == args.target_date).all():
+                raise ValueError("Target business date differs from conversion evidence")
+        if (df.groupby(GROUP_COL)[DATE_COL].nunique() > 1).any():
+            raise ValueError("One receipt cannot contain multiple business dates")
+
     grouped = df.groupby(GROUP_COL)
     print(f"Found {len(grouped)} distinct SalesReceiptNo groups")
     upload_phase_started_at = time.perf_counter()
@@ -3071,6 +3369,8 @@ def main():
     bypass_item_name: Optional[str] = None
     blocker_ids: Set[str] = set()
     swap_report_rows: List[Dict[str, Any]] = []
+    if conversion_mode and args.bypass_inventory_startdate:
+        raise ValueError("Inventory start-date bypass is forbidden in conversion mode")
     if args.bypass_inventory_startdate:
         income_account_id = (args.bypass_income_account or "").strip() or (getattr(config, "bypass_income_account_id", None) or "").strip()
         if not income_account_id:
@@ -3160,15 +3460,17 @@ def main():
     if inventory_enabled:
         print(f"\n[INFO] Items created as Inventory. QtyOnHand starts at {config.default_qty_on_hand}. QBO must allow negative inventory.")
         print("[INFO] Item hierarchy enabled: True")
-        print("[INFO] For InvStartDate issues (QBO 6270), use: python scripts/qbo_inv_manager.py --company <key> list-invstart / set-invstart-bulk")
+        print("[INFO] For InvStartDate issues (QBO 6270), review with: python code_scripts/scripts/qbo_inv_manager.py --company <key> list-invstart (set-invstart* is refused for company_a; see AGENTS.md)")
         try:
             mapping_cache = load_category_account_mapping(config)
             print(f"[INFO] Loaded {len(mapping_cache)} category mappings from {config.product_mapping_file}")
         except Exception as e:
             print(f"[ERROR] Failed to load category mapping: {e}")
             raise
+    elif conversion_mode:
+        print("[INFO] Product conversion mode active; resolving approved Inventory Ids (or NonInventory for pre-Oct history).")
     else:
-        print("[INFO] Inventory items disabled for this company; using default item for all lines.")
+        print("[INFO] Inventory items disabled for this company; missing items use the legacy Service-item path.")
 
     # Pre-fetch tax code for Company B (tax_inclusive_composite mode) to validate it exists
     if config.tax_mode == "tax_inclusive_composite" and config.tax_code_name:
@@ -3257,6 +3559,26 @@ def main():
         )
         stats["items_patched_count"] = resolve_stats["items_patched"]
         stats["existing_inventory_patch_skipped"] = resolve_stats["existing_inventory_patch_skipped"]
+    elif conversion_mode:
+        resolution_started_at = time.perf_counter()
+        conversion_stats = resolve_conversion_items(
+            unique_names,
+            config,
+            token_mgr,
+            config.realm_id,
+            item_result_by_name,
+            exact_targets=conversion_targets,
+        )
+        stats["item_resolution_duration_seconds"] = round(
+            time.perf_counter() - resolution_started_at, 3
+        )
+        stats["items_patched_count"] = 0
+        stats["existing_inventory_patch_skipped"] = 0
+        print(
+            f"[INFO] Product conversion preflight: resolved "
+            f"{conversion_stats['resolved']} exact approved target(s); "
+            "created=0 patched=0."
+        )
     else:
         default_item_id = config.get_qbo_config().get("default_item_id", "1")
         for name in unique_names:
@@ -3269,6 +3591,112 @@ def main():
         stats["items_patched_count"] = 0
         stats["existing_inventory_patch_skipped"] = 0
         print("[INFO] Inventory disabled: default item will be used for all line items.")
+
+    # Company A October+ (controlled) receipts are fully prepared and gated BEFORE
+    # any POST: any build error, date conflict, mismatching existing receipt or
+    # missing approval fails the whole day with nothing posted. Pre-cutover
+    # (catch-all history) receipts keep the legacy per-receipt path below:
+    # existing DocNumbers are skipped harmlessly and a failure affects only that
+    # receipt. No manifest, hold or proposal queue applies to them.
+    prepared_conversion_payloads: Dict[Any, Any] = {}
+    controlled_receipt_dates: Dict[Any, str] = {}
+    if conversion_mode:
+        from code_scripts.operations_controls import payload_digest, require_posting_approval
+        controlled_errors: List[Tuple[Any, str]] = []
+        build_errors = False
+        evidence_entries: List[Dict[str, Any]] = []
+        existing_verified_entries: List[Dict[str, Any]] = []
+        for key, group in grouped:
+            if config.trading_day_enabled and args.target_date:
+                receipt_date = str(args.target_date)
+            else:
+                receipt_date = str(group[DATE_COL].iloc[0])
+            if not company_a_inventory_controlled(config, receipt_date):
+                continue
+            controlled_receipt_dates[key] = receipt_date
+            try:
+                if key in date_mismatches:
+                    raise ValueError(
+                        f"Existing QBO receipt has a conflicting date ({date_mismatches[key]}); reconcile before any posting"
+                    )
+                try:
+                    prepared = build_sales_receipt_payload(
+                        group, token_mgr, config.realm_id, config, item_cache, department_cache, payment_method_cache,
+                        target_date=args.target_date, item_result_by_name=item_result_by_name)
+                except Exception:
+                    build_errors = True
+                    raise
+                payload = prepared[0]
+                if key in skip_docnumbers:
+                    from code_scripts.operations_controls import assert_receipt_matches
+                    safe_doc = str(key).replace("'", "''")
+                    query = f"select * from SalesReceipt where DocNumber = '{safe_doc}' maxresults 1000"
+                    url = f"{BASE_URL}/v3/company/{config.realm_id}/query?query={quote(query)}&minorversion=70"
+                    response = _make_qbo_request("GET", url, token_mgr)
+                    if response.status_code != 200:
+                        raise ValueError("Cannot verify existing receipt contents")
+                    receipts = response.json().get("QueryResponse", {}).get("SalesReceipt", [])
+                    if isinstance(receipts, dict):
+                        receipts = [receipts]
+                    if len(receipts) != 1:
+                        raise ValueError("Existing receipt is missing or duplicated")
+                    assert_receipt_matches(payload, receipts[0])
+                    existing_verified_entries.append(
+                        {"doc_number": str(key), "txn_date": payload.get("TxnDate"), "payload": payload,
+                         "sha256": payload_digest(payload)}
+                    )
+                    continue
+                evidence_entries.append(
+                    {"doc_number": str(key), "txn_date": payload.get("TxnDate"), "requires_approval": True,
+                     "payload": payload, "sha256": payload_digest(payload)}
+                )
+                if not args.dry_run:
+                    from code_scripts.operations_controls import assert_no_posting_hold
+                    assert_no_posting_hold()
+                    require_posting_approval(
+                        os.environ.get("COMPANY_A_POSTING_APPROVAL_FILE"), payload, config.realm_id, "SalesReceipt"
+                    )
+                prepared_conversion_payloads[key] = prepared
+            except Exception as exc:
+                controlled_errors.append((key, str(exc)))
+
+        if controlled_receipt_dates:
+            from code_scripts.paths import STATE_ROOT
+            evidence_dir = Path(STATE_ROOT) / "conversion_preflight"
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            evidence_path = evidence_dir / f"{config.company_key}_sales_batch_{resolved_target_date or 'undated'}.json"
+            evidence_doc = {
+                "company_key": config.company_key,
+                "realm": str(config.realm_id),
+                "entity": "SalesReceipt",
+                "target_date": resolved_target_date,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "complete": not build_errors,
+                "payloads": evidence_entries,
+                # Context for automated gates (standing approval). Not used by make-manifest.
+                "existing_verified": existing_verified_entries,
+                "source_csv": str(csv_path),
+                "source_rows": int(len(df)),
+                "source_receipts": int(len(grouped)),
+                "mapping_sha256": _file_sha256(getattr(config, "product_conversion_file", None)),
+                "proof_mapping_sha256": _proof_mapping_shas(df),
+            }
+            evidence_path.write_text(json.dumps(evidence_doc, indent=2, allow_nan=False))
+            print(f"[INFO] October approval evidence: {len(evidence_entries)} payload(s) written to {evidence_path}")
+            if args.dry_run and not build_errors:
+                print(
+                    "[INFO] After chat approval, build the manifest with: python -m code_scripts.operations_controls "
+                    f"make-manifest --evidence {evidence_path} --out <manifest.json> --approved-by NAME --chat-ref REF"
+                )
+
+        if controlled_errors:
+            print(
+                f"\n[ERROR] Company A October Inventory day refused before any POST: "
+                f"{len(controlled_errors)} receipt(s) failed preflight"
+            )
+            for key, message in controlled_errors:
+                print(f"  {key}: {message}")
+            sys.exit(1)
 
     for group_key, group_df in grouped:
         stats["attempted"] += 1
@@ -3291,17 +3719,21 @@ def main():
             print(f"       Attempting upload anyway (will fail with duplicate DocNumber error)")
         
         try:
-            payload, inv_created, svc_created, default_fallback = build_sales_receipt_payload(
-                group_df, token_mgr, config.realm_id, config, item_cache, department_cache, payment_method_cache,
-                target_date=args.target_date,
-                mapping_cache=mapping_cache,
-                account_cache=account_cache,
-                items_wrong_type=items_wrong_type,
-                items_autofixed=items_autofixed,
-                category_item_cache=category_item_cache,
-                items_patched_pricing_tax=items_patched_pricing_tax,
-                item_result_by_name=item_result_by_name,
-            )
+            if group_key in controlled_receipt_dates:
+                # October+: only the exact payload prepared and approved in preflight.
+                payload, inv_created, svc_created, default_fallback = prepared_conversion_payloads[group_key]
+            else:
+                payload, inv_created, svc_created, default_fallback = build_sales_receipt_payload(
+                    group_df, token_mgr, config.realm_id, config, item_cache, department_cache, payment_method_cache,
+                    target_date=args.target_date,
+                    mapping_cache=mapping_cache,
+                    account_cache=account_cache,
+                    items_wrong_type=items_wrong_type,
+                    items_autofixed=items_autofixed,
+                    category_item_cache=category_item_cache,
+                    items_patched_pricing_tax=items_patched_pricing_tax,
+                    item_result_by_name=item_result_by_name,
+                )
             stats["items_created_count"] += inv_created + svc_created
             stats["inventory_items_created_count"] += inv_created
             stats["service_items_created_count"] += svc_created
@@ -3356,9 +3788,13 @@ def main():
                     print(f"\n[ERROR] Bypass retry failed for SalesReceiptNo {group_key}: {retry_err}")
             print(f"\n[ERROR] Failed to upload SalesReceiptNo {group_key}: {e}")
             stats["failed"] += 1
+            if _write_october_posting_hold(config, group_key, controlled_receipt_dates, e):
+                break
         except Exception as e:
             print(f"\n[ERROR] Failed to upload SalesReceiptNo {group_key}: {e}")
             stats["failed"] += 1
+            if _write_october_posting_hold(config, group_key, controlled_receipt_dates, e):
+                break
             # Don't add to ledger on failure
 
     if items_wrong_type:
@@ -3470,7 +3906,8 @@ def main():
         sys.exit(1)
     
     # Exit with error code if no uploads succeeded (and there were attempts)
-    if stats['attempted'] > 0 and stats['uploaded'] == 0 and stats['skipped'] == 0:
+    # (A dry run uploads nothing by design; that is not a failure.)
+    if not args.dry_run and stats['attempted'] > 0 and stats['uploaded'] == 0 and stats['skipped'] == 0:
         print(f"\n[ERROR] All {stats['attempted']} upload attempt(s) failed. Exiting with error code.")
         sys.exit(1)
 

@@ -25,3 +25,57 @@ code_scripts/reports
 code_scripts/outputs
 
 StockReport_*.csv
+
+# Recovery evidence and approvals never belong in a deploy image
+outputs
+downloads
+exports
+reports
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
+**/*.xlsx
+**/*.xls
+
+# Runtime state, evidence and secrets never belong in a deploy image
+# (docker/entrypoint.sh recreates/links these under STATE_ROOT at start-up)
+Uploaded
+**/Uploaded
+uploads
+**/uploads
+logs
+**/logs
+**/outputs
+**/reports
+**/downloads
+**/exports
+**/*.csv
+# entrypoint.sh copies this header-only template into STATE_ROOT on first start
+!templates/product_conversion_empty.csv
+# entrypoint.sh seeds STATE_ROOT/mappings/company_a/till_accounts.csv from this (no secrets)
+!templates/till_accounts_company_a.csv
+# Google service-account keys live only in STATE_ROOT/secrets
+**/google_service_account*.json
+secrets
+**/uploaded_docnumbers*.json
+**/qbo_tokens*.sqlite
+*.sqlite3
+**/*.sqlite3
+.claude
+.oiat
+.env.*
+**/__pycache__
+**/.DS_Store
+.DS_Store
+
+# Backups and old evidence in the checkout root never belong in an image (audit 3 Oct 2026:
+# two May *.tar.gz backups holding qbo_tokens.sqlite were being copied into /app)
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+qbo_inventory_remediation_*
+remediation-evidence
+/*.json
+!/package.json
+!/package-lock.json

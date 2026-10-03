@@ -81,6 +81,24 @@ class BuildCommandTests(SimpleTestCase):
         self.assertIn("--skip-download", command)
         self.assertIn("--continue-on-failure", command)
 
+    def test_build_command_all_companies_can_exclude_company(self):
+        command = build_command(
+            {
+                "scope": RunJob.SCOPE_ALL,
+                "company_key": "",
+                "date_mode": "yesterday",
+                "target_date": None,
+                "from_date": None,
+                "to_date": None,
+                "skip_download": False,
+                "parallel": 1,
+                "stagger_seconds": 1,
+                "exclude_companies": ["company_a"],
+            }
+        )
+        self.assertIn("--exclude-company", command)
+        self.assertEqual(command[command.index("--exclude-company") + 1], "company_a")
+
     @patch.dict("os.environ", {"OIAT_VENV_PATH": "/tmp/custom-venv"}, clear=False)
     @patch("apps.epos_qbo.services.job_runner.Path.exists", return_value=True)
     def test_build_command_uses_configured_venv_python(self, _exists):
@@ -152,6 +170,23 @@ class QueueDispatchTests(TestCase):
         start_run_job_mock.assert_not_called()
         queued.refresh_from_db()
         self.assertEqual(queued.status, RunJob.STATUS_QUEUED)
+
+
+    @patch("apps.epos_qbo.services.job_runner.start_run_job")
+    def test_lock_left_by_a_finished_job_never_holds_the_queue(self, start_run_job_mock):
+        """3 Oct 2026: the 21 Aug job was marked failed by hand but kept the lock; the 19:00 Lagos
+        Goldplates run then stayed queued."""
+        for status in (RunJob.STATUS_FAILED, RunJob.STATUS_SUCCEEDED, RunJob.STATUS_CANCELLED):
+            RunLock.objects.all().delete()
+            RunJob.objects.all().delete()
+            owner = RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key="company_b", status=status)
+            RunLock.objects.create(id=1, active=True, holder=f"dashboard:{owner.id}", owner_run_job=owner)
+            queued = RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key="company_b", status=RunJob.STATUS_QUEUED)
+            start_run_job_mock.side_effect = lambda job, command: job
+            dispatched, result = dispatch_next_queued_job()
+            self.assertEqual(result, "started", status)
+            self.assertEqual(dispatched.id, queued.id)
+            self.assertEqual(RunLock.objects.get(pk=1).owner_run_job_id, queued.id)
 
 
 class MonitorProcessTests(TestCase):

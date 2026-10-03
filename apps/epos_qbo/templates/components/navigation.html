@@ -1,0 +1,11 @@
+<nav aria-label="Main navigation" class="flex-1 overflow-y-auto py-6 px-3 space-y-2">
+<p class="px-3 pb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Your workspace</p>
+{% with current=request.resolver_match.url_name %}
+<a href="{% url 'epos_qbo:overview' %}" {% if current == 'overview' or current == 'overview-root' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:widget-linear" width="20"></iconify-icon>Home</a>
+<a href="{% url 'epos_qbo:attention' %}" {% if current == 'attention' or current == 'attention-confirm' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:inbox-linear" width="20"></iconify-icon>Needs your attention</a>
+<a href="{% url 'epos_qbo:companies-list' %}" {% if current == 'companies-list' or current == 'company-detail' or current == 'company-basic' or current == 'company-advanced' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:buildings-2-linear" width="20"></iconify-icon>Companies</a>
+<a href="{% url 'epos_qbo:runs' %}" {% if current == 'runs' or current == 'run-detail' or 'company-a-' in current %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:calendar-linear" width="20"></iconify-icon>Daily runs</a>
+<a href="{% url 'epos_qbo:schedules' %}" {% if current == 'schedules' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:clock-circle-linear" width="20"></iconify-icon>Schedules</a>
+{% if request.user.is_staff or perms.epos_qbo.can_manage_portal_settings %}<a href="{% url 'epos_qbo:admin-home' %}" {% if current == 'admin-home' or current == 'tools' or current == 'settings' or current == 'api-tokens' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:settings-linear" width="20"></iconify-icon>Admin</a>{% endif %}
+{% endwith %}
+</nav>
