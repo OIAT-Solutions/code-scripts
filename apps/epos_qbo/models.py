@@ -1000,3 +1000,18 @@ class PortalReviewAction(models.Model):
 
     class Meta:
         permissions = [("can_approve_company_a_reviews", "Can approve Company A reviews")]
+
+
+class PortalSettingChange(models.Model):
+    """Audit of a pipeline setting changed from the portal (who, old, new, why)."""
+
+    company_key = models.SlugField(max_length=64)
+    setting = models.CharField(max_length=120)
+    old_value = models.CharField(max_length=200, blank=True, default="")
+    new_value = models.CharField(max_length=200)
+    reason = models.TextField()
+    actor = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
