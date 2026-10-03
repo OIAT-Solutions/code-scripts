@@ -12,7 +12,8 @@ One job: `python -m code_scripts.akponora_ops.daily_run`, in the `akponora-ops` 
 | 2 | `bills` | Received EPOS POs (that day, plus earlier days still pending) → **unpaid** Bills. A genuinely new supplier becomes a QBO vendor; a near match waits for review. The PO "MODE OF PAYMENT" (CASH / TRANSFER) goes into the Bill memo as a hint | Vendors: `OIAT_COMPANY_A_VENDOR_AUTO_CREATE=1` + ref (cap 5). Bills: `OIAT_COMPANY_A_BILLS_AUTO_POST=1` + ref (caps) |
 | 3 | `sales` | `run_pipeline --company company_a --target-date <day>`. Posts only through the standing auto-approval gates: 100% mapped, totals = EPOS, no posting hold, mapping SHA. Runs after bills, so stock arrives before it is sold | `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1` + standing ref. Without them it builds a dry-run and the day waits for review |
 | 4 | `guard` | `item_guard`: read-only QBO scan | Never |
-| 5 | `uf` | Undeposited Funds deposits (`uf_deposits`): each business day's SalesReceipts still in `100900` → Bank Deposits into the banks the till sheet names, then Bank→Bank true-up transfers so each bank matches the sheet mix. A day whose sheet is blank / unfinished, whose totals disagree with QBO, or that has an unmapped till line is held on its own; later complete days still post. Slack ends with the till-sheet status (section 12) | `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref (cap ₦15M per day). Enabled without auto post = plan only, days wait for review |
+| 5 | `stock` | `stock_snapshot run`: downloads the EPOS stock report (view-only) and reads QBO item quantities; writes `/data/ops/company_a/stock_snapshot/latest.json` for the portal's Products & Stock page. Report only: differences never make the run wait; a failure shows `[failed]` but never affects the other steps | Never |
+| 6 | `uf` | Undeposited Funds deposits (`uf_deposits`): each business day's SalesReceipts still in `100900` → Bank Deposits into the banks the till sheet names, then Bank→Bank true-up transfers so each bank matches the sheet mix. A day whose sheet is blank / unfinished, whose totals disagree with QBO, or that has an unmapped till line is held on its own; later complete days still post. Slack ends with the till-sheet status (section 12) | `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref (cap ₦15M per day). Enabled without auto post = plan only, days wait for review |
 
 Rules:
 
@@ -194,6 +195,7 @@ Akponora daily run 2026-10-02: :warning: waiting for review
 :warning: bills [review] 5 PO(s) 2026-10-02..2026-10-02; posted 4 (READY N312000.00), hold 1 (N40000.00), capped 0, already posted 0; vendors created 1, held 1. Bills left UNPAID | CREATED: WONUOLA SUPER STORE -> QBO 912; HOLD_NEAR_MATCH: NIGERIAN BOTLING CO
 :white_check_mark: sales [ok] post; receipts uploaded 6, skipped 0, failed 0; reconcile MATCH EPOS N3211950.00 / QBO N3211950.00
 :white_check_mark: guard [ok] ALERT 0, WARN 3 (read-only)
+:white_check_mark: stock [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks (30 of the differences likely timing)
 :warning: uf [review] auto-post; deposited 1 day(s): 2026-10-01 N3211950.00 (100100 N401200.00, 100202 N1500300.00, ...); held 1 day(s) from 2026-10-02: CASH (System 1) box is blank (type 0 if there was no cash); Undeposited Funds N3456000.00
 Waiting for review:
 - bill HOLD PO 3999 NIGERIAN BOTLING CO N40000.00: supplier ... not approved in vendors.csv
@@ -205,6 +207,7 @@ Evidence: /data/ops/company_a/daily/2026-10-02/run_050012Z
 - `[ok]` means the step is done, `[review]` means a person must decide (the listed file says what), `[failed]` means it crashed or stopped (read `<step>/log.txt`), and `[skipped]` / `[disabled]` mean the step was not run.
 - Head line: "all clean" = exit 0, "waiting for review" = exit 3, "a step FAILED" = exit 2.
 - WARNs from the guard (for example negative stock until bills post) are informational. ALERTs need a look (`guard/alerts.csv`).
+- The stock line is information: EPOS stock is live, QuickBooks lags by the sales and bills not yet posted. Look at `NEGATIVE_QBO` items first (usually a delivery not yet billed). Never patch QtyOnHand to match EPOS. Details: `/data/ops/company_a/stock_snapshot/latest.json` or the portal.
 
 ## 8. Clearing a sales hold
 
@@ -246,7 +249,7 @@ Duplicate-PO holds, unit-cost holds and unmapped-product holds are fixed at the 
 
 | Lagos time | Job | Container | Notes |
 | --- | --- | --- | --- |
-| 06:00 daily | `daily_run` (catalogue → vendors+bills → sales → guard → uf) | `akponora-ops` | The only Company A schedule |
+| 06:00 daily | `daily_run` (catalogue → vendors+bills → sales → guard → stock → uf) | `akponora-ops` | The only Company A schedule |
 | 18:00 daily | Portal all-company sales (`SCHEDULE_CRON`) | `scheduler` | Company B etc.; Company A automatically excluded |
 | — | `OIAT_AKPONORA_*_CRON` individual jobs | `akponora-ops` | Leave unset while `daily_run` is on (ignored unless `OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS=1`) |
 | as needed | `daily_run --date <day> [--only …]` | `akponora-ops` | Catch-up / re-run after a hold |
