@@ -1,21 +1,23 @@
 {% extends "base.html" %}
-{% block title %}Confirm action · OIAT Portal{% endblock %}
+{% block title %}Confirm · OIAT Portal{% endblock %}
 {% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
-<div class="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-6">
-<h1 class="text-2xl font-semibold">{{ title }}</h1>
-<p class="mt-4 text-sm">{{ description }}</p>
-{% if item %}
-<p class="text-sm mt-3">Approval applies only to this reviewed evidence. Changed evidence stops the job for another review.</p>
-<a href="{{ item.details_url }}" class="inline-block underline text-sm mt-4">Review source evidence and line details</a>
-<details class="mt-4"><summary class="cursor-pointer">Details of this decision</summary><pre class="text-xs whitespace-pre-wrap break-words mt-2">{{ item.extra }}</pre></details>
-{% endif %}
-<form method="post" class="space-y-5 mt-6">{% csrf_token %}
+<div class="portal-panel p-6 space-y-5">
+<div><p class="portal-eyebrow">Confirm</p><h1 class="text-2xl font-semibold mt-2 break-words">{{ title }}</h1></div>
+<p class="text-sm leading-relaxed">{{ description }}</p>
+{% if facts %}<dl class="grid sm:grid-cols-[12rem_1fr] gap-x-6 gap-y-2 text-sm border-t border-slate-100 dark:border-slate-700 pt-4">{% for label, value in facts %}<dt class="text-slate-500 dark:text-slate-400">{{ label }}</dt><dd class="font-medium break-words">{{ value }}</dd>{% endfor %}</dl>{% endif %}
+{% if item %}<p class="portal-muted">This decision applies only to what you see now. If the evidence changes before the job runs, the job stops and asks for a new review.</p>
+<a href="{{ item.details_url }}" class="portal-link inline-block">Open the source records</a>
+<details><summary class="portal-link cursor-pointer">Details</summary><pre class="portal-code mt-2">{{ item.extra }}</pre></details>{% endif %}
+<form method="post" class="space-y-5 border-t border-slate-100 dark:border-slate-700 pt-5">{% csrf_token %}
 <input type="hidden" name="token" value="{{ token }}">
-{% if item.kind == 'vendor' and action == 'approve' %}<label class="block text-sm">Existing supplier<select required name="vendor_id" class="block w-full border rounded p-3 bg-transparent mt-2"><option value="">Choose a verified match</option>{% for candidate in item.extra.candidates %}<option value="{{ candidate.id }}">{{ candidate.name }} · {{ candidate.id }}</option>{% endfor %}</select></label>{% endif %}
-<label class="block text-sm font-medium">Reason · what you checked<textarea required name="reason" rows="3" class="block w-full border rounded p-3 bg-transparent mt-2"></textarea></label>
-<p class="portal-muted">Your decision will be recorded with your signed-in name ({{ approval_actor }}) and the time you confirm it.</p>
-<label class="flex items-start gap-3 text-sm"><input required type="checkbox" name="confirmed" value="yes" class="mt-1"><span>I reviewed the evidence and confirm the action described above.</span></label>
-<div class="flex flex-wrap gap-3"><button type="submit" class="btn btn-primary">Confirm and queue</button><a class="btn btn-secondary" href="{% url 'epos_qbo:attention' %}">Cancel</a></div>
+{% if action == 'preview' %}<fieldset class="space-y-3"><legend class="text-sm font-medium">How should this supplier be set up in QuickBooks?</legend>
+{% for candidate in item.extra.candidates %}<label class="flex items-start gap-3 text-sm"><input type="radio" required name="choice" value="link:{{ candidate.id }}" class="mt-1"><span>Link to the existing supplier <strong>{{ candidate.name }}</strong> <span class="text-slate-500">(QuickBooks Id {{ candidate.id }})</span></span></label>{% endfor %}
+<label class="flex items-start gap-3 text-sm"><input type="radio" required name="choice" value="create" class="mt-1"><span>Create a new supplier</span></label>
+<label class="block text-sm">Name for the new supplier <span class="text-slate-500">(optional; leave empty to use the EPOS name)</span><input name="display_name" maxlength="100" class="portal-input mt-2" value="{{ item.extra.vendor.display_name|default:'' }}"></label></fieldset>{% endif %}
+<label class="block text-sm font-medium">Reason: what you checked <span class="font-normal text-slate-500">(required, short)</span><textarea required name="reason" rows="2" maxlength="{{ reason_max }}" class="portal-input mt-2"></textarea></label>
+<p class="portal-muted">Recorded automatically as: <strong>{{ approval_preview }}</strong> (the time is set when you confirm).</p>
+<label class="flex items-start gap-3 text-sm"><input required type="checkbox" name="confirmed" value="yes" class="mt-1"><span>I checked the facts above and want to go ahead.</span></label>
+<div class="flex flex-wrap gap-3"><button type="submit" class="btn btn-primary">{{ button }}</button><a class="btn btn-secondary" href="{% url 'epos_qbo:attention' %}">Cancel</a></div>
 </form></div>
 {% endblock %}

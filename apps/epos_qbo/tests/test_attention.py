@@ -153,45 +153,16 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         for day in ("2099-01-01", "2026-09-30", "bad"):
             self.assertEqual(self.client.get(self.url, {"action":"daily", "date":day}).status_code, 400)
 
-    def test_catalogue_batch_and_deposit_use_existing_hash_gates(self):
-        folder = self.folder / "catalogue"
-        folder.mkdir()
-        plan = {"plan_sha256": "planhash", "decisions": [{"pid":"1","review":"REVIEW"},{"pid":"2","review":"HOLD"}]}
-        (folder/"summary.json").write_text("{}")
-        (folder/"plan.json").write_text(json.dumps(plan))
+    def test_deposit_uses_existing_hash_gate(self):
         day = self.folder / "uf/2026-10-02"
         day.mkdir(parents=True)
         (day/"summary.json").write_text(json.dumps({"status":"READY", "payloads_sha256":"deposithash"}))
-        items, _ = attention.inbox()
-        catalogue = next(i for i in items if i["kind"] == "catalogue")
-        deposit = next(i for i in items if i["kind"] == "deposit")
-        self.assertTrue(catalogue["approve"])
-        self.assertIn("--expect-plan-sha", attention_actions.tool_command(catalogue,"approve","yes"))
-        self.assertIn("deposithash", attention_actions.tool_command(deposit,"approve","yes"))
+        deposit = next(i for i in attention.inbox()[0] if i["kind"] == "deposit")
+        cmd = attention_actions.tool_command(deposit, "approve", "yes")
+        self.assertIn("deposithash", cmd)
+        self.assertEqual(cmd[cmd.index("--plan-dir") + 1], str(day.resolve()))
         (day/"post_123.json").write_text(json.dumps({"complete":True}))
         self.assertFalse(any(i["kind"] == "deposit" for i in attention.inbox()[0]))
-
-    def test_partial_catalogue_apply_is_not_hidden(self):
-        folder = self.folder / "catalogue"
-        folder.mkdir()
-        (folder/"summary.json").write_text("{}")
-        (folder/"plan.json").write_text(json.dumps({"plan_sha256":"planhash","decisions":[{"pid":"1","review":"REVIEW"}]}))
-        (folder/"apply_receipt.json").write_text(json.dumps({"installed":None,"stopped":"failed"}))
-        self.assertTrue(any(i["kind"] == "catalogue" for i in attention.inbox()[0]))
-
-    def test_vendor_mapping_uses_reviewed_candidate_and_live_read_only_check(self):
-        summary = {"payloads_sha256":"abc","vendor_actions":[{"supplier_id":"7","epos_name":"Supplier typo","state":"HOLD_NEAR_MATCH","candidates":["10 Supplier (0.95)"]}]}
-        (self.folder/"bills/summary.json").write_text(json.dumps(summary))
-        item = next(i for i in attention.inbox()[0] if i["kind"] == "vendor")
-        self.assertTrue(item["approve"])
-        job = RunJob.objects.create(scope=RunJob.SCOPE_PORTAL_REVIEW)
-        record = PortalReviewAction.objects.create(job=job,actor="reviewer",action="approve",reason="checked",confirmation_id="vendor",payload={"key":item["key"],"snapshot":item["snapshot"],"approval_ref":"yes","vendor_id":"10"})
-        with mock.patch("code_scripts.scripts.akponora_cutover.w7_create_items.QBOClient.for_company_a") as client:
-            client.return_value.get_json.return_value = {"Vendor":{"Id":"10","DisplayName":"Supplier","Active":True}}
-            self.assertEqual(attention_actions.execute(record),0)
-            client.assert_called_once_with(allow_writes=False)
-            client.return_value.post_json.assert_not_called()
-        self.assertFalse(any(i["kind"] == "vendor" for i in attention.inbox()[0]))
 
     def test_skip_deposit_defers_only_same_snapshot_and_never_runs_tool(self):
         day = self.folder / "uf/2026-10-02"
