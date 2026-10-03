@@ -48,6 +48,7 @@ class Command(BaseCommand):
                     "errors",
                     "fallback_enabled",
                     "fallback_disabled",
+                    "reconciled",
                 ]
             ):
                 self.stdout.write(
@@ -60,7 +61,8 @@ class Command(BaseCommand):
                         f"skipped_invalid={stats['skipped_invalid']} "
                         f"errors={stats['errors']} "
                         f"fallback_enabled={stats['fallback_enabled']} "
-                        f"fallback_disabled={stats['fallback_disabled']}"
+                        f"fallback_disabled={stats['fallback_disabled']} "
+                        f"reconciled={stats.get('reconciled', 0)}"
                     )
                 )
 
