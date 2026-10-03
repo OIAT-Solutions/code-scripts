@@ -172,3 +172,92 @@ class ExperienceTests(CompanyAOpsFixtureMixin, TestCase):
         activity = experience.other_activity('company_b')
         self.assertEqual(activity[0]['title'],'Stock check')
         self.assertEqual(activity[0]['label'],'Finished')
+
+    def imported_sales(self, day, company='company_b', stats=None):
+        import json
+        from apps.epos_qbo.services.artifact_ingestion import ingest_metadata_file
+        path = self.tmp / f'{company}_{day}_transform.json'
+        path.write_text(json.dumps({'target_date': day.isoformat(), 'company_key': company,
+            'source_mode': 'raw_split', 'processed_at': '2026-10-03T12:02:55.462129+00:00',
+            'upload_stats': stats if stats is not None else {'attempted':32,'uploaded':32,'skipped':0,'failed':0},
+            'reconcile': {'status':'MATCH','epos_total':9665900.0,'epos_count':32,
+                          'qbo_total':9665900.0,'qbo_count':32,'difference':0.0}}))
+        record, _ = ingest_metadata_file(path)
+        self.assertIsNone(record.run_job_id)
+        self.assertEqual(record.kind, RunArtifact.KIND_SALES_UPLOAD)
+        return record
+
+    def test_imported_goldplates_without_dry_run_key_and_old_failure_are_up_to_date(self):
+        from datetime import timedelta
+        for offset in range(31):
+            self.imported_sales(date(2026,9,1) + timedelta(days=offset))
+        RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key='company_b',
+            target_date=date(2026,8,20), status=RunJob.STATUS_FAILED)
+        now = datetime(2026,10,2,12,tzinfo=ZoneInfo('UTC'))
+        context = experience.home_context('company_b', now)
+        self.assertEqual(context['home_missing'], 0)
+        self.assertEqual(context['home_rows'][0]['label'], 'Up to date')
+        self.assertEqual(context['home_rows'][0]['latest'], date(2026,10,1))
+        self.assertEqual(context['home_banners'], [])
+        self.assertEqual(context['home_sales'], '₦9,665,900.00')
+        # At the time in the brief, 2 October still needs a confirmed record.
+        context = experience.home_context('company_b', datetime(2026,10,3,15,tzinfo=ZoneInfo('UTC')))
+        self.assertEqual(context['home_rows'][0]['missing'], [date(2026,10,2)])
+        self.assertNotIn('failed', context['home_rows'][0]['issue'])
+        self.assertIn('1 day has', context['home_rows'][0]['issue'])
+
+    def test_imported_company_a_go_live_confirms_without_daily_evidence(self):
+        self.sales('2026-10-01', dry=True)
+        self.imported_sales(date(2026,10,1), company='company_a')
+        context = experience.home_context('company_a', datetime(2026,10,3,15,tzinfo=ZoneInfo('UTC')))
+        self.assertEqual(context['home_rows'][0]['missing'], [date(2026,10,2)])
+        self.assertEqual(context['home_rows'][0]['latest'], date(2026,10,1))
+        row = experience.daily_rows('company_a')[0]
+        self.assertTrue(row['confirmed'])
+        self.assertEqual(row['amount'], Decimal('9665900.00'))
+
+    def test_company_a_without_go_live_evidence_remains_explicitly_unconfirmed(self):
+        self.sales('2026-10-01', dry=True)
+        context = experience.home_context('company_a', datetime(2026,10,3,15,tzinfo=ZoneInfo('UTC')))
+        self.assertEqual(context['home_missing'], 2)
+        self.assertIn('1 October has no automatic sales check on record', context['home_rows'][0]['issue'])
+        self.assertEqual(context['home_confirmed_count'], 0)
+
+    def test_company_a_artifact_with_job_is_visible_in_daily_history(self):
+        job = RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key='company_a',
+            target_date=date(2026,10,1), status=RunJob.STATUS_SUCCEEDED)
+        self.artifact(date(2026,10,1), company='company_a', job=job)
+        self.assertTrue(experience.daily_rows('company_a')[0]['confirmed'])
+
+    def test_new_failure_after_latest_confirmed_day_still_warns(self):
+        self.imported_sales(date(2026,10,1))
+        RunJob.objects.create(scope=RunJob.SCOPE_SINGLE, company_key='company_b',
+            target_date=date(2026,10,2), status=RunJob.STATUS_FAILED)
+        row = self.home('company_b')['home_rows'][0]
+        self.assertIn('latest sales attempt failed', row['issue'])
+
+    def test_latest_confirmed_date_ignores_preview_and_malformed_stats(self):
+        self.imported_sales(date(2026,10,1))
+        self.imported_sales(date(2026,10,2), stats={'dry_run':True})
+        bad = self.artifact(date(2026,10,3))
+        bad.upload_stats_json = ['not a stats object']
+        bad.save()
+        row = self.home('company_b')['home_rows'][0]
+        self.assertEqual(row['latest'], date(2026,10,1))
+        self.assertEqual(row['missing'][-2:], [date(2026,10,2),date(2026,10,3)])
+
+    def test_home_missing_day_link_uses_singular(self):
+        self.sales('2026-10-01')
+        self.sales('2026-10-03')
+        with mock.patch('apps.epos_qbo.services.experience.timezone.now', return_value=self.now):
+            response = self.client.get(reverse('epos_qbo:overview'), {'company':'company_a'})
+        self.assertContains(response, 'View 1 missing day</summary>')
+        self.assertNotContains(response, '1 days have')
+
+    def test_imported_and_daily_evidence_for_same_day_do_not_double_count(self):
+        self.imported_sales(date(2026,10,3), company='company_a')
+        self.sales('2026-10-03', amount='100.00')
+        self.assertEqual(self.home('company_a')['home_sales'], '₦100.00')
+        rows = experience.daily_rows('company_a')
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['confirmed'])

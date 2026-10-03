@@ -84,6 +84,26 @@ def confirmed_artifact(artifact):
             and isinstance(artifact.upload_stats_json, dict) and not artifact.upload_stats_json.get("dry_run"))
 
 
+def artifact_confirmation(company_key, start, expected):
+    """Use the same evidence rule for imported and portal-created records.
+
+    A missing JSON key is different from false in SQLite SQL comparisons;
+    evaluate dry_run with confirmed_artifact rather than excluding it in SQL.
+    """
+    records = RunArtifact.objects.filter(company_key=company_key,
+        kind=RunArtifact.KIND_SALES_UPLOAD, reconcile_status="MATCH",
+        target_date__lte=expected).order_by("-target_date", "-processed_at", "-id")
+    confirmed, latest = {}, None
+    for artifact in records.iterator():
+        if confirmed_artifact(artifact):
+            latest = latest or artifact.target_date
+            if artifact.target_date >= start:
+                confirmed.setdefault(artifact.target_date, money(artifact.reconcile_qbo_total))
+        if artifact.target_date < start and latest is not None:
+            break
+    return confirmed, latest
+
+
 def daily_rows(company_key="", start=None, end=None, include_previews=True):
     """Bound recent history; never fabricate a business date from a job creation date."""
     companies = {c.company_key: c.display_name for c in CompanyConfigRecord.objects.all()}
@@ -112,7 +132,7 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
             confirmed=verified_sales(run), amount=money(run.step("sales").counts.get("qbo_total")) if verified_sales(run) else None,
             preview=run.dry_run, state={"ok":"succeeded", "review":"review", "failed":"failed"}.get(run.status,"unknown")))
 
-    artifact_query = RunArtifact.objects.filter(kind=RunArtifact.KIND_SALES_UPLOAD).filter(~Q(company_key="company_a") | Q(target_date__lt=date(2026, 10, 1)))
+    artifact_query = RunArtifact.objects.filter(kind=RunArtifact.KIND_SALES_UPLOAD)
     if company_key:
         artifact_query = artifact_query.filter(company_key=company_key)
     if start:
@@ -136,11 +156,9 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
     for job in jobs:
         records = by_job[job.id]
         if not records and job.company_key == "company_a" and (not job.target_date or job.target_date >= date(2026, 10, 1)):
-            continue  # Company A outcomes come from its daily evidence, not the old pipeline.
+            continue  # A job status alone is not Company A sales evidence.
         identities = {(a.company_key, a.target_date) for a in records} or {(job.company_key or "", job.target_date)}
         for key, day in identities:
-            if key == "company_a" and (not day or day >= date(2026, 10, 1)):
-                continue
             matches = [a for a in records if a.company_key == key and a.target_date == day and confirmed_artifact(a)]
             chosen = matches[0] if matches else None
             label, message, tone = job_message(job, bool(chosen))
@@ -200,12 +218,16 @@ def home_context(company_key="", now=None, token_health=None):
         waiting = len(items) if key == "company_a" else 0
         if key == "company_a":
             start = max(window_start, date(2026, 10, 1))
-            confirmed = {}
+            confirmed, artifact_latest = artifact_confirmation(key, start, expected)
+            daily_confirmed = set()
             for run in runs:
                 day = date_value(run.business_date)
-                if day and day <= expected and verified_sales(run) and day not in confirmed:
+                if day and day <= expected and verified_sales(run) and day not in daily_confirmed:
+                    daily_confirmed.add(day)
                     confirmed[day] = money(run.step("sales").counts.get("qbo_total"))
             latest = max(confirmed, default=None)
+            if artifact_latest and artifact_latest >= date(2026, 10, 1):
+                latest = max(latest or artifact_latest, artifact_latest)
             hold = ops.posting_hold()
             issue = "Sales are paused. Review the reason before allowing them to run again." if hold["active"] else ""
             schedule = ops.schedule_info(now)
@@ -213,15 +235,9 @@ def home_context(company_key="", now=None, token_health=None):
             scheduled = schedule["enabled"]
         else:
             start = window_start
-            confirmed = {}
-            known = RunArtifact.objects.filter(company_key=key, kind=RunArtifact.KIND_SALES_UPLOAD, target_date__lte=expected, reconcile_status="MATCH").exclude(upload_stats_json__dry_run=True)
-            latest_record = known.order_by("-target_date", "-processed_at", "-id").first()
-            for artifact in known.filter(target_date__gte=start).order_by("-target_date", "-processed_at", "-id"):
-                if confirmed_artifact(artifact):
-                    confirmed.setdefault(artifact.target_date, money(artifact.reconcile_qbo_total))
-            latest = latest_record.target_date if latest_record else None
+            confirmed, latest = artifact_confirmation(key, start, expected)
             job = RunJob.objects.filter(company_key=key, scope=RunJob.SCOPE_SINGLE).order_by("-created_at").first()
-            issue = "The latest sales attempt failed. Check the details before trying again." if job and job.status == RunJob.STATUS_FAILED else ""
+            issue = "The latest sales attempt failed. Check the details before trying again." if job and job.status == RunJob.STATUS_FAILED and (not latest or not job.target_date or job.target_date > latest) else ""
             if job and job.status == RunJob.STATUS_RUNNING and job.started_at and now - job.started_at > timedelta(hours=2):
                 issue = "The sales run has been running for over two hours. Check it before starting another."
             schedules = RunSchedule.objects.filter(enabled=True, completed_at__isnull=True, scope__in=[RunJob.SCOPE_SINGLE, RunJob.SCOPE_ALL]).filter(Q(company_key=key) | Q(scope=RunJob.SCOPE_ALL))
@@ -229,7 +245,9 @@ def home_context(company_key="", now=None, token_health=None):
             scheduled = schedules.exists()
         missing = [start + timedelta(days=i) for i in range(max(0, (expected - start).days + 1)) if start + timedelta(days=i) not in confirmed]
         if missing and not issue:
-            issue = f"{len(missing)} days have no confirmed sales record in the checked period. Review the missing days."
+            issue = f"{len(missing)} {'day has' if len(missing) == 1 else 'days have'} no confirmed sales record in the checked period. Review the missing days."
+            if key == "company_a" and date(2026, 10, 1) in missing:
+                issue += " 1 October has no automatic sales check on record; check earlier posting evidence before retrying."
         if key == "company_a" and errors and not issue:
             issue = "Some review records could not be read. Check Needs your attention."
         connection = (token_health or {}).get(key, {})
