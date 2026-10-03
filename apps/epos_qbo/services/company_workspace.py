@@ -11,7 +11,7 @@ TAB_LABELS = {"sales": "Sales", "purchases": "Purchases", "products": "Products 
               "suppliers": "Suppliers", "deposits": "Deposits", "settings": "Settings"}
 STEP_TABS = {"purchases": {"bills"}, "products": {"catalogue", "guard"},
              "suppliers": {"bills"}, "deposits": {"uf", "deposits", "uf_deposits"}}
-KIND_TABS = {"purchases": {"bill"}, "products": {"catalogue"}, "suppliers": {"vendor"}, "deposits": {"deposit"}}
+KIND_TABS = {"purchases": {"bill"}, "products": {"product"}, "suppliers": {"vendor"}, "deposits": {"deposit"}}
 
 
 def available_tabs(company, user, inventory_enabled=False):
@@ -75,11 +75,18 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
                     url=reverse("epos_qbo:company-a-run-detail", args=[run.business_date, run.run_id]) + "#step-" + step.name))
     register_context = {}
     if key == ops.COMPANY_KEY and active == "products":
-        from .products import context
-        register_context = context(request)
-    if key == ops.COMPANY_KEY and active in {"deposits","settings"}:
-        from .deposits import context
-        register_context.update(context(request))
+        from .products import context as products_context
+        register_context.update(products_context(request))
+    if key == ops.COMPANY_KEY and active == "suppliers":
+        from .suppliers import context as suppliers_context
+        register_context.update(suppliers_context(request))
+    if key == ops.COMPANY_KEY and active in {"deposits", "settings"}:
+        from .deposits import context as deposits_context
+        register_context.update(deposits_context(request))
+    if key == ops.COMPANY_KEY and active == "settings":
+        from ..models import PortalSettingChange
+        register_context["setting_changes"] = PortalSettingChange.objects.filter(company_key=key)[:10]
+    register_context["can_approve"] = request.user.has_perm("epos_qbo.can_approve_company_a_reviews")
     return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab":t})) for t in tabs],
         company_tab=active, company_tab_label=TAB_LABELS[active], company_choices=choices,
         company_sales_page=sales_page, company_decisions=decisions, company_record_errors=errors,
