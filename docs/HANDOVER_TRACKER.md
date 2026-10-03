@@ -82,7 +82,13 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 4c. [ ] **Deposits: aged-hold alert** (Marvin yes, 3 Oct). Any day not DEPOSITED for more than about 7 days (configurable, e.g. `OIAT_COMPANY_A_UF_AGED_DAYS`, default 7) gets a prominent line in the daily Slack summary and a portal inbox item, e.g. "14 Oct held for 9 days: cash box blank". Normal 1–2 day waits for the sheet stay quiet. Code: `uf_deposits.py` (the age in the `scheduled` report) plus `apps/epos_qbo/services/attention.py` and the Deposits page. Add tests.
 4d. [ ] **Company A 1 Oct on the portal Home.** The day was posted and verified at go-live (cutover log: SalesReceipts 80494–80499, ₦3,211,950, MATCH), but from the Mac, before `daily_run` existed. The server has no record of it, so Home keeps flagging it. Fix with *real* evidence, not a hand-made record: a read-only re-check on the server (EPOS 1 Oct total vs QBO receipts) that writes a genuine MATCH record the portal accepts.
 4e. [ ] **Deploy the new Slack messages** (`6d2f6ff`: a start message plus a plain-English summary with Inbox and run links). Deploy after tonight's runs: `git pull`, Marvin builds, then `up -d`.
-4f. [ ] **Clean-up** (audit 3 Oct, report in `outputs/cleanup_audit/REPORT.md`, not committed). Do first: two May `.tar.gz` backups containing `qbo_tokens.sqlite` are in the server checkout **and baked into the image** (fix `.dockerignore`, move them out, rebuild). Then: dead code PR (scheduler pair, root shims, catalog script), archive the finished docs, Mac and server clutter, a website-log retention policy (`/data/db.sqlite3` is 1.8 GB). Nothing deleted yet; waiting on Marvin's decisions.
+4f. [ ] **Clean-up** (audit 3 Oct; report in `outputs/cleanup_audit/REPORT.md`).
+   - ✅ Dead code removed and docs archived (`152dea2`).
+   - ✅ Mac script run: old logs, token files, merged worktrees and branches gone.
+   - ✅ Server: the May `.tar.gz` backups moved to `C:\Users\oiatadmin\Documents\prod\backups\` (duplicate removed); old root `db.sqlite3` deleted; build cache pruned (21 GB → 158 MB).
+   - **Still to do:**
+     - **rebuild once after tonight's runs** (`git pull`, build, `up -d`), so `.dockerignore` removes the backups from the image and the image picks up `152dea2`;
+     - Marvin's decisions: GitHub merged-branch deletes, zip the May evidence, website-log retention (`/data/db.sqlite3` 1.8 GB), `main` vs `master`, the `tender-bell` / `d618` drafts, root `Uploaded/`.
 4g. [ ] **Nightly read-only checker** (idea agreed in principle; Marvin said hold off to avoid bloat). Revisit after the clean-up.
 5. [ ] **Goldplates corrections:** the ₦2.65M July late syncs and the 2 receipts for 22 Jun (prepare, then Marvin approves).
 6. [ ] **Master product setup** (team's Master Product Review; `docs/AKPONORA_STAFF_CHECKLIST.md`): **parked by Marvin.** Do not start without his yes.
