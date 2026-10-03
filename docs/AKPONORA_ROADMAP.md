@@ -74,6 +74,9 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | Repo clean-up phase 2 (Codex): root shims, old scheduler pair, `akponora_canonical_catalog.py`, journal templates, `.env.example` completeness | Codex |
 | [ ] | Merge PR #62 to `master` after the first clean week | Marvin |
 
+| [ ] | Portal redesign phases 2–3 (brief: `docs/CODEX_BRIEF_PORTAL_REDESIGN.md`) | Codex |
+| [ ] | **Client dashboard (future):** a separate, simple dashboard for Company A staff: fill in the till breakdown as a form, mark bills paid, see the product catalogue and items needing fixes. The OIAT Portal stays for OIAT staff | Team |
+
 ## 6. Accounting follow-ups (year-end or accountant)
 
 | Done | Item | Owner |
