@@ -4,6 +4,7 @@
 
 | Need | Read |
 | --- | --- |
+| **Handover tracker: where things are right now, what's in progress, next steps** | [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md) |
 | Tonight/tomorrow, step by step with commands | [`docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md) |
 | What has already been posted, and when | [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md) |
 | Code contract, posting controls, incident response | [`docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md`](docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md), [`docs/AKPONORA_OPERATIONS_CONTROLS.md`](docs/AKPONORA_OPERATIONS_CONTROLS.md) |
