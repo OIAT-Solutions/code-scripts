@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-03 ~11:20 New York (16:20 Lagos) by Codex; Home confirmation fix completed locally (production state below remains Claude's reported deploy state).
+**Last updated:** 2026-10-04 ~19:15 New York by Claude.
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
 
@@ -34,72 +34,105 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 ---
 
-## 2. Live state (production)
+## 2. Live state (production), as of 4 Oct 2026
 
 **Company A: AKPONORA / NORA MINI MART (`company_a`, realm 9341455406194328)**
-- Live on the new QBO items since 1 Oct: 3,938 Inventory `AKP-` + 492 NonInventory `AKP-NS-`. All 4,316 legacy items are renamed `LEGACY —`. September is closed (journals 76552/76553/76554, offset 80493, reclass 80500). FIFO COGS is working.
-- **Unattended `daily_run` is ON** on the server (`akponora-ops` container) at **18:00 Africa/Lagos** (13:00 New York): products → bills → sales → guard (→ stock and deposits once deployed). Server `.env` has the switches and caps (backup `.env.bak_20261003`). **Deployed `326e097` at ~15:57 Lagos on 3 Oct** (portal redesign, migrations 0018–0020 applied, `till_accounts.csv` seeded, 78 Goldplates artifacts imported with `ingest_run_history`). Tonight's real runs use this build.
-- **First automatic run: 3 Oct 2026 18:00 Lagos.** It should post 2 Oct sales and the 1–2 Oct bills (PO 3969 is expected to HOLD as a possible duplicate). **Check the Slack summary and the evidence in `/data/ops/company_a/daily/2026-10-02/`.**
-- Vendors: `vendors.csv` maps all 123 EPOS suppliers (15 created, 5 renamed on 2 Oct).
-- Undeposited Funds: ~₦29M+ waiting from 25 Sep onwards. The deposit step is built but **off**; it needs the Google service account (Marvin is setting it up now).
+- **New items:** live since 1 Oct on 3,938 Inventory `AKP-` and 492 NonInventory `AKP-NS-` items; all legacy items are `LEGACY —`. September is closed. FIFO COGS works.
+- **Item categories check (4 Oct):** 0 of 4,431 items misfiled (`outputs/category_check_20261004/`).
+- **Unattended `daily_run`** at **18:00 Lagos** in the `akponora-ops` container: products → bills (+ cash payments) → sales → item check → stock → deposits.
+  - Server code: `5ed4b36`; it needs a rebuild to take effect (see §4 A1).
+  - The 4 Oct run (business date 3 Oct) took 12.8 min, down from 26.
+- **Slack:** a one-line start message, then a summary grouped by You / Store / OIAT.
+- **Deposits:** on, auto, ₦8M/day cap.
+  - Banked: 25, 26, 27, 28 and 30 Sep.
+  - Undeposited Funds **₦19,576,650** (4 Oct).
+  - Held: 29 Sep (till sheet ₦704,425 short of sales); 1–3 Oct (cash box blank).
+- **Bills:** posted nightly, left unpaid.
+  - From the next build, **cash-on-delivery POs are paid from Petty Cash** on the bill date (`bill_payments`, owner yes 4 Oct).
+  - Routine repeat suppliers: FLOURISH COOL WATER, ALPINE FRESH TABLE WATER.
+  - QBO vendor 64 was renamed `FLOURISH` → `FLOURISH COOL WATER` (4 Oct).
+- **Portal:** Home, Inbox (with "Approve · routine supplier" and "Approve repeat order"), Daily runs, Deposits, Products & Stock, Suppliers.
 
 **Company B: GOLDPLATES FEASTHOUSE (`company_b`)**
-- Status-quo pipeline via the portal schedule, **19:00 Lagos**.
-- The run stuck since 21 Aug was cleared on 3 Oct.
-- **Backfill done and verified on 3 Oct:** 78 days (30 Jun – 1 Oct), ₦819,227,851, all matching EPOS, 0 duplicates. 2 Oct posts at tonight's 19:00 run.
-- Open: ₦2.65M of late-synced July sales on days already posted (needs a manual correction, **do not re-run those days**), and 2 missing 22 Jun receipts (₦22,600).
+- **Pipeline:** status quo, portal schedule at **19:00 Lagos**.
+- **Posted and confirmed:** 30 Jun – 3 Oct, all MATCH.
+- **Open:**
+  - ₦2.65M of late-synced July sales (manual correction; **do not re-run those days**);
+  - 2 missing 22 Jun receipts (₦22,600);
+  - the 2 Oct job record says "failed" (cosmetic; the day is confirmed).
 
 ---
 
-## 3. In progress right now
+## 3. Current focus (Marvin's order, one at a time)
 
-| Item | Who | Where | Status |
-| --- | --- | --- | --- |
-| Portal redesign | Codex → Claude subagent | Merged `a2322b3`, **deployed 3 Oct** | ✅ Live |
-| Home sales confirmation | **Codex** | Fix `58d6f1a`; [report](archive/CODEX_PORTAL_HOME_CONFIRMATION_REPORT.md) | ✅ Completed 3 Oct locally: imported MATCH records counted, superseded failed warning removed, October Company A artifacts accepted, singular wording fixed. 543 portal + 652 pipeline tests pass. **Deployed 3 Oct ~16:36 Lagos**: Home now shows Goldplates missing only 2 Oct, and Company A missing 1–2 Oct. Company A 1 Oct stays unconfirmed if no matching artifact exists. |
-| Deposits (Undeposited Funds → banks from the till sheet) | Marvin (`.env`) / Claude | Plan 3 Oct (read-only): `/data/ops/company_a/uf_deposits/preview_20261003/`. READY: 27 Sep ₦4,080,500 · 28 Sep ₦3,113,300 · 30 Sep ₦3,965,950 (₦11.16M). HELD (blank CASH (System 1) box, store to fill): 25, 26, 29 Sep, 1 Oct. 2 Oct: waits for sales | Marvin said yes to **option 1** (receipts-based allocation, as built). The permission system blocked Claude from editing the server `.env`, so Marvin added the 4 `OIAT_COMPANY_A_UF_*` lines himself (backup `.env.bak_20261003_uf`, cap ₦8M per day) and rebuilt and recreated the containers at ~16:36 Lagos. ✅ **ON**: the env was verified in `akponora-ops`. The first automatic deposits happen in tonight's 18:00 run |
-| Google service account for the till sheet | Marvin | Google Cloud project `oiat-ops` (OIAT Admin, no billing) | ✅ **Done 3 Oct.** `oiat-sheets-reader@oiat-ops.iam.gserviceaccount.com` has Viewer access on the sheet. The key is at `/data/secrets/google_service_account.json` (chmod 600; loose copy deleted). A read-only test from the server returned HTTP 200 with all 13 tabs |
+1. **Goldplates invoicing**, now (§4 B).
+2. **Bank reconciliation**, next (§4 C), which includes the ₦200.6M unpaid-bills backlog.
+3. **Credit sales**, after that (§4 D).
 
 ---
 
-## 4. Next steps (in order)
+## 4. Open items
 
-1. [x] **After 18:00 Lagos:** checked 3 Oct (see the cutover log: sales MATCH, 7 bills, Deposit 80514 then the deposit stop, fixed in `6bef54a`, which deploys with the clean-up rebuild after 19:30 Lagos). Was: check Company A's first automatic run (Slack + `/data/ops/company_a/daily/2026-10-02/run_*/summary.json`). Approve PO 3969 if it is genuine (`bills_sync post` with `Approve=yes`), or let the inbox do it after deploy.
-2. [ ] **After 19:00 Lagos:** check that Goldplates 2 Oct posted (portal Daily runs, or a QBO read on the server).
-3. [x] **Combine and deploy** (done 3 Oct ~15:57 Lagos; dry-run smoke test of 2 Oct in progress) (after both runs, about 14:30 New York or later):
-   1. ✅ Portal branch merged (`a2322b3`); screenshots in `outputs/portal_phase1_review/claude-*.png`.
-   2. Run both test suites: `python -m unittest discover -s code_scripts/tests -q` and `python manage.py test apps.epos_qbo apps.dashboard apps.core`, with dummy env and a scratch `STATE_ROOT`.
-   3. Push.
-   4. Server: `git pull`. Marvin runs `docker compose build web scheduler akponora-ops` (desktop PowerShell). Then `docker compose up -d`.
-   5. Run `python manage.py migrate` in `web` (**0018, 0019, 0020**). Grant `can_approve_company_a_reviews`, `can_trigger_runs` and `can_manage_portal_settings` to the operators (Django admin).
-   6. Smoke test: `daily_run --dry-run --date <yesterday>`. Open the portal pages.
-4. [ ] **Deposits:** switched ON 3 Oct ~16:36 Lagos. After tonight's run, check the first automatic deposits after tonight's run (27, 28 and 30 Sep should be DEPOSITED in `days.json`; check the deposits and transfers in QBO).
-4a. [ ] **Deposits, how it should be (agreed 3 Oct; do next):**
-   - **Banks equal the till sheet exactly.** Deposit each bank's *sheet* amount and book `sheet − sales` to a **Cash Over/Short** line on the deposit. QBO needs a Cash Over/Short account; that is a production write, so get Marvin's yes. Today, option 1 scales each bank to the sales total instead, so every bank sits a few hundred naira under the sheet (₦3,150 / ₦2,600 / ₦700 short on 27, 28 and 30 Sep).
-   - **Clean up the days posted under option 1** with one journal (Over/Short ↔ banks) once that's in place.
-   - Code: `scale_targets()` / allocation in `code_scripts/akponora_ops/uf_deposits.py` plus the deposit payload. Update the module docstring and the tests.
-4b. [ ] **Investigate why the till sheet ≠ EPOS sales** each day (sheet higher by ₦700–₦3,150 on 27, 28 and 30 Sep). Leads to check: rounding or cash change handling on the sheet; refunds/voids in EPOS not on the sheet; sales after the 05:00 business-day cutoff; POS charges; transfers recorded gross. Compare per tender: EPOS tender totals (`receipts.csv` per day in the plan folder) against the sheet's boxes.
-4c. [ ] **Deposits: aged-hold alert** (Marvin yes, 3 Oct). Any day not DEPOSITED for more than about 7 days (configurable, e.g. `OIAT_COMPANY_A_UF_AGED_DAYS`, default 7) gets a prominent line in the daily Slack summary and a portal inbox item, e.g. "14 Oct held for 9 days: cash box blank". Normal 1–2 day waits for the sheet stay quiet. Code: `uf_deposits.py` (the age in the `scheduled` report) plus `apps/epos_qbo/services/attention.py` and the Deposits page. Add tests.
-4d. [ ] **Company A 1 Oct on the portal Home.** The day was posted and verified at go-live (cutover log: SalesReceipts 80494–80499, ₦3,211,950, MATCH), but from the Mac, before `daily_run` existed. The server has no record of it, so Home keeps flagging it. Fix with *real* evidence, not a hand-made record: a read-only re-check on the server (EPOS 1 Oct total vs QBO receipts) that writes a genuine MATCH record the portal accepts.
-4e. [ ] **Deploy the new Slack messages** (`6d2f6ff`: a start message plus a plain-English summary with Inbox and run links). Deploy after tonight's runs: `git pull`, Marvin builds, then `up -d`.
-4f. [ ] **Clean-up** (audit 3 Oct; report in `outputs/cleanup_audit/REPORT.md`).
-   - ✅ Dead code removed and docs archived (`152dea2`).
-   - ✅ Mac script run: old logs, token files, merged worktrees and branches gone.
-   - ✅ Server: the May `.tar.gz` backups moved to `C:\Users\oiatadmin\Documents\prod\backups\` (duplicate removed); old root `db.sqlite3` deleted; build cache pruned (21 GB → 158 MB).
-   - **Still to do:**
-     - **rebuild once after tonight's runs** (`git pull`, build, `up -d`), so `.dockerignore` removes the backups from the image and the image picks up `152dea2`;
-     - Marvin's decisions: GitHub merged-branch deletes, zip the May evidence, website-log retention (`/data/db.sqlite3` 1.8 GB), `main` vs `master`, the `tender-bell` / `d618` drafts, root `Uploaded/`.
-4g. [ ] **Nightly read-only checker** (idea agreed in principle; Marvin said hold off to avoid bloat). Revisit after the clean-up.
-4h. [x] **Fixes from the first live run (3 Oct), all pushed, deploying in one rebuild after Goldplates' 19:00 Lagos run:**
-   - `6bef54a`: deposits are recognised by the memo tag (QBO keeps no DocNumber on Deposits).
-   - `dca1592` / `c555d58`: the Slack summary is grouped by who acts (You / Store / OIAT). The bills step caches unchanged earlier POs and prunes the cache to the look-back window, so the bills step goes from 18 min to about 2–3.
-   - `9b20bbf`: the Inbox banners use the Home rule. The 1 Oct record (MATCH) was copied from the Mac and ingested on the server.
-   - `36596e8`: routine repeat-order suppliers (`routine_repeat` exclusion kind plus the Inbox button "Approve · routine supplier"); the bill "Don't ask again" relabelled "Handled outside, never post"; deposit days not banked for more than 7 days become an OIAT to-do; SQLite busy timeout of 20 s.
-   - ✅ **Deployed 3 Oct ~20:20 Lagos** (`b14ba1a`). PO cache seeded. 27, 28 and 30 Sep banked with Marvin's yes (₦10,981,000; Undeposited Funds is now ₦22,931,599.99). See the cutover log.
-   - Next: watch the 4 Oct 18:00 run. Expect: the start message, the new summary, the bills step in about 2–3 min, and deposits for any day whose till sheet is complete.
-5. [ ] **Goldplates corrections:** the ₦2.65M July late syncs and the 2 receipts for 22 Jun (prepare, then Marvin approves).
-6. [ ] **Master product setup** (team's Master Product Review; `docs/AKPONORA_STAFF_CHECKLIST.md`): **parked by Marvin.** Do not start without his yes.
-7. [ ] **Later:** repo clean-up phase 2, the client dashboard, and the W10 legacy retirement (see the roadmap).
+### A. Daily operations
+1. [ ] **Rebuild** for `5ed4b36` (cash payments for cash POs, Approve repeat order). Marvin: `docker compose build web scheduler akponora-ops`, then `docker compose up -d web scheduler akponora-ops`. Do it outside 17:45–19:30 Lagos.
+2. [ ] **After the next run, check:**
+   - October cash bills paid from Petty Cash (`bills/cash_payments.json`); expected include 80546 (PO 3978) and the water POs;
+   - POs 3970 and 3979 posted (routine / linked);
+   - the bills step at about 2–4 min.
+3. [ ] **Inbox (Marvin):**
+   - PO 3982 MEGA FROZEN FOODS ₦1.928M: link to QBO "Mega frozen Foods";
+   - PO 3976 Uncle Sam's ₦72,000: "Approve repeat order" if real (after the rebuild).
+4. [ ] **Store:**
+   - fill in the CASH (System 1) box for 1–3 Oct;
+   - **check 29 Sep** on the till sheet (₦4,392,900 vs EPOS sales ₦5,097,325);
+   - one supplier per PO (PO 3970 named two).
+5. [ ] **Watch negative stock in QBO** (11 → 19 → 28 items). If it keeps rising after the held bills post, deliveries are not being recorded as EPOS POs.
+
+### B. Goldplates invoicing (in progress)
+Facts and design discussed 4 Oct.
+- **Today's practice:** Nora Mart supplies GPFH (QBO customer Id 62) on paper invoices; copies go in a WhatsApp group.
+  - Prices are the EPOS selling prices.
+  - GPFH pays by transfer to a Moniepoint account (Marvin is confirming which).
+  - Staff adjust EPOS stock on the delivery day.
+  - Nothing has been invoiced in QBO since 22 Sep; GPFH open A/R is ₦36.6M.
+  - "Services" lines must never be used.
+- **Design (proposed, Marvin agreed in principle):**
+  - a Google Sheet "Goldplates Invoices" (a tab per month, a row per paper-invoice line, a "Done" tick), shared read-only with the service account;
+  - a nightly step after sales: exact EPOS-product match, pack sizes to base units, a price check against EPOS, one QBO invoice per paper invoice `GPFH-<paper no>`;
+  - Inbox approval first, auto later; a Slack line; payments matched in bank reconciliation.
+- [ ] **Waiting on Marvin:**
+  1. Do the paper invoices have printed numbers?
+  2. 22–30 Sep backlog: post dated 30 Sep on a non-stock line (recommended; September COGS is already in the close)?
+  3. Should Claude make the sheet template (.xlsx to upload)?
+  4. Should Goldplates' QBO record matching bills from Nora Mart (recommended, later)?
+  5. Which Moniepoint account does GPFH pay into?
+
+### C. Bank reconciliation (next; Marvin: do as its own project)
+- [ ] **Unpaid-bills backlog:** no BillPayment has been recorded since **18 May 2026**.
+  - 677 bills since June are open, **₦200.6M**; nearly all are really paid.
+  - Before May, payments came from **Moniepoint 4686987227 (100202)** and **Petty Cash (100100)**.
+  - Needs the Moniepoint statements (Jun → now) and the petty-cash records; match each payment to its bill and pay it on the real date from the real account. Do **not** bulk-mark as paid without evidence.
+  - Water suppliers: Flourish ₦190,400 and Alpine ₦311,600 open, though EPOS says cash.
+- [ ] **Bank statements vs QBO** for every till account (Moniepoint ×6, Zenith, Petty Cash): reconcile monthly.
+- [ ] **29 Sep deposit hold:** ₦704,425 gap between the till sheet and sales.
+- [ ] **Till sheet higher than sales** by ₦700–₦3,150 a day (27, 28, 30 Sep). Investigate per tender; then the **Cash Over/Short** design: banks equal the sheet exactly and the difference goes to Over/Short (agreed 3 Oct), plus a clean-up journal for the days banked under option 1.
+- [ ] **GPFH payments** (Moniepoint transfers) applied to GPFH invoices.
+
+### D. Credit sales (after C)
+- [ ] Not yet discussed. EPOS has a per-customer credit limit of about ₦2M.
+
+### E. Smaller follow-ups
+- [ ] **Clean-up decisions:** GitHub merged-branch deletes, zip the May evidence on the server, website-log retention (`/data/db.sqlite3` 1.8 GB), `main` vs `master`, the `tender-bell` / `d618` drafts, root `Uploaded/` (696 MB). See `outputs/cleanup_audit/REPORT.md`.
+- [ ] **Goldplates corrections:** ₦2.65M July late syncs; 2 receipts for 22 Jun.
+- [ ] **Goldplates 2 Oct job label:** "failed", but it actually succeeded (optional fix).
+- [ ] **Master product setup:** **parked by Marvin.** Do not start without his yes.
+- [ ] **Nightly read-only checker:** on hold (Marvin: avoid bloat).
+- [ ] **Later:** the client dashboard; W10 legacy retirement (see the roadmap).
+
+**Done (3–4 Oct):**
+- deploy of the portal redesign; deposits on; the 3 Oct fixes (deposit memo tag, Slack layout, PO cache, Inbox banners, routine suppliers, aged-day alert, SQLite timeout, stale-lock fix);
+- the 1 Oct record imported; the clean-up (dead code, docs archived, backups out of the image, Mac clutter, 21 GB build cache);
+- vendor 64 renamed; PO 3970 linked; the category check.
 
 ---
 

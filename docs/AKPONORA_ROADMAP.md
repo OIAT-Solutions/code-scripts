@@ -43,6 +43,11 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 - [ ] **Deposits: aged-hold alert** after about 7 days (Slack + portal inbox). See tracker §4 item 4c.
 - [ ] **1 Oct read-only re-check** so the portal Home stops flagging it (tracker §4 item 4d).
 
+- [ ] **Goldplates invoicing** from a shared Google Sheet (design in `HANDOVER_TRACKER.md` §4 B).
+- [ ] **Bank reconciliation project:** the ₦200.6M unpaid-bills backlog (no BillPayment since 18 May), monthly statement reconciliation, Cash Over/Short (`HANDOVER_TRACKER.md` §4 C).
+- [ ] **Credit sales** (`HANDOVER_TRACKER.md` §4 D).
+- [x] Cash-on-delivery bills paid from Petty Cash automatically (`bill_payments`, 4 Oct).
+
 ## 3. Staff / EPOS data fixes (not blocking)
 
 | Done | Item | Owner |
