@@ -88,6 +88,11 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
    - one supplier per PO (PO 3970 named two).
 5. [ ] **Watch negative stock in QBO** (11 → 19 → 28 items). If it keeps rising after the held bills post, deliveries are not being recorded as EPOS POs.
 
+### A2. Till sheet "Funds Allocation" menu (Marvin's idea, 4 Oct)
+- [ ] **Sheet side:** Claude in Chrome builds it from the brief [`BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md`](BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md): a menu, a date-range modal, and a `Bank requests` tab (the sheet writes requests; it never calls the server).
+- [ ] **Server side (Claude):** a poller every ~10 min reads `Bank requests` and runs `uf_deposits` for From..To with all the gates (sales exist, sheet complete, tolerance, caps, idempotent), outside the daily-run window; Slack plus the portal. Optional write-back of Status / Result if Marvin gives the service account **edit** access to this one sheet.
+- [ ] **Later (Marvin):** a similar staff sheet for credit-sales invoices.
+
 ### B. Goldplates invoicing (in progress)
 Facts and design discussed 4 Oct.
 - **Today's practice:** Nora Mart supplies GPFH (QBO customer Id 62) on paper invoices; copies go in a WhatsApp group.
