@@ -145,3 +145,8 @@ Evidence: `/data/ops/company_a/daily/2026-10-02/run_170000Z/`. The Slack start a
   - All three days are DEPOSITED in days.json. Undeposited Funds went from ₦33,912,599.99 to **₦22,931,599.99**.
   - Still held (CASH (System 1) box blank on the till sheet): 25, 26 and 29 Sep, and 1 and 2 Oct.
 
+
+## 4 Oct 2026: vendor rename (Marvin chat yes)
+
+- QBO Vendor **64 `FLOURISH` → `FLOURISH COOL WATER`** (matches the EPOS supplier name). Evidence that they are the same supplier: all 46 bills to 64 (Feb–Sep) are sachet water 50cl×20, nearly all ₦10,000, the same product and price as EPOS POs 3970/3979. `vendor_admin` dry run, then execute; `vendors.csv` updated (123 rows). Spec: `/data/ops/company_a/vendor_admin_flourish_20261004.json`.
+- PO 3970's supplier field names **both** water suppliers ("FLOURISH COOL WATER, ALPINE FRESH WATER", 50 bags), probably 25 bags from each. Decision pending with Marvin.
