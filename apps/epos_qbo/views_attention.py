@@ -19,10 +19,10 @@ from .services import attention, attention_actions, job_runner
 from .views_company_a import _shell_context
 
 SALT = "company-a-review-confirmation"
-ITEM_ACTIONS = {"approve", "skip", "exclude", "preview", "routine"}
+ITEM_ACTIONS = {"approve", "skip", "exclude", "preview", "routine", "repeat_ok"}
 REASON_MAX = 300
 ACTION_LABELS = {"approve": "Approved", "skip": "Skipped", "exclude": "Don't ask again", "unexclude": "Ask again",
-                 "routine": "Approved as routine supplier",
+                 "routine": "Approved as routine supplier", "repeat_ok": "Confirmed real repeat order",
                  "preview": "QuickBooks check", "daily": "Daily run"}
 
 EXCLUDE_TEXT = {
@@ -39,7 +39,7 @@ BUTTONS = {
     ("approve", "product"): "Approve product", ("approve", "vendor"): "Approve supplier",
     ("approve", "bill"): "Approve bill", ("approve", "deposit"): "Approve deposit", ("approve", "hold"): "Clear hold",
     ("preview", "vendor"): "Check with QuickBooks", ("skip", "bill"): "Skip for this plan",
-    ("routine", "bill"): "Approve · routine supplier", ("exclude", "bill"): "Handled outside, never post",
+    ("routine", "bill"): "Approve · routine supplier", ("repeat_ok", "bill"): "Approve repeat order", ("exclude", "bill"): "Handled outside, never post",
 }
 
 
@@ -127,6 +127,9 @@ def describe(action, item):
         return item["reason"] + " Only this product is set up (plus its main product when listed). The tool refuses if the plan or this product changed since you looked."
     if kind == "vendor":
         return describe_check(item["extra"].get("check") or {}) + " The tool repeats the QuickBooks check and refuses if anything changed."
+    if kind == "bill" and action == "repeat_ok":
+        return ("This PO looks like a repeat of an earlier one. Confirm it is a real, separate order: it then "
+                "posts as an unpaid bill in the next daily run. Say why in the reason (for example, daily bread).")
     if kind == "bill" and action == "routine":
         return ("Post this bill as an unpaid bill, and mark the supplier as routine. "
                 + EXCLUDE_TEXT["routine_repeat"])
@@ -193,7 +196,7 @@ def confirm(request):
         else:
             items, _ = attention.inbox()
             item = next((i for i in items if i["key"] == request.GET.get("key")), None)
-            if not item or not (item.get(action) or (action == "routine" and item["extra"].get("routine"))):
+            if not item or not (item.get(action) or (action in ("routine", "repeat_ok") and item["extra"].get(action))):
                 raise ValueError("This action is unavailable. Fix the source and refresh the inbox.")
             data = {"key": item["key"], "snapshot": item["snapshot"], "title": item["title"], "kind": item["kind"],
                     "identity": item["identity"], "business_date": item["date"], "run_id": item["run"].run_id if item["run"] else "",

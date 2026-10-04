@@ -164,6 +164,10 @@ def execute(action_record):
         return subprocess.call(exclusion_command("product", data["exclusion_key"], ref, reason))
     item = current_item(data["key"], data["snapshot"])
     action = action_record.action
+    if action == "repeat_ok":
+        if item["kind"] != "bill" or not item["extra"].get("repeat_ok"):
+            raise ValueError("This action is no longer available for this item. Refresh the inbox.")
+        return subprocess.call(exclusion_command("repeat_ok", item["identity"], ref, reason or "confirmed real order"))
     if action == "routine":
         if item["kind"] != "bill" or not item["extra"].get("routine"):
             raise ValueError("This action is no longer available for this item. Refresh the inbox.")

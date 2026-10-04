@@ -281,9 +281,9 @@ def inbox():
     items += deposit_items(seen, errors)
     from . import exclusions
     try:
-        excluded = {kind: {r["key"] for r in exclusions.rows() if r["kind"] == kind} for kind in ("product", "vendor", "bill")}
+        excluded = {kind: {r["key"] for r in exclusions.rows() if r["kind"] == kind} for kind in ("product", "vendor", "bill", "repeat_ok")}
     except (OSError, ValueError, csv.Error):
-        excluded = {"product": set(), "vendor": set(), "bill": set()}
+        excluded = {"product": set(), "vendor": set(), "bill": set(), "repeat_ok": set()}
         errors.append("The don't-ask-again list could not be read. Excluded items may appear here.")
     try:
         mapped_products = mapped_product_ids()
@@ -319,6 +319,8 @@ def inbox():
                         continue
                     if exclusions.normalize("bill", identity) in excluded["bill"]:
                         continue
+                    if row.get("Status") == "HOLD" and identity in excluded["repeat_ok"]:
+                        continue  # confirmed a real order: posts in the next daily run
                     items.append(make_item("bill", identity, f"Bill for PO {identity} · {row.get('EPOS Supplier', '')}",
                         row.get("Reasons") or row.get("Warnings") or "Waiting for approval. The bill will remain unpaid.", run, "bills",
                         approve=row.get("Status") == "READY" and bool(summary.get("payloads_sha256")), skip=True, exclude=True,
@@ -326,7 +328,11 @@ def inbox():
                                # Approve + add the supplier to the routine repeat orders list
                                "routine": bool(row.get("Status") == "READY" and summary.get("payloads_sha256")
                                                and "possible duplicate" in (row.get("Warnings") or "")
-                                               and (row.get("EPOS Supplier") or "").strip())}))
+                                               and (row.get("EPOS Supplier") or "").strip()),
+                               # A held repeat over the threshold: a person can confirm it is a real order
+                               "repeat_ok": bool(row.get("Status") == "HOLD" and row.get("Reasons")
+                                                 and all(r.strip().startswith("possible duplicate receipt")
+                                                         for r in (row.get("Reasons") or "").split(" | ")))}))
                 for vendor in summary.get("vendor_actions", []):
                     identity = str(vendor.get("supplier_id") or vendor.get("epos_name"))
                     if ("vendor", identity) in seen:

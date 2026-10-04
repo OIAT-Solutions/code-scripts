@@ -320,6 +320,10 @@ class PlanTests(unittest.TestCase):
         _, _, e, _ = self.f.plan([order(3980, [big], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
                                   order(3981, [big], received="2026-10-02T10:00:00", supplier="UNCLE SAM'S BAKERY")])
         self.assertEqual(e["3981"]["status"], "HOLD")
+        rx.add("repeat_ok", "3981", reason="confirmed real order", added_by="owner", path=path)
+        _, _, e, _ = self.f.plan([order(3980, [big], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
+                                  order(3981, [big], received="2026-10-02T10:00:00", supplier="UNCLE SAM'S BAKERY")])
+        self.assertEqual(e["3981"]["status"], "READY", e["3981"]["reasons"])
 
     def test_receipt_on_non_master_child_holds(self):
         _, _, e, _ = self.f.plan([order(3977, [("101", "COKE CAN", 24, 24, 200.0, 215.0)])])

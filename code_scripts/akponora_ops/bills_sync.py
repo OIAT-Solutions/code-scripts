@@ -779,6 +779,9 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
                                          item_ids={r["rule"].target_qbo_item_id for r in e["lines"] if r["rule"]},
                                          doc=doc)
         holds, dwarns = duplicate_of(po, history, days=dup_days, min_value=dup_min_value)
+        if holds and exclusions is not None and exclusions.describe("repeat_ok", po["ref"]):
+            e["routine_repeat"] = holds  # confirmed a real order in the portal: noted, not held
+            holds = []
         reasons += holds
         routine = (exclusions.describe("routine_repeat", po["supplier"])
                    if dwarns and exclusions is not None and clean(po["supplier"]) else "")
@@ -1424,10 +1427,24 @@ def cmd_scheduled(a, *, client: QBOClient | None = None, write_client: QBOClient
         res = run_post(out, client=wclient, registry=registry, approval_ref=clean(os.getenv(AUTO_REF_ENV)),
                        expect_sha=summary["payloads_sha256"], review_path=None, auto=True)
         posted, stopped = res["counts"], res["stopped"]
+    cash = None
+    if env_flag(AUTO_ENV) and clean(os.getenv(AUTO_REF_ENV)) and not stopped:
+        # Cash-on-delivery POs: pay the bill from Petty Cash on its own date (bill_payments; owner yes 4 Oct).
+        from code_scripts.akponora_ops import bill_payments
+
+        try:
+            cash = bill_payments.pay_cash_bills(write_client or QBOClient.for_company_a(allow_writes=True))
+        except Exception as exc:  # noqa: BLE001 - a payment problem never undoes or blocks posted bills
+            cash = {"enabled": True, "paid": [], "failed": [{"detail": f"{type(exc).__name__}: {exc}"}],
+                    "capped": [], "planned": [], "total": "0.00"}
+        dump_json(out / "cash_payments.json", cash)
     waiting = summary["counts"].get("HOLD", 0) + summary["counts"].get("READY", 0) - sum(
         (posted or {}).get(k, 0) for k in ("POSTED", "ADOPTED"))
     dump_json(out / "scheduled.json", {"posted": posted or {}, "stopped": stopped, "waiting": waiting,
-                                       "auto_post": bool(env_flag(AUTO_ENV) and clean(os.getenv(AUTO_REF_ENV)))})
+                                       "auto_post": bool(env_flag(AUTO_ENV) and clean(os.getenv(AUTO_REF_ENV))),
+                                       "cash_paid": len((cash or {}).get("paid") or []),
+                                       "cash_paid_total": (cash or {}).get("total", "0.00"),
+                                       "cash_pay_failed": [f.get("detail", "") for f in (cash or {}).get("failed") or []]})
     if not a.no_slack:
         send_slack(slack_text(summary, out, posted) + (f"\nSTOPPED: {stopped}" if stopped else ""))
     if stopped:

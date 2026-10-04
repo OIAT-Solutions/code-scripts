@@ -225,6 +225,27 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         record.refresh_from_db()
         self.assertEqual(record.action, "routine")
 
+    def test_held_repeat_can_be_confirmed_as_a_real_order(self):
+        (self.folder / "bills/review.csv").write_text(
+            "PO,EPOS Supplier,Status,Reasons,Warnings,Approve\n"
+            "3976,UNCLE SAMS BAKERY AND CAFE,HOLD,possible duplicate receipt of EPOS PO 3862 (x): same products/qty,,\n"
+            "124,Other Supplier,HOLD,supplier not approved in vendors.csv,,\n")
+        items = attention.inbox()[0]
+        held = next(i for i in items if i["identity"] == "3976")
+        self.assertTrue(held["extra"]["repeat_ok"])
+        self.assertFalse(next(i for i in items if i["identity"] == "124")["extra"]["repeat_ok"])
+        self.assertContains(self.client.get(reverse("epos_qbo:attention")), "Approve repeat order")
+        self.assertContains(self.client.get(self.url, {"key": held["key"], "action": "repeat_ok"}), "real, separate order")
+        job = RunJob.objects.create(scope=RunJob.SCOPE_PORTAL_REVIEW, status=RunJob.STATUS_RUNNING)
+        record = PortalReviewAction.objects.create(job=job, actor="reviewer", action="repeat_ok", reason="daily bread",
+                                                   confirmation_id="rep1", payload={"key": held["key"], "snapshot": held["snapshot"]})
+        with mock.patch("apps.epos_qbo.services.attention_actions.subprocess.call", return_value=0) as call:
+            self.assertEqual(attention_actions.execute(record), 0)
+        cmd = call.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--kind") + 1], "repeat_ok")
+        self.assertEqual(cmd[cmd.index("--key") + 1], "3976")
+        self.assertEqual(call.call_count, 1)  # no bill is posted from the portal: the next run posts it
+
     def test_banners_use_the_same_confirmation_rule_as_home(self):
         from apps.epos_qbo.models import RunArtifact
         now = datetime(2026,10,3,12,tzinfo=ZoneInfo("UTC"))

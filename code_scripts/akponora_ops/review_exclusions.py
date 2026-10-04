@@ -10,6 +10,8 @@ State file ``STATE_ROOT/mappings/company_a/review_exclusions.csv`` (next to ``ap
 * ``routine_repeat`` - key = EPOS supplier name (normalized like ``vendor``). A supplier whose repeat
   orders are routine (daily bread, water): ``bills_sync`` posts its below-threshold "possible duplicate"
   POs automatically instead of waiting for a person. Repeats at or above the threshold still HOLD.
+* ``repeat_ok`` - key = EPOS PO OrderRef. A person confirmed this PO is a real order, not a duplicate:
+  ``bills_sync`` no longer holds it for "possible duplicate receipt" (other holds still apply).
 * ``bill``    - key = EPOS PO OrderRef (``EPOS-PO-`` prefix accepted). The PO was resolved outside
   the tool: it is planned ``EXCLUDED`` (never posted, counts as done for the cursor) and a post
   skips it as ``RESOLVED`` even when it was approved in an older review.csv.
@@ -46,7 +48,7 @@ FILE_NAME = "review_exclusions.csv"
 HISTORY_NAME = "review_exclusions_history.csv"
 COLUMNS = ["kind", "key", "reason", "added_by", "added_at", "expires_at"]
 HISTORY_COLUMNS = ["ts", "action", "kind", "key", "reason", "actor", "expires_at", "previous", "file_sha256_after"]
-KINDS = ("product", "vendor", "bill", "routine_repeat")
+KINDS = ("product", "vendor", "bill", "routine_repeat", "repeat_ok")
 PO_PREFIX = "EPOS-PO-"
 TZ = ZoneInfo("Africa/Lagos")
 

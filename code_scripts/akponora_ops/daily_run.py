@@ -250,6 +250,9 @@ class DailyRun:
                                       if str(v.get("state", "")).startswith("HOLD") or v.get("state") == "FAILED"]
         res.counts.update(bills_waiting(out, summary, vendors))
         res.counts["routine_repeats"] = len(summary.get("routine_repeats") or [])
+        res.counts["cash_paid"] = sched.get("cash_paid", 0)
+        res.counts["cash_paid_total"] = sched.get("cash_paid_total", "0.00")
+        res.counts["cash_pay_failed"] = sched.get("cash_pay_failed") or []
         res.counts["vendors"] = [f"{v.get('state')}: {v.get('display_name')}"
                                  + (f" -> QBO {v['vendor_id']}" if v.get("vendor_id") else "") for v in vendors]
         if sched.get("stopped"):
@@ -802,6 +805,10 @@ def slack_text(summary: dict) -> str:
                 text = f"{posted} posted" + (f" · {naira_text(total)}" if total not in (None, "") else "")
             else:
                 text = "nothing new to post" if not waiting else "nothing posted"
+            if c.get("cash_paid"):
+                text += f" · {c['cash_paid']} paid in cash ({naira_text(c.get('cash_paid_total'))})"
+            if c.get("cash_pay_failed"):
+                oiat.append(f"a cash payment for a bill didn't go through; it is retried next run → {run}")
             if c.get("routine_repeats"):
                 n = c["routine_repeats"]
                 text += f" · {n} routine repeat order{'s' if n != 1 else ''}"
@@ -816,7 +823,11 @@ def slack_text(summary: dict) -> str:
                     you.append(f"{who}: supplier {'looks like ' + hint + ', link or create it' if hint else 'needs linking or creating'} → {inbox}")
                 elif "duplicate" in (w.get("why") or "").lower():
                     m = __import__("re").search(r"PO (\d+)", w.get("why") or "")
-                    you.append(f"approve {who} (looks like a repeat of PO {m.group(1) if m else 'an earlier order'}) → {inbox}")
+                    earlier = f"PO {m.group(1)}" if m else "an earlier order"
+                    if w.get("status") == "HOLD":
+                        you.append(f"{who} looks like a repeat of {earlier}: if it's a real order, Approve repeat order → {inbox}")
+                    else:
+                        you.append(f"approve {who} (looks like a repeat of {earlier}) → {inbox}")
                 else:
                     you.append(f"approve {who} → {inbox}")
         lines.append(f"*Bills*   {text}")

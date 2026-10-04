@@ -354,7 +354,10 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
 
     def test_overview_card_without_hold(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
-        response = self.client.get(reverse("epos_qbo:overview"))
+        # Pin "now" to 3 Oct: the card shows the amount of the expected day (2 Oct), not of today's date.
+        from datetime import datetime as _dt, timezone as _tz
+        with mock.patch("django.utils.timezone.now", return_value=_dt(2026, 10, 3, 12, tzinfo=_tz.utc)):
+            response = self.client.get(reverse("epos_qbo:overview"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'data-company-a-row="true"')
         self.assertContains(response, "Last confirmed sales:")
