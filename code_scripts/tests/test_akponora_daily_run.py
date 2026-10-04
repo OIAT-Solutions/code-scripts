@@ -590,7 +590,7 @@ class SlackMessageTests(unittest.TestCase):
             "*To do*",
             f":bust_in_silhouette: *You* · approve PO 3969, UNCLE'S SAM BAKERY AND CAFE, ₦27,000 (looks like a repeat of PO 3967) → {self.INBOX}",
             f":bust_in_silhouette: *You* · PO 3970, FLOURISH COOL WATER, ALPINE FRESH WATER, ₦20,000: supplier looks like FLOURISH, link or create it → {self.INBOX}",
-            ":convenience_store: *Store* · fill in the cash box on the till sheet for 25, 26, 29 Sep and 1, 2 Oct → "
+            ":convenience_store: *Store* · complete the till sales breakdown for 25, 26, 29 Sep and 1, 2 Oct → "
             "<https://docs.google.com/spreadsheets/d/15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A|Till sheet>",
             f":hammer_and_wrench: *OIAT* · banking stopped part-way on 27 Sep; nothing posts twice → {self.RUN}",
             "",

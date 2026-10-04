@@ -403,6 +403,8 @@ class DailyRun:
             "till_sheet_last_day": sheet.get("last_complete_day"),
             "till_sheet_missing": list(sheet.get("missing") or []) + [x["day"] for x in sheet.get("incomplete") or []],
             "till_sheet_waiting_to_deposit": [x["day"] for x in sheet.get("complete_not_deposited") or []],
+            "sheet_marks_written": len((r.get("sheet_marks") or {}).get("written") or []),
+            "sheet_marks_error": (r.get("sheet_marks") or {}).get("error", ""),
         }
         for d in r["days"]:
             if d["status"] in (ufd.HELD, ufd.WAITING_SHEET, ufd.NO_SALES):
@@ -699,8 +701,8 @@ def _vendor_hint(detail: str) -> str:
 def _bank_reason(reason: str) -> str:
     """A held deposit day's reason in a few plain words."""
     text = (reason or "").lower()
-    if "box is blank" in text:
-        return "cash box blank"
+    if "box is blank" in text or "sheet day is blank" in text:
+        return "till sales breakdown incomplete"
     if "differ" in text or "tolerance" in text or "outside" in text and "sheet total" in text:
         return "till sheet and sales differ by more than allowed"
     if "outside this tool" in text or "deposited" in text and "by hand" in text:
@@ -871,10 +873,12 @@ def slack_text(summary: dict) -> str:
                 elif d.get("status") == "HELD" and d["day"] not in stop_days:
                     oiat.append(f"banking for {short_day(d['day'])} is on hold: {_bank_reason(d.get('reason'))} → {run}")
             for reason, days in sheet_days.items():
-                if reason == "cash box blank":
-                    store.append(f"fill in the cash box on the till sheet for {day_list(days)} → {sheet}")
+                if reason == "till sales breakdown incomplete":
+                    store.append(f"complete the till sales breakdown for {day_list(days)} → {sheet}")
                 else:
                     store.append(f"check the till sheet for {day_list(days)} ({reason}) → {sheet}")
+            if c.get("sheet_marks_error"):
+                oiat.append(f"couldn't write the Banked notes on the till sheet (banking itself is fine) → {run}")
             # Escalate money that has sat in Undeposited Funds too long (normal waits stay quiet).
             limit = summary.get("uf_aged_days") or 7
             old = sorted((d for d in held if days_waiting(d["day"], summary["business_date"]) > limit),

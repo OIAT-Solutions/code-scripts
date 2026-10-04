@@ -83,14 +83,18 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
    - PO 3982 MEGA FROZEN FOODS ₦1.928M: link to QBO "Mega frozen Foods";
    - PO 3976 Uncle Sam's ₦72,000: "Approve repeat order" if real (after the rebuild).
 4. [ ] **Store:**
-   - fill in the CASH (System 1) box for 1–3 Oct;
+   - 1–3 Oct breakdowns are now complete (banked tonight);
    - **check 29 Sep** on the till sheet (₦4,392,900 vs EPOS sales ₦5,097,325);
    - one supplier per PO (PO 3970 named two).
 5. [ ] **Watch negative stock in QBO** (11 → 19 → 28 items). If it keeps rising after the held bills post, deliveries are not being recorded as EPOS POs.
 
-### A2. Till sheet "Funds Allocation" menu (Marvin's idea, 4 Oct)
-- [ ] **Sheet side:** Claude in Chrome builds it from the brief [`BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md`](BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md): a menu, a date-range modal, and a `Bank requests` tab (the sheet writes requests; it never calls the server).
-- [ ] **Server side (Claude):** a poller every ~10 min reads `Bank requests` and runs `uf_deposits` for From..To with all the gates (sales exist, sheet complete, tolerance, caps, idempotent), outside the daily-run window; Slack plus the portal. Optional write-back of Status / Result if Marvin gives the service account **edit** access to this one sheet.
+### A2. Till sheet feedback (Marvin, 4 Oct)
+- [x] **"Banked" notes in the till sheet** (`till_sheet_marks`). Column B of each day's title row shows:
+  - `✅ Banked · ₦… · <when>`;
+  - `⏸ Not banked: <reason>`, only for a real problem on a completed day.
+
+  Days still being filled in get no note. The marks never overwrite typed text and re-sync after every banking run (they backfill earlier days). The service account is now **Editor** on the sheet. Takes effect from the next rebuild.
+- [ ] **Parked (Marvin: too frequent):** the "Funds Allocation" menu plus a server poller every 10 min. Brief kept at `BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md`; don't hand it to Claude in Chrome for now.
 - [ ] **Later (Marvin):** a similar staff sheet for credit-sales invoices.
 
 ### B. Goldplates invoicing (in progress)

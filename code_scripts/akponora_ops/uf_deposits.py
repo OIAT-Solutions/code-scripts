@@ -1162,8 +1162,15 @@ def run_scheduled(out: Path, *, business_day: str, client: QBOClient, source, s:
                          "status": status, "reasons": reasons, "posted_now": posted_now})
         record_day(state, d["day"], status, reasons=reasons, run_dir=d["dir"], receipts_total=d["receipts_total"],
                    approval_ref=s["ref"] if posted_now else "")
+    marks = {}
     if not dry_run:
         write_state(state)
+        if isinstance(source, till_sheet.GoogleSheetSource):
+            # Owner, 4 Oct 2026: show "Banked" / "Not banked: <why>" next to each day's title in the sheet.
+            from code_scripts.akponora_ops import till_sheet_marks
+
+            marks = till_sheet_marks.sync_safely(state, sheet_id=source.sheet_id, key_path=source.key_path,
+                                                 upto=business_day)
     try:
         report = sheet_report(source, upto=business_day, state=state)
     except Exception as exc:  # noqa: BLE001 - the report is informational
@@ -1177,7 +1184,7 @@ def run_scheduled(out: Path, *, business_day: str, client: QBOClient, source, s:
     result = {"tool": TOOL, "business_date": business_day, "window": plan["window"], "auto_post": auto,
               "dry_run": dry_run, "days": days_out, "posted": posted, "stopped": stopped,
               "uf_balance": balance, "waiting": len(waiting), "run_dir": str(out), "till_sheet": report,
-              "counts": dict(Counter(d["status"] for d in days_out))}
+              "counts": dict(Counter(d["status"] for d in days_out)), "sheet_marks": marks}
     plan["till_sheet"] = report
     dump_json(out / "summary.json", plan)
     dump_json(out / "scheduled.json", result)
@@ -1240,6 +1247,10 @@ def cmd_post(a) -> int:
     elif res["stopped"]:
         record_day(state, res["day"], HELD, reasons=[f"post stopped: {res['stopped']}"], run_dir=a.plan_dir)
     write_state(state)
+    from code_scripts.akponora_ops import till_sheet_marks
+
+    s = settings()
+    res["sheet_marks"] = till_sheet_marks.sync_safely(state, sheet_id=s["sheet_id"], key_path=key_path(s))
     res["day_state"] = state["days"][res["day"]]["status"]
     res["uf_balance"] = uf_balance(client)
     print(json.dumps(res, indent=1, default=str))

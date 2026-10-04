@@ -471,7 +471,7 @@ class DepositTests(RegisterFixtures, TestCase):
         self.assertEqual(rows["2026-09-25"]["label"], "Banked")
         self.assertIn("Moved to the banks on 27 Sep 2026", rows["2026-09-25"]["message"])
         self.assertEqual(rows["2026-09-26"]["label"], "Waiting for till sheet")
-        self.assertIn("box is blank: ask the store to enter the amount or type 0", rows["2026-09-26"]["message"])
+        self.assertIn("The till sales breakdown for this day isn't complete yet.", rows["2026-09-26"]["message"])
         self.assertEqual(rows["2026-09-27"]["label"], "No sales posted yet")
         self.assertEqual(rows["2026-09-28"]["label"], "Needs attention")
         self.assertIn("more than the allowed ₦1,000.00", rows["2026-09-28"]["message"])
@@ -508,7 +508,7 @@ class DepositTests(RegisterFixtures, TestCase):
             "receipts total N20,000,000.00 is over the automatic cap N15,000,000.00 (OIAT_COMPANY_A_UF_AUTO_CAP) - post by hand with a chat yes": "automatic limit (₦15,000,000.00)",
             "post stopped: POST /deposit failed 400: bad": "stopped part-way",
             "no SalesReceipts in QBO for 2026-09-27 yet (sales not posted?)": "aren't in QuickBooks yet",
-            "CASH (System 1) box is blank (type 0 if there was no cash)": "The CASH (System 1) box is blank",
+            "CASH (System 1) box is blank (type 0 if there was no cash)": "The till sales breakdown for this day isn't complete yet.",
             "SYSTEM (EPOS total) box is blank - the day is not finished on the sheet": "SYSTEM total is blank",
             "sheet day is blank (all boxes empty or zero)": "is empty",
             "till sheet tab 'OCT 2026' has no block for 2026-10-02": "isn't filled in yet",

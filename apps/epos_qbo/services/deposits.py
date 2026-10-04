@@ -72,7 +72,7 @@ REASONS = [
     (re.compile(r"SYSTEM \(EPOS total\) box is blank"),
      lambda m: "The till sheet's SYSTEM total is blank, so the day isn't finished on the sheet."),
     (re.compile(r"^(.+?) box is blank"),
-     lambda m: f"The {m[1]} box is blank: ask the store to enter the amount or type 0."),
+     lambda m: "The till sales breakdown for this day isn't complete yet."),
     (re.compile(r"sheet day is blank"), lambda m: "The till sheet for this day is empty."),
     (re.compile(r"has \d+ blocks for"), lambda m: "This day appears twice on the till sheet. Remove the duplicate."),
     (re.compile(r"has no (?:tab|block for)"), lambda m: EXPLAIN["WAITING_SHEET"]),
