@@ -113,6 +113,8 @@ Facts and design discussed 4 Oct.
   - Before May, payments came from **Moniepoint 4686987227 (100202)** and **Petty Cash (100100)**.
   - Needs the Moniepoint statements (Jun → now) and the petty-cash records; match each payment to its bill and pay it on the real date from the real account. Do **not** bulk-mark as paid without evidence.
   - Water suppliers: Flourish ₦190,400 and Alpine ₦311,600 open, though EPOS says cash.
+- [ ] **Old cash POs (b, Marvin yes 4 Oct):** inside the bank reconciliation project, pay June–September bills that match an EPOS PO marked CASH from Petty Cash on their dates, after Marvin's yes on the list. Capture the June–August POs from EPOS first (only Sep–Oct are captured: 273 POs, 93 CASH, 179 TRANSFER, 1 blank; no transfer PO names its account). Transfer bills: match to the statements.
+- [ ] **Staff PO-note convention** (a, built 4 Oct): `MODE OF PAYMENT: CASH (PAID)` / `TRANSFER (PAID, MONIEPOINT 4686)` / `CREDIT` or `NOT PAID`. The bills step pays CASH (unless NOT PAID) from Petty Cash, and TRANSFER PAID + account from that bank (unique match only). Brief the store.
 - [ ] **Bank statements vs QBO** for every till account (Moniepoint ×6, Zenith, Petty Cash): reconcile monthly.
 - [ ] **29 Sep deposit hold:** ₦704,425 gap between the till sheet and sales.
 - [ ] **Till sheet higher than sales** by ₦700–₦3,150 a day (27, 28, 30 Sep). Investigate per tender; then the **Cash Over/Short** design: banks equal the sheet exactly and the difference goes to Over/Short (agreed 3 Oct), plus a clean-up journal for the days banked under option 1.

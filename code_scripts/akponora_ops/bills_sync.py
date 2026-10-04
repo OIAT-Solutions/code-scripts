@@ -214,6 +214,26 @@ def payment_mode(text) -> str:
     return t[:40]
 
 
+def payment_detail(note) -> tuple[str, str]:
+    """(paid, account) from the text after MODE OF PAYMENT on an EPOS PO note.
+
+    Staff convention (owner, 4 Oct 2026): ``CASH (PAID)``, ``TRANSFER (PAID, MONIEPOINT 4686)``,
+    ``CREDIT`` / ``NOT PAID``. paid is ``PAID``, ``NOT PAID`` or '' (not stated); account is the longest
+    run of 4+ digits (a bank account number or its last digits) or ''."""
+    m = _PAYMENT_RE.search(clean(note))
+    text = " ".join(clean(note)[m.end():].upper().split()) if m else ""
+    if not text:
+        return "", ""
+    if re.search(r"NOT\s*PAID|UNPAID|OWING|\bCREDIT\b|\bDEBT\b", text):
+        paid = "NOT PAID"
+    elif re.search(r"\bPAID\b", text):
+        paid = "PAID"
+    else:
+        paid = ""
+    digits = sorted(re.findall(r"\d{4,}", text), key=len)
+    return paid, (digits[-1] if digits else "")
+
+
 def parse_po_note(note) -> tuple[str, str, str]:
     """(supplier, payment mode, note) from an EPOS PO note. Tolerates the staff spellings seen on
     real POs: ``SUPPLIER:X   MODE OF PAYMENT:CASH``, ``SUPPLIER: BUNARICH  BREAD,  MODE OF PAYMENY:
@@ -424,6 +444,7 @@ def build_po(order: dict, detail: dict | None) -> dict:
     recv_at = parse_epos_ts(order.get("DateReceived")) or parse_epos_ts((detail or {}).get("DateCompleted"))
     supplier, payment, note = parse_po_note((detail or {}).get("Note") or order.get("Note"))
     payment = payment or payment_mode((detail or {}).get("PaymentMode") or order.get("PaymentMode"))
+    paid, pay_account = payment_detail(note)
     supplier_id = clean((detail or {}).get("SupplierId") or order.get("SupplierId"))
     lines = []
     for n, p in enumerate((detail or {}).get("Products") or [], start=1):
@@ -441,7 +462,8 @@ def build_po(order: dict, detail: dict | None) -> dict:
         "received_at": recv_at.isoformat(timespec="seconds") if recv_at else "",
         "received_date": business_date(recv_at).isoformat() if recv_at else "",
         "supplier": supplier, "supplier_id": "" if supplier_id in ("0", "None") else supplier_id,
-        "payment": payment, "note": note, "grn": ";".join(order.get("GoodsReceiptNumbers") or []),
+        "payment": payment, "payment_paid": paid, "payment_account": pay_account,
+        "note": note, "grn": ";".join(order.get("GoodsReceiptNumbers") or []),
         "total_ex": D(order.get("TotalValueReceivedExTax"), Decimal(0)),
         "total_inc": D(order.get("TotalValueReceived"), Decimal(0)),
         "has_detail": detail is not None, "lines": lines,
@@ -795,7 +817,9 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
             continue
         e["status"] = "READY"
         due, term_ref = due_date(txn, vendor, ctx.get("terms", {}))
-        note = (f"Payment hint: {po['payment'] or 'not stated'} (EPOS PO note; bill left UNPAID - pay in QBO) | "
+        hint = (po["payment"] or "not stated") + (f" {po['payment_paid']}" if po.get("payment_paid") else "") + (
+            f" from {po['payment_account']}" if po.get("payment_account") else "")
+        note = (f"Payment hint: {hint} (EPOS PO note; bill left UNPAID - pay in QBO) | "
                 f"EPOS PO {po['ref']} | GRN {po['grn'] or '-'} | received {po['received_at']} | supplier "
                 f"{po['supplier'] or '-'} | created by {TOOL} (tax mode {tax_mode})")
         payload = {

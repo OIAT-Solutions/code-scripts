@@ -21,6 +21,9 @@ class FakeQBO:
         self.payments, self.fail = [], fail
 
     def query_all(self, sql, entity):
+        if entity == "Account":
+            return [{"Id": "1150040002", "Name": "MONIEPOINT 4686987227"}, {"Id": "1150040001", "Name": "MONIEPOINT 4000700275"},
+                    {"Id": "1150040041", "Name": "MONIEPOINT 4000850527"}, {"Id": "29", "Name": "Petty Cash"}]
         assert entity == "Bill" and "TxnDate >= '2026-10-01'" in sql
         return [dict(b) for b in self.bills.values() if b["TxnDate"] >= "2026-10-01"]
 
@@ -56,10 +59,31 @@ class CashPaymentTests(unittest.TestCase):
         self.assertEqual(p["CheckPayment"]["BankAccountRef"]["value"], "29")  # 100100 Petty Cash
         self.assertEqual(p["TxnDate"], "2026-10-03")
         self.assertEqual(p["Line"][0]["LinkedTxn"], [{"TxnId": "3978", "TxnType": "Bill"}])
-        self.assertIn("MODE OF PAYMENT CASH", p["PrivateNote"])
+        self.assertIn("Paid on delivery per EPOS PO 3978 (Payment hint: CASH)", p["PrivateNote"])
         # a second run pays nothing (the bills are at balance 0)
         self.assertEqual(bp.pay_cash_bills(fake, env={})["paid"], [])
         self.assertEqual(len(fake.payments), 2)
+
+    def test_po_note_convention_paid_not_paid_and_account(self):
+        fake = FakeQBO([bill(10, hint="CASH NOT PAID"), bill(11, hint="TRANSFER PAID from 4686"),
+                        bill(12, hint="TRANSFER PAID"), bill(13, hint="TRANSFER PAID from 4000"),
+                        bill(14, hint="CREDIT"), bill(15, hint="CASH PAID")])
+        res = bp.pay_cash_bills(fake, env={})
+        self.assertEqual({r["doc"]: r["account"] for r in res["paid"]},
+                         {"EPOS-PO-11": "1150040002", "EPOS-PO-15": "29"})
+        # 13: '4000' matches two Moniepoint accounts -> left open; 12: no account -> open; 10/14 not paid
+
+    def test_bills_sync_reads_the_convention_from_the_po_note(self):
+        from code_scripts.akponora_ops import bills_sync as bs
+        cases = {"SUPPLIER: X MODE OF PAYMENT: CASH (PAID)": ("PAID", ""),
+                 "SUPPLIER: X MODE OF PAYMENT: TRANSFER (PAID, MONIEPOINT 4686)": ("PAID", "4686"),
+                 "SUPPLIER: X MODE OF PAYMENT:TRANSFER(PAID)": ("PAID", ""),
+                 "SUPPLIER: X MODE OF PAYMENT: CASH NOT PAID": ("NOT PAID", ""),
+                 "SUPPLIER: X MODE OF PAYMENT: CREDIT": ("NOT PAID", ""),
+                 "SUPPLIER: X MODE OF PAYMENT:TRANSFER": ("", ""),
+                 "SUPPLIER: X": ("", "")}
+        for note, want in cases.items():
+            self.assertEqual(bs.payment_detail(note), want, note)
 
     def test_caps_off_switch_dry_run_and_failure(self):
         fake = FakeQBO([bill(1), bill(2), bill(3, balance=2500000.0)])
