@@ -305,6 +305,9 @@ def receipts_from_po_capture(po_list_path, po_details_path, ids) -> dict[str, li
     return dict(out)
 
 
+PULL_ATTEMPTS = 3
+
+
 class LiveEpos:
     """VIEW-ONLY EPOS: catalogue list, Advanced Edit pages (master links + stock), PO list/details."""
 
@@ -316,15 +319,19 @@ class LiveEpos:
     def catalogue(self) -> list[dict]:
         ev = self.out / "epos_catalogue"
         ev.mkdir(parents=True, exist_ok=True)
-        captured = pull(ev, COMPANY, False, headless=self.headless)
-        products = products_from_captures(captured)
-        write_products(ev, products)
-        totals = [(c.get("body") or {}).get("Metadata", {}).get("TotalRecords") for c in captured
-                  if isinstance(c.get("body"), dict)]
-        total = max((t for t in totals if t), default=0)
-        if total and len(products) < total:
-            raise StopRun(f"EPOS catalogue pull incomplete: {len(products)} of {total} products")
-        return [normalize_product(p) for p in products]
+        # The list page occasionally drops one page's API response (5 Oct 2026: 5893 of 6143); pull again.
+        for attempt in range(1, PULL_ATTEMPTS + 1):
+            captured = pull(ev, COMPANY, False, headless=self.headless)
+            products = products_from_captures(captured)
+            write_products(ev, products)
+            totals = [(c.get("body") or {}).get("Metadata", {}).get("TotalRecords") for c in captured
+                      if isinstance(c.get("body"), dict)]
+            total = max((t for t in totals if t), default=0)
+            if not total or len(products) >= total:
+                return [normalize_product(p) for p in products]
+            print(f"EPOS catalogue pull incomplete (attempt {attempt}/{PULL_ATTEMPTS}): "
+                  f"{len(products)} of {total} products", flush=True)
+        raise StopRun(f"EPOS catalogue pull incomplete: {len(products)} of {total} products")
 
     def scrape(self, ids) -> dict[str, dict | None]:
         ev = self.out / "epos_products"

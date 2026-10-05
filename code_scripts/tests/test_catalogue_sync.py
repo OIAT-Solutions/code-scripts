@@ -407,5 +407,32 @@ class EnsureProductsMappedTests(Base):
         self.assertIn("601", reg.by_product_id)
 
 
+class LiveCataloguePullRetryTests(unittest.TestCase):
+    """A dropped API page on the EPOS list (5893 of 6143) is pulled again, not a failed night."""
+
+    @staticmethod
+    def _captures(n, total):
+        return [{"body": {"Metadata": {"TotalRecords": total}, "Data": [{"Id": i, "Name": f"P{i}"} for i in range(n)]}}]
+
+    def _run(self, results):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(cs, "pull", side_effect=results) as pull, \
+                mock.patch.object(cs, "products_from_captures", side_effect=lambda c: c[0]["body"]["Data"]), \
+                mock.patch.object(cs, "write_products"):
+            try:
+                return cs.LiveEpos(Path(tmp)).catalogue(), pull.call_count
+            except cs.StopRun as exc:
+                return exc, pull.call_count
+
+    def test_incomplete_pull_is_retried(self):
+        products, calls = self._run([self._captures(2, 3), self._captures(3, 3)])
+        self.assertEqual((len(products), calls), (3, 2))
+
+    def test_stops_after_the_last_attempt(self):
+        result, calls = self._run([self._captures(2, 3)] * cs.PULL_ATTEMPTS)
+        self.assertIsInstance(result, cs.StopRun)
+        self.assertEqual(calls, cs.PULL_ATTEMPTS)
+
+
 if __name__ == "__main__":
     unittest.main()
