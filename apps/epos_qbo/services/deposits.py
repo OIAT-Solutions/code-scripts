@@ -242,7 +242,8 @@ def day_rows(state, plans, report, tol, end):
         else:
             message = EXPLAIN.get(status, "Not checked yet.")
         sales = r.number(doc.get("receipts_total") if doc.get("receipts_total") is not None else entry.get("receipts_total"))
-        sheet = r.number(doc.get("sheet_total"))
+        sheet_incomplete = status == "WAITING_SHEET"
+        sheet = None if sheet_incomplete else r.number(doc.get("sheet_total"))
         diff = sheet - sales if sheet is not None and sales is not None else None
         abs_tol, pct = tol.get("OIAT_COMPANY_A_UF_TOLERANCE"), tol.get("OIAT_COMPANY_A_UF_TOLERANCE_PCT")
         allowed = max(abs_tol, sales * pct / Decimal(100)) if None not in (abs_tol, pct, sales) else None
@@ -339,6 +340,7 @@ def context(request):
         deposit_missing=[date.fromisoformat(d) for d in missing if r.ops.DATE_RE.fullmatch(str(d))],
         deposit_incomplete=[x.get("day") for x in report.get("incomplete") or [] if isinstance(x, dict)],
         deposit_report_text=report.get("text", ""), deposit_waiting=sum(row["status"] in {"READY", "HELD"} for row in rows),
+        deposit_incomplete_count=sum(row["status"] == "WAITING_SHEET" for row in rows),
         deposit_sheet_url=sheet_url(), deposit_enabled=os.getenv(r.ops.UF_ENV, "").strip().lower() in {"1", "true", "yes", "on"},
         deposit_job=latest_job(), deposit_tolerance=tol, deposit_tolerance_overrides=settings_overrides() if settings_path().exists() else {},
         deposit_accounts=[dict(line=a.get("Till sheet line", ""), tid=a.get("Terminal / TID", ""), number=a.get("QBO account number", ""),

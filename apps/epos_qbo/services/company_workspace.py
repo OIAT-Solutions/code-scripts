@@ -63,7 +63,10 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
                 }[active]
                 for field, label in fields:
                     if field in step.counts and not run.dry_run:
-                        facts.append((label, step.counts[field]))
+                        value = step.counts[field]
+                        if active == "deposits" and isinstance(value, (list, tuple)):
+                            value = len(value)
+                        facts.append((label, value))
                 outcome = messages.step_outcome(step, run.dry_run)
                 if active == "suppliers" and not run.dry_run:
                     held = experience.money(step.counts.get("vendors_held"))

@@ -87,7 +87,7 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | Merge PR #62 to `master` after the first clean week | Marvin |
 
 | [ ] | Portal redesign phases 2–3 (brief: `docs/CODEX_BRIEF_PORTAL_REDESIGN.md`) | Codex |
-| [ ] | **Client dashboard (future):** a separate, simple dashboard for Company A staff: fill in the till breakdown as a form, mark bills paid, see the product catalogue and items needing fixes. The OIAT Portal stays for OIAT staff | Team |
+| [ ] | **Client dashboard (future):** a separate, simple dashboard for Company A staff: fill in the till breakdown as a form, mark bills paid, see the product catalogue and items needing fixes. The OIAT Portal stays for OIAT staff. Agency/internal client-workspace delivery is tracked separately in `OIAT_PORTAL_DELIVERY_PLAN.md`; first UX fixes are local only | Team |
 
 ## 6. Accounting follow-ups (year-end or accountant)
 

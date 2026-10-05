@@ -65,6 +65,8 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 ## 3. Current focus (Marvin's order, one at a time)
 
+**Local portal UX work (Codex, 5 Oct):** Marvin requested an agency/client-workspace plan and authorized local previews. See `OIAT_PORTAL_DELIVERY_PLAN.md` (also copied to the operations-console repo). Branch `codex/oiat-portal-ux`, managed worktree `/Users/marvinmokolo/.codex/worktrees/oiat-portal-ux/code-scripts`. First slice corrects trading-date blockers, incomplete-sheet comparisons and deposit activity counts, and improves Home/company wording. Preview uses synthetic state at `/private/tmp/oiat-portal-ux-preview` and loopback `http://127.0.0.1:8014`. No accounting-engine changes or deployment. This does not replace the financial work below. Validation/checkpoint details: `PORTAL_UX_PHASE1_CHECKPOINT.md`.
+
 1. **Goldplates invoicing**, now (§4 B).
 2. **Bank reconciliation**, next (§4 C), which includes the ₦200.6M unpaid-bills backlog.
 3. **Credit sales**, after that (§4 D).

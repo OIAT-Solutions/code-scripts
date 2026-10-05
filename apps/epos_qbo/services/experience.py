@@ -215,7 +215,7 @@ def home_context(company_key="", now=None, token_health=None):
     rows, banners, total, confirmed_count, amounts = [], [], Decimal(0), 0, []
     for company in companies:
         key = company.company_key
-        waiting = len(items) if key == "company_a" else 0
+        waiting = sum(item.get("company_key", "company_a") == key for item in items)
         if key == "company_a":
             start = max(window_start, date(2026, 10, 1))
             confirmed, artifact_latest = artifact_confirmation(key, start, expected)

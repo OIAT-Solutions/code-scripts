@@ -133,6 +133,16 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(len(response.context['company_sales_page']),2)
         self.assertContains(response,'tab=sales&amp;page=1')
 
+    def test_deposit_activity_shows_counts_instead_of_record_lists(self):
+        self.make_run('2026-10-02', 'run_170000Z', _summary('2026-10-02', steps=[
+            _step('uf', counts={'deposited': [{'day': '2026-09-25', 'by_bank': {'77': '100'}}],
+                                'held': [{'day': '2026-09-26'}, {'day': '2026-09-27'}]})]))
+        response = self.client.get(self.url, {'tab': 'deposits'})
+        facts = dict(response.context['company_step_activity'][0]['facts'])
+        self.assertEqual(facts['Days deposited'], 1)
+        self.assertEqual(facts['Days needing review'], 2)
+        self.assertNotContains(response, "'by_bank'")
+
     def test_unknown_step_does_not_look_finished(self):
         outcome=messages.step_outcome(company_a_ops.Step(name='bills', label='Bills', status='unknown'))
         self.assertEqual(outcome['label'],'Not confirmed')

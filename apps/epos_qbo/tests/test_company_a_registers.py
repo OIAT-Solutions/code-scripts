@@ -464,6 +464,23 @@ class DepositTests(RegisterFixtures, TestCase):
         self.assertEqual(response.context["deposit_errors"], [])
         self.assertContains(response, "Not checked yet")
 
+    def test_incomplete_sheet_does_not_display_zero_or_a_false_difference(self):
+        rows = deposits.day_rows(
+            {"2026-09-25": {"status": "WAITING_SHEET"}},
+            {"2026-09-25": ({"sheet_total": "0", "receipts_total": "100000"}, None)},
+            {}, deposits.settings(), date(2026, 9, 25))
+        self.assertEqual(rows[0]["sheet"], "Not entered")
+        self.assertEqual(rows[0]["difference"], "")
+        self.assertFalse(rows[0]["outside"])
+
+    def test_entered_zero_is_still_a_real_comparison(self):
+        rows = deposits.day_rows(
+            {"2026-09-25": {"status": "HELD"}},
+            {"2026-09-25": ({"sheet_total": "0", "receipts_total": "100000"}, None)},
+            {}, deposits.settings(), date(2026, 9, 25))
+        self.assertEqual(rows[0]["sheet"], "₦0.00")
+        self.assertTrue(rows[0]["outside"])
+
     def test_every_state_has_a_plain_label_and_cards(self):
         self.full_fixture()
         response = self.client.get(self.page, {"tab": "deposits"})

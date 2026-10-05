@@ -7,13 +7,13 @@ import json
 import re
 from datetime import date, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from django.urls import reverse
 from django.utils import timezone
 
 from . import company_a_ops as ops
 from ..models import CompanyConfigRecord, RunJob, PortalReviewAction
+from ..business_date import get_target_trading_date
 
 
 def safe_path(path):
@@ -353,7 +353,7 @@ def inbox():
 def blockers(now=None):
     """Operational failures are red regardless of the old dashboard warning classification."""
     now = now or timezone.now()
-    expected = now.astimezone(ZoneInfo("Africa/Lagos")).date() - timedelta(days=1)
+    expected = get_target_trading_date(now)
     out = []
     for company in CompanyConfigRecord.objects.filter(is_active=True):
         if company.company_key == "company_a":
@@ -377,9 +377,8 @@ def blockers(now=None):
             jobs = RunJob.objects.filter(company_key=company.company_key, scope=RunJob.SCOPE_SINGLE).order_by("-created_at")
             job = jobs.first()
             # Successful artifact evidence is needed: a successful subprocess may merely skip sales.
-            from ..models import RunArtifact
-            artifact = RunArtifact.objects.filter(company_key=company.company_key, kind=RunArtifact.KIND_SALES_UPLOAD, reconcile_status="MATCH").order_by("-target_date").first()
-            latest = artifact.target_date if artifact else None
+            from .experience import artifact_confirmation
+            _, latest = artifact_confirmation(company.company_key, expected - timedelta(days=29), expected)
             reason = ""
             if job and job.status == RunJob.STATUS_FAILED and (not latest or not job.target_date or job.target_date > latest):
                 reason = "Sales did not post. Open the failed run, fix the cause, then retry the day."
