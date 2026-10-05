@@ -67,6 +67,8 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 **Portal UX slice 2 (Codex, 5 Oct, local only):** unified schedule overview with Active/Paused/History, execution timestamps separated from business dates, sales evidence before diagnostics, collapsible successful steps and grouped Akponora downloads. See `PORTAL_UX_SLICE2_CHECKPOINT.md`. Existing schedule mutation controls remain guarded in a labeled disclosure. No server or accounting changes.
 
+**Schedules follow-up (Codex, 5 Oct, local only):** removed backend ownership explanations from the main schedule interface and simplified the disclosure to Schedule settings. Browser review and 45 relevant tests passed. `CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` is ready for Marvin to relay to Claude for a separate, tested scheduling-authority consolidation. Production activation remains a separate approval.
+
 **Local portal UX work (Codex, 5 Oct):** Marvin requested an agency/client-workspace plan and authorized local previews. See `OIAT_PORTAL_DELIVERY_PLAN.md` (also copied to the operations-console repo). Branch `codex/oiat-portal-ux`, managed worktree `/Users/marvinmokolo/.codex/worktrees/oiat-portal-ux/code-scripts`. First slice corrects trading-date blockers, incomplete-sheet comparisons and deposit activity counts, and improves Home/company wording. Preview uses synthetic state at `/private/tmp/oiat-portal-ux-preview` and loopback `http://127.0.0.1:8014`. No accounting-engine changes or deployment. This does not replace the financial work below. Validation/checkpoint details: `PORTAL_UX_PHASE1_CHECKPOINT.md`.
 
 1. **Goldplates invoicing**, now (§4 B).
