@@ -1112,6 +1112,25 @@ def unmapped_raw_product_ids(raw_file: str, config) -> set[str]:
     return {pid for pid in ids if pid and pid not in registry.by_product_id}
 
 
+def split_credit_sales(company_key: str, business_date: str, raw_file: str) -> str:
+    """Company A: take EPOS Credit-tender rows out of the SalesReceipt path (code_scripts/credit_sales.py).
+
+    The credit rows are saved for the daily routine's ``credit`` step (one QBO Invoice per customer);
+    returns the raw file the transform should use."""
+    from code_scripts import credit_sales
+
+    if not credit_sales.enabled(company_key):
+        return raw_file
+    path, stats = credit_sales.split_raw(raw_file, business_date)
+    if stats["credit_rows"] or stats["mixed_rows"]:
+        logging.info(
+            f"Credit sales {business_date}: {stats['credit_rows']} row(s) N{stats['credit_total']:,.2f} "
+            f"({', '.join(stats['customers']) or 'no name'}) kept out of the sales receipts for invoicing; "
+            f"{stats['mixed_rows']} mixed-tender row(s) N{stats['mixed_total']:,.2f} held for review"
+        )
+    return path
+
+
 def catalogue_sync_before_transform(company_key: str, business_date: str, config, raw_file: str) -> None:
     """Company A: map (and, when automated creates are on, create) new EPOS products sold today.
 
@@ -1649,6 +1668,7 @@ def main(
                     warnings.append(f"{day_date}: merged target split ({merge_stats['base_rows']} rows) + raw spill ({merge_stats['extra_rows']} rows) -> final ({merge_stats['total_rows']} rows)")
                 
                 catalogue_sync_before_transform(company_key, day_date, config, raw_file_to_use)
+                raw_file_to_use = split_credit_sales(company_key, day_date, raw_file_to_use)
 
                 # Phase 2: Transform using raw file (combined or original)
                 run_step(
@@ -1988,6 +2008,7 @@ def main(
                 watchdog_sent = True
             
             catalogue_sync_before_transform(company_key, target_date, config, raw_file_to_use)
+            raw_file_to_use = split_credit_sales(company_key, target_date, raw_file_to_use)
 
             # Phase 2: Transform using raw file (combined or original)
             run_step(

@@ -43,6 +43,7 @@ STEP_LABELS = {
     "catalogue": "Products",
     "bills": "Bills",
     "sales": "Sales",
+    "credit": "Credit sales",
     "guard": "Health check",
     "uf": "Deposits",
     "deposits": "Deposits",

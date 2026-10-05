@@ -122,6 +122,14 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 - [ ] **Parked (Marvin: too frequent):** the "Funds Allocation" menu plus a server poller every 10 min. Brief kept at `BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md`; don't hand it to Claude in Chrome for now.
 - [ ] **Later (Marvin):** a similar staff sheet for credit-sales invoices.
 
+### B0. Credit sales -> QBO invoices (built 5 Oct)
+- [x] EPOS Credit tender switched on 5 Oct; the BookKeeping export carries the customer name + EPOS customer ID on each credit row.
+- [x] Sales path: Credit-tender rows are kept out of the SalesReceipts (no Undeposited Funds, no till-sheet mismatch) and saved per day (`code_scripts/credit_sales.py`). Mixed tenders (`Cash/Credit`) are held for review.
+- [x] Daily routine step `credit` (`akponora_ops/credit_invoices.py`): one Invoice per customer per day (`CR<yymmdd>-<EPOS id>`), same product mapping as sales, exact AKP item Ids; every Goldplates account -> QBO customer `GPFH`; new customers created with the EPOS name (Marvin: "create any new customers"); cap N5M per invoice.
+- [x] Read-only plan for 5 Oct on the server: Mrs VERA AKPOREHA N58,200 (4 lines) + Mr Precious Akporeha N1,600 (3 lines) = N59,800 = EPOS.
+- [ ] Posting: `OIAT_COMPANY_A_CREDIT_INVOICES=post` in `.env` after Marvin's yes (until then the plan waits in Slack / the run).
+- [ ] Later: repayments ("pay on account" / EPOS Customer Credit report -> ReceivePayment).
+
 ### B. Credit sales (PAUSED 5 Oct: the team is sorting out the EPOS till / credit-sale process)
 - **Direction (5 Oct):** use **EPOS credit sales on the existing customer accounts** instead of a separate sheet.
   - EPOS already has accounts for GOLDPLATE RESTAURANT – TALEA MALL / AYANGBUREN / DREAM PARK, BASK LOUNGE, JIFA FELIX, VERA AKPOREHA and OIAT. TALEA MALL has Max Credit ₦9M and balance ₦0 (never used).

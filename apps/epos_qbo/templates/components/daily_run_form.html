@@ -1,7 +1,7 @@
 <form method="get" action="{% url 'epos_qbo:attention-confirm' %}" class="flex flex-wrap items-end gap-4">
 <input type="hidden" name="action" value="daily">
 <label class="text-sm font-medium">Business date<input class="portal-input mt-2" type="date" name="date" min="2026-10-01"></label>
-<label class="text-sm font-medium">Steps<select class="portal-input mt-2" name="only"><option value="">Whole day</option><option value="catalogue">Products</option><option value="bills">Suppliers and bills</option><option value="sales">Sales</option><option value="guard">Health check</option><option value="stock">Stock check</option><option value="uf">Deposits</option></select></label>
+<label class="text-sm font-medium">Steps<select class="portal-input mt-2" name="only"><option value="">Whole day</option><option value="catalogue">Products</option><option value="bills">Suppliers and bills</option><option value="sales">Sales</option><option value="credit">Credit sales (invoices)</option><option value="guard">Health check</option><option value="stock">Stock check</option><option value="uf">Deposits</option></select></label>
 <label class="text-sm font-medium">Mode<select class="portal-input mt-2" name="mode"><option value="dry">Preview · nothing will be posted</option><option value="post">Post · owner's approval required</option></select></label><button class="btn btn-primary" type="submit">Review run</button>
 <p class="portal-muted w-full">Leave the date blank for the last closed business day.</p>
 </form>

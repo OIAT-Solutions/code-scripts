@@ -240,7 +240,7 @@ class DailyRunTests(unittest.TestCase):
 
         with mock.patch.object(dr.DailyRun, "step_uf", fake_uf):
             summary = self.make(FakeRunner(), env={**STANDING, dr.UF_ENV: "1"}).execute()
-        self.assertEqual(seen, [["catalogue", "bills", "sales", "guard", "stock"]])
+        self.assertEqual(seen, [["catalogue", "bills", "sales", "credit", "guard", "stock"]])
         step = {s["name"]: s for s in summary["steps"]}["uf"]
         self.assertEqual(step["status"], dr.FAILED)
         self.assertIn("sheet unreachable", step["detail"])

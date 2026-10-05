@@ -16,6 +16,9 @@ Default business date = the last CLOSED Lagos business day (05:00 cutoff): run a
    the standing auto-approval (full mapping + EPOS totals); without it, a dry-run is built and
    the day waits for review. Runs after bills so stock arrives before it is sold. Skipped when
    the posting hold is already in place.
+3b. ``credit``    EPOS credit sales -> one QBO Invoice per customer per day (``credit_invoices``). The
+   sales path already left the Credit-tender rows out of the SalesReceipts (``code_scripts/credit_sales``).
+   Posts only with ``OIAT_COMPANY_A_CREDIT_INVOICES=post``; otherwise the plan waits for review.
 4. ``guard``      item_guard read-only scan (report only).
 5. ``stock``      stock_snapshot ``run`` (READ-ONLY): EPOS stock report vs QBO QtyOnHand per family,
    written to ``STATE_ROOT/ops/company_a/stock_snapshot/latest.json`` for the portal's Products &
@@ -63,7 +66,7 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
-STEPS = ("catalogue", "bills", "sales", "guard", "stock", "uf")
+STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "uf")
 DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
@@ -145,7 +148,7 @@ class DailyRun:
     def __init__(self, business_day: str, *, dry_run: bool = False, only: list[str] | None = None,
                  root: Path | None = None, runner: Callable = run_command, slack: Callable | None = None,
                  send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
-                 uf_sheet=None, python: str = sys.executable):
+                 uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
@@ -156,6 +159,8 @@ class DailyRun:
         self.uf_client = uf_client
         self.uf_write_client = uf_write_client
         self.uf_sheet = uf_sheet
+        self.credit_client = credit_client
+        self.credit_write_client = credit_write_client
         self.python = python
         stamp = datetime.now(timezone.utc).strftime("%H%M%SZ")
         self.day_dir = Path(root) if root else _daily_root() / business_day
@@ -329,6 +334,43 @@ class DailyRun:
             res.status = FAILED
             res.detail = (f"{standing_note + '; ' if standing_note else ''}run_pipeline exited {rc}; "
                           f"see {out / 'log.txt'}")
+
+    def step_credit(self, res: StepResult) -> None:
+        """EPOS credit sales -> one QBO Invoice per customer per day (credit_invoices, in-process)."""
+        from code_scripts.akponora_ops import credit_invoices as ci
+        from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
+
+        if not ci.days_to_do(self.date):
+            res.status, res.detail = OK, "no credit sales"
+            res.counts = {"mode": "", "invoices": [], "mixed": [], "customers_created": [], "posted_total": "0"}
+            return
+        client = self.credit_client or QBOClient.for_company_a(allow_writes=False)
+        write = None
+        if ci.mode(self.base_env) == "post" and not self.dry_run:
+            write = self.credit_write_client or QBOClient.for_company_a(allow_writes=True)
+        r = ci.run(Path(res.out), business_day=self.date, client=client, write_client=write,
+                   dry_run=self.dry_run, env=self.base_env)
+        invoices = r["invoices"]
+        res.counts = {"mode": r["mode"], "invoices": invoices, "mixed": r["mixed"],
+                      "customers_created": r["customers_created"],
+                      "posted_total": str(sum(ci.money(i.get("total")) for i in invoices if i["status"] == ci.POSTED))}
+        for i in invoices:
+            if i["status"] == ci.HELD:
+                res.review.append(f"credit {i['day']} {i['doc']} {', '.join(i['epos_names'])}: {i.get('reason', '')}")
+            elif i["status"] == ci.PLANNED and not self.dry_run:
+                res.review.append(f"credit {i['day']} {i['doc']} {', '.join(i['epos_names'])} N{i.get('total')}: "
+                                  f"planned, not posted ({ci.MODE_ENV}=post to post)")
+        for m in r["mixed"]:
+            res.review.append(f"credit {m['day']}: {m['rows']} mixed-tender row(s) N{m['total']} "
+                              f"({', '.join(m['customers'])}) not invoiced")
+        if r["failed"]:
+            res.status = REVIEW
+        elif res.review:
+            res.status = REVIEW
+        else:
+            res.status = OK
+        if not invoices and not r["mixed"]:
+            res.detail = "no credit sales"
 
     def step_guard(self, res: StepResult) -> None:
         out = Path(res.out)
@@ -582,7 +624,7 @@ def technical_text(summary: dict) -> str:
 
 
 # ---------------------------------------------------------------- the Slack messages (plain English)
-STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "guard": "Item check",
+STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "credit": "Credit sales", "guard": "Item check",
               "stock": "Stock", "uf": "Banking"}
 SHEET_URL = "https://docs.google.com/spreadsheets/d/{}"
 
@@ -826,6 +868,42 @@ def slack_text(summary: dict) -> str:
                 text += f" · *doesn't match EPOS* (EPOS {naira_text(c.get('epos_total'))})"
                 oiat.append(f"sales don't match EPOS → {run}")
         section("Sales", text)
+
+    # Credit sales: invoices to customers (Accounts Receivable), kept out of the sales receipts
+    if status("credit") not in (None, SKIPPED, DISABLED):
+        c = counts("credit")
+        invoices, mixed = c.get("invoices") or [], c.get("mixed") or []
+        if status("credit") == FAILED:
+            stopped.append("credit sales didn't run")
+            oiat.append(f"credit sales didn't run → {run}")
+            section("Credit", "didn't run")
+        elif invoices or mixed:
+            done = [i for i in invoices if i.get("status") in ("posted", "already in QuickBooks")]
+            new = [i for i in invoices if i.get("status") == "posted"]
+            planned = [i for i in invoices if i.get("status") == "planned"]
+            held = [i for i in invoices if i.get("status") == "held"]
+            total = sum(Decimal(str(i.get("total") or 0)) for i in new)
+            if new:
+                text = f"{naira_text(total)} invoiced ({_plural(len(new), 'customer')})"
+            elif planned:
+                ptotal = sum(Decimal(str(i.get("total") or 0)) for i in planned)
+                text = f"{naira_text(ptotal)} ready to invoice ({_plural(len(planned), 'customer')}), nothing posted"
+            elif done:
+                text = "already invoiced"
+            else:
+                text = "nothing invoiced"
+            bullets = [f"{i.get('customer') or ', '.join(i.get('epos_names') or [])} · {naira_text(i.get('total'))}"
+                       f"{' (new customer)' if i.get('new_customer') or any(x.get('epos_id') == i.get('customer_key') for x in c.get('customers_created') or []) else ''}"
+                       for i in new + planned]
+            section("Credit", text, bullets)
+            if planned and not dry:
+                you.append(f"credit sales are planned, not posted: say yes to switch on invoicing → {run}")
+            for i in held:
+                oiat.append(f"credit sale for {', '.join(i.get('epos_names') or ['?'])} ({naira_text(i.get('total'))}) "
+                            f"is on hold → {run}")
+            for m in mixed:
+                you.append(f"{_plural(m.get('rows') or 0, 'sale line')} on {human_day(m['day'])} mixed credit with another "
+                           f"tender ({', '.join(m.get('customers') or ['no name'])}): book by hand → {run}")
 
     # Bills: what posted, then cash paid, then what waits / was noted
     if status("bills") not in (None, SKIPPED, DISABLED):
