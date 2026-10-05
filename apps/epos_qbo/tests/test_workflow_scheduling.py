@@ -330,3 +330,37 @@ class ReviewFixTests(Base):
             ops_scheduler.run_scheduler(sleep=flip_then_sleep, now=lambda: next(clock), max_cycles=2)
         os.environ.pop(workflows.OWNER_ENV, None)
         self.assertEqual(runs, [])
+
+
+
+class SchedulesPageTests(Base):
+    """Marvin, 5 Oct: one row per workflow - no env-cron row next to the portal schedule."""
+
+    def setUp(self):
+        super().setUp()
+        from django.contrib.auth.models import User
+
+        CompanyConfigRecord.objects.create(company_key="company_a", display_name="AKPONORA VENTURES LTD.", is_active=True)
+        self.client.force_login(User.objects.create_superuser("admin", "", "pw"))
+        self.make_run("2026-10-04", "run_110000Z_dry", _summary("2026-10-04", dry=True))  # a dry run in progress
+
+    def rows(self):
+        from django.urls import reverse
+
+        return self.client.get(reverse("epos_qbo:schedules")).context["schedule_display_rows"]
+
+    def test_portal_owner_shows_one_daily_routine_row(self):
+        self.env(PORTAL_ENV)
+        self.nora_schedule(enabled=True)
+        routine = [r for r in self.rows() if r["name"] == "Daily routine"]
+        self.assertEqual(len(routine), 1)
+        self.assertEqual(routine[0]["company"], "AKPONORA VENTURES LTD.")
+        self.assertEqual(routine[0]["outcome"], "Not recorded")  # the dry run is not the last attempt
+        self.assertFalse([r for r in self.rows() if r["name"] == workflows.DAILY_NAME])
+
+    def test_ops_owner_shows_only_the_env_row(self):
+        self.env(OPS_ENV)
+        self.nora_schedule(enabled=False)
+        routine = [r for r in self.rows() if r["name"] == "Daily routine"]
+        self.assertEqual(len(routine), 1)
+        self.assertEqual(routine[0]["outcome"], "Not recorded")

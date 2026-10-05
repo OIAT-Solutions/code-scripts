@@ -2361,22 +2361,51 @@ def schedules_page(request):
     state = request.GET.get("state", "active")
     if state not in {"active", "paused", "history"}:
         state = "active"
+    from .services import company_a_ops as ops
+    from .services import workflows
+
+    def last_real_daily_run():
+        try:
+            runs = ops.list_runs(limit=1, include_dry=False)  # a dry run is never the last attempt
+        except Exception:  # noqa: BLE001
+            runs = []
+        return runs[0] if runs else None
+
+    def daily_outcome(last):
+        if not last:
+            return "Not recorded"
+        return {"ok": "Completed", "clean": "Completed", "review": "Needs review",
+                "failed": "Could not finish"}.get(last.status, "Outcome not confirmed")
+
     display_rows = []
-    company_a_row = company_a_views.safe_schedule_row()
+    # One row per workflow: once the portal schedule owns Nora's routine, the env-cron row is not shown.
+    company_a_row = None if workflows.portal_owns_company_a_daily() else company_a_views.safe_schedule_row()
     if company_a_row:
         sched = company_a_row["schedule"]
-        last = company_a_row["last_run"]
+        last = last_real_daily_run()
         display_rows.append(dict(
             name="Daily routine", company=company_map.get("company_a", "Akponora"),
             state="active" if sched["enabled"] else "paused",
             timing=sched.get("time_label"), zone="Africa/Lagos",
             next_run=sched.get("next_run"), last_run=last.finished_at if last else None,
             business_date=last.business_date if last else None,
-            outcome={"ok": "Completed", "clean": "Completed", "review": "Needs review", "failed": "Could not finish"}.get(last.status, "Outcome not confirmed") if last else "Not recorded",
+            outcome=daily_outcome(last),
             managed=True, url=reverse("epos_qbo:company-a-run-detail", args=[last.business_date, last.run_id]) if last else "",
         ))
     for row in schedule_rows:
         schedule = row["schedule"]
+        if schedule.scope == RunJob.SCOPE_COMPANY_A_DAILY:
+            if company_a_row is not None:
+                continue  # the env cron still owns it: the row above is the one that runs
+            last = last_real_daily_run()
+            display_rows.append(dict(
+                name="Daily routine", company=company_map.get(schedule.company_key or "company_a", "Akponora"),
+                state="active" if schedule.enabled else "paused", timing=row["timing_primary"],
+                zone=schedule.timezone_name, next_run=schedule.next_fire_at if schedule.enabled else None,
+                last_run=last.finished_at if last else None, business_date=last.business_date if last else None,
+                outcome=daily_outcome(last), managed=False,
+                url=reverse("epos_qbo:company-a-run-detail", args=[last.business_date, last.run_id]) if last else ""))
+            continue
         display_rows.append(dict(name=row["display_name"], company=row["business_subtitle"],
             state="history" if row["one_time_completed"] else "active" if schedule.enabled else "paused",
             timing=row["timing_primary"], zone=schedule.timezone_name,
