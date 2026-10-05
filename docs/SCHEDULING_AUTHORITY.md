@@ -95,3 +95,23 @@ No template or frontend changes. `views.py` is unchanged: its `dispatch_next_que
    - `docker compose up -d scheduler akponora-ops`;
    - image rollback if needed: `docker tag oiat-portal:rollback-<date> oiat-portal:latest`, then `up -d`.
 7. **Later:** after a clean week, retire the akponora-ops cron (compose profile) in its own reviewed change.
+
+## Independent review (5 Oct 2026) and outcome
+
+Review of `06bbe6d`; fixed in the follow-up commit. Tests were added for each fix (24 scheduling tests in total).
+
+| # | Finding | Outcome |
+| --- | --- | --- |
+| 1, 2 | The Nora row was created system-managed, so the env-fallback logic disabled it, and the Schedules page couldn't enable or run it | Fixed: user-managed row; fallback never touches it |
+| 3 | A web-side reconcile could mark a live, silent daily job failed (PID in another container; step output not in the job log) | Fixed: a held global flock means "running" for `company_a_daily`; scope added to the flock rules |
+| 4 | A partial Inbox run (`--only`) counted as the day done | Fixed: only a full routine with no skipped steps counts |
+| 5 | A stale due time could raise a false "missed" alert | Fixed: days that already ran are filtered out first; enabling recomputes the due time |
+| 6 | The owner switch was read once at ops_scheduler start | Fixed: re-checked before each run; the loop no longer crashes after a flip (found by the test). **Both containers must still be recreated together after the `.env` edit** (step 4) |
+| 7 | Slack HTTP call inside the DB transaction | Fixed: `transaction.on_commit` |
+| 8 | Goldplates Home and Inbox banners now use the expected date (no "missing" before 19:00 + 90 min Lagos) | Kept: Marvin asked for this for both companies (5 Oct). It's a presentation rule, not a Goldplates pipeline change |
+| 9 | A duplicate daily job could queue for the same date (Inbox plus schedule) | Fixed: re-checked at dispatch; cancelled if the day finished meanwhile |
+| 10 | A multi-day outage reported one day | Fixed: every missed day listed once (minus days that ran) |
+| 11 | Cron defaults differed | Fixed: both use the ops default; production sets `0 18 * * *` |
+| 12 | A Nora row with the wrong or blank company | Fixed: refused |
+| 13 | Worker-only mode needs the scheduler up; SQLite has no row locks | Noted: page actions show "Queued" (Codex). The worker is the only dispatcher in worker-only mode, so races disappear once it's on |
+| 14 | The summary's "confirmed" rule differed from Home's | Fixed: same verified-sales rule |

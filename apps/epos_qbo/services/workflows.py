@@ -40,7 +40,7 @@ DAILY_NAME = "Nora daily routine"
 COMPANY_A = "company_a"
 DAILY_CRON_ENV = "OIAT_COMPANY_A_DAILY_RUN_CRON"
 DAILY_ENABLED_ENV = "OIAT_COMPANY_A_DAILY_RUN_ENABLED"
-DEFAULT_DAILY_CRON = "0 18 * * *"
+DEFAULT_DAILY_CRON = "0 6 * * *"  # same default as ops_scheduler (production sets 0 18 * * * in .env)
 COMPLETED_STATUSES = {"ok", "review"}  # daily_run exit 0 / 3: the routine finished
 
 
@@ -92,21 +92,38 @@ def ensure_daily_routine_schedule(*, now: datetime | None = None) -> tuple[RunSc
     sched = RunSchedule(name=DAILY_NAME, enabled=False, scope=RunJob.SCOPE_COMPANY_A_DAILY, company_key=COMPANY_A,
                         cron_expr=os.getenv(DAILY_CRON_ENV, "").strip() or DEFAULT_DAILY_CRON,
                         timezone_name=os.getenv("SCHEDULE_TZ", "").strip() or "Africa/Lagos",
-                        is_system_managed=True, parallel=1, continue_on_failure=False)
+                        # NOT system-managed: the env-fallback logic disables system rows, and the
+                        # Schedules page only lets staff enable / pause / run user rows.
+                        is_system_managed=False, parallel=1, continue_on_failure=False)
     sched.next_fire_at = sched.compute_next_fire_at(from_dt=now or timezone.now())
     sched.save()
     return sched, True
 
 
+def full_routine_completed(run) -> bool:
+    """A real run of the WHOLE routine that finished (ok / review). A partial run (``--only`` from the
+    Inbox: its unselected steps are 'skipped') does not count, so the full routine still runs."""
+    if getattr(run, "dry_run", True) or run.status not in COMPLETED_STATUSES:
+        return False
+    return not any(getattr(s, "status", "") == "skipped" for s in getattr(run, "steps", []) or [])
+
+
 def day_already_ran(day: date) -> bool:
-    """A real (not dry) daily_run for ``day`` finished (ok / review): never replay it automatically."""
+    """The full routine already finished for ``day``: never replay it automatically."""
     from . import company_a_ops as ops
 
     try:
         runs = ops.list_runs(include_dry=False)
     except Exception:  # noqa: BLE001 - unreadable evidence must not block the schedule silently
         return False
-    return any(r.business_date == day.isoformat() and r.status in COMPLETED_STATUSES for r in runs)
+    return any(r.business_date == day.isoformat() and full_routine_completed(r) for r in runs)
+
+
+def sales_confirmed(run) -> bool:
+    """Home's rule (experience.verified_sales): sales posted and reconciled MATCH in a real run."""
+    s = run.step("sales") if hasattr(run, "step") else None
+    return bool(not getattr(run, "dry_run", True) and s and s.status == "ok"
+                and s.counts.get("mode") == "post" and s.counts.get("reconcile_status") == "MATCH")
 
 
 # ---------------------------------------------------------------- expected confirmation date
@@ -183,7 +200,7 @@ def workflow_summaries(now: datetime | None = None) -> list[dict]:
     except Exception:  # noqa: BLE001
         runs = []
     last = runs[0] if runs else None
-    confirmed = sorted({r.business_date for r in runs if r.status in COMPLETED_STATUSES})
+    confirmed = sorted({r.business_date for r in runs if sales_confirmed(r)})
     expected = expected_confirmed_date(COMPANY_A, now).isoformat()
     out.append({
         "company_key": COMPANY_A, "workflow": "company_a_daily", "name": DAILY_NAME, "enabled": enabled,

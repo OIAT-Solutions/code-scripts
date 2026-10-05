@@ -486,6 +486,9 @@ def _company_a_daily_refusal(schedule: RunSchedule, *, current: datetime, target
     from . import workflows
 
     canonical = workflows.daily_routine_schedule()
+    if (schedule.company_key or "") != workflows.COMPANY_A:
+        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_INVALID,
+                     "A Nora daily routine schedule must have company 'company_a'.", current=current)
     if canonical is not None and canonical.pk != schedule.pk:
         return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_INVALID,
                      f"Only one Nora daily routine schedule may run ('{canonical.name}'); this duplicate never queues. "
@@ -511,14 +514,16 @@ def _skip(schedule: RunSchedule, event_type: str, message: str, *, current: date
     return None, event_type
 
 
-def _notify_missed(schedule: RunSchedule, day, due_at: datetime) -> None:
+def _notify_missed(schedule: RunSchedule, days, due_at: datetime) -> None:
     try:
         from code_scripts.akponora_ops.daily_run import send_summary_slack, short_day
 
         local = due_at.astimezone(ZoneInfo(schedule.timezone_name or "Africa/Lagos"))
-        send_summary_slack(f":red_circle: *Nora Mart · {short_day(day.isoformat())}* · daily run missed\n\n"
-                           f":hammer_and_wrench: *OIAT* · the scheduler wasn't running at {local:%a %d %b %H:%M}, so "
-                           f"this day did not run automatically. Check, then run it from the Inbox (Run daily for date).")
+        label = ", ".join(short_day(d.isoformat()) for d in days)
+        send_summary_slack(f":red_circle: *Nora Mart · {label}* · daily run missed\n\n"
+                           f":hammer_and_wrench: *OIAT* · the scheduler wasn't running from {local:%a %d %b %H:%M}, so "
+                           f"{'these days' if len(days) > 1 else 'this day'} did not run automatically. Check, then run "
+                           "each from the Inbox (Run daily for date), oldest first.")
     except Exception:  # noqa: BLE001 - a notification problem never changes the schedule
         logger.exception("missed-run notification failed")
 
@@ -538,12 +543,35 @@ def _process_company_a_daily(schedule: RunSchedule, *, now: datetime, due_at: da
     fire = due_at or now
     day = workflows.business_date_for_fire(fire)
     if workflows.is_missed(due_at, now):
-        _notify_missed(schedule, day, fire)
+        # Every fire between the missed one and now, minus days that already ran (e.g. by hand).
+        days = [d for d in _fires_between(schedule, fire, now) if not workflows.day_already_ran(d)]
+        if not days:
+            return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_DONE,
+                         f"Late fire (due {fire.isoformat()}) for days that already ran; nothing to do.", current=now)
+        transaction.on_commit(lambda: _notify_missed(schedule, days, fire))  # no HTTP inside the DB transaction
+        listed = ", ".join(d.isoformat() for d in days)
         return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_MISSED,
-                     f"Missed: due {fire.isoformat()}, the worker was not running. {day.isoformat()} was not run "
-                     "automatically; a person runs it from the Inbox after checking.",
-                     current=now, payload={"target_date": day.isoformat(), "due_at": fire.isoformat()})
+                     f"Missed: due {fire.isoformat()}, the worker was not running. {listed} not run automatically; "
+                     "a person runs each from the Inbox after checking.",
+                     current=now, payload={"target_dates": [d.isoformat() for d in days], "target_date": days[0].isoformat(),
+                                           "due_at": fire.isoformat()})
     return enqueue_run_for_schedule(schedule, now=now, source="worker", target_date=day)
+
+
+def _fires_between(schedule: RunSchedule, first: datetime, now: datetime) -> list:
+    """Business dates of every scheduled fire from ``first`` up to ``now`` (at most 31)."""
+    from . import workflows
+
+    days, at = [], first
+    for _ in range(31):
+        if at > now:
+            break
+        days.append(workflows.business_date_for_fire(at))
+        try:
+            at = schedule.compute_next_fire_at(from_dt=at)
+        except Exception:  # noqa: BLE001
+            break
+    return sorted(set(days))
 
 
 def _process_due_schedule(schedule: RunSchedule, *, now: datetime) -> tuple[RunJob | None, str]:

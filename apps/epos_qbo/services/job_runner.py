@@ -541,6 +541,16 @@ def dispatch_next_queued_job() -> tuple[RunJob | None, str]:
             lock.acquired_at = timezone.now()
             lock.save(update_fields=["active", "holder", "owner_run_job", "acquired_at", "updated_at"])
 
+        if job.scope == RunJob.SCOPE_COMPANY_A_DAILY and job.target_date:
+            from .workflows import day_already_ran
+
+            if day_already_ran(job.target_date):
+                # Re-checked at start: another run (e.g. from the Inbox) finished this day meanwhile.
+                release_run_lock(run_job=job, force=True)
+                RunJob.objects.filter(id=job.id).update(
+                    status=RunJob.STATUS_CANCELLED, finished_at=timezone.now(),
+                    failure_reason=f"{job.target_date.isoformat()} already has a completed daily run; not run again.")
+                continue
         try:
             command = build_command_for_job(job)
             started_job = start_run_job(job, command)

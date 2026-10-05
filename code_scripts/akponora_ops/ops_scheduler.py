@@ -175,10 +175,17 @@ def run_scheduler(*, sleep=time.sleep, now=None, max_cycles: int | None = None, 
             sleep(min(wait, 60))
             continue
         try:
-            run_job(JOBS[name])
+            if name == DAILY_RUN and portal_owns_daily_run():
+                # Re-checked at each run, not only at start-up (one owner at any time).
+                LOGGER.warning("Skipped daily_run: %s=portal now owns it", OWNER_ENV)
+            else:
+                run_job(JOBS[name])
         except Exception:
             LOGGER.exception("%s crashed", name)
-        due[name] = croniter(JOBS[name].cron(), clock()).get_next(datetime)
+        # daily_run keeps its own time even while the portal owns it, so the owner can flip back without
+        # a restart (its cron() is blank then, which croniter cannot use).
+        cron = JOBS[name].cron() or (os.getenv(DAILY_CRON_ENV, "").strip() or DAILY_DEFAULT_CRON)
+        due[name] = croniter(cron, clock()).get_next(datetime)
     return 0
 
 

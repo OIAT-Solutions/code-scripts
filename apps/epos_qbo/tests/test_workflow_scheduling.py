@@ -107,7 +107,8 @@ class MissedAndDuplicateTests(Base):
     def test_late_fire_is_missed_not_run_and_never_replayed(self):
         self.env(PORTAL_ENV)
         s = self.nora_schedule()
-        schedule_worker.process_schedule_cycle(now=lagos(2026, 10, 5, 22))  # worker was down 18:00-22:00
+        with self.captureOnCommitCallbacks(execute=True):  # the alert is sent after the commit
+            schedule_worker.process_schedule_cycle(now=lagos(2026, 10, 5, 22))  # worker was down 18:00-22:00
         self.assertEqual(RunJob.objects.count(), 0)
         self.assertEqual(self.events(), [RunScheduleEvent.TYPE_SKIPPED_MISSED])
         ev = RunScheduleEvent.objects.get(event_type=RunScheduleEvent.TYPE_SKIPPED_MISSED)
@@ -251,3 +252,81 @@ class ExpectedDateTests(Base):
         self.assertEqual((nora["workflow"], nora["owner"], nora["enabled"]), ("company_a_daily", "ops_scheduler", True))
         self.assertEqual(nora["expected_date"], "2026-10-03")
         self.assertIn("Goldplates daily", [r["name"] for r in rows])
+
+
+
+class ReviewFixTests(Base):
+    """Findings of the independent review (5 Oct 2026)."""
+
+    def test_env_fallback_never_switches_the_nora_schedule_off(self):
+        self.env(PORTAL_ENV)
+        s = self.nora_schedule()
+        RunSchedule.objects.create(name="Goldplates daily", scope=RunJob.SCOPE_SINGLE, company_key="company_b",
+                                   cron_expr="0 19 * * *", timezone_name="Africa/Lagos", enabled=True)
+        with mock.patch.object(schedule_worker, "dispatch_next_queued_job"):
+            schedule_worker.process_schedule_cycle(now=lagos(2026, 10, 5, 12))
+        s.refresh_from_db()
+        self.assertTrue(s.enabled)
+        self.assertFalse(s.is_system_managed)  # staff can pause / resume / run it on the Schedules page
+
+    def test_held_flock_keeps_a_silent_daily_job_alive_across_containers(self):
+        from apps.epos_qbo.services import run_reconciler as rr
+
+        job = RunJob.objects.create(scope=RunJob.SCOPE_COMPANY_A_DAILY, company_key="company_a",
+                                    target_date=date(2026, 10, 4), status=RunJob.STATUS_RUNNING,
+                                    started_at=lagos(2026, 10, 5, 18), pid=999999)  # PID not visible here
+        verdict = rr.assess_running_job(job, now=lagos(2026, 10, 5, 18, 40), lock_free=False)
+        self.assertFalse(verdict.stale)
+        verdict = rr.assess_running_job(job, now=lagos(2026, 10, 5, 18, 40), lock_free=True)
+        self.assertTrue(verdict.stale)  # lock free after the grace: really gone
+
+    def test_partial_inbox_run_does_not_count_as_the_day_done(self):
+        steps = [{"name": "catalogue", "status": "skipped", "detail": "not selected (--only)"},
+                 {"name": "bills", "status": "ok"}]
+        self.make_run("2026-10-04", "run_110000Z", _summary("2026-10-04", steps=steps))
+        self.assertFalse(workflows.day_already_ran(date(2026, 10, 4)))
+        self.make_run("2026-10-04", "run_170000Z", _summary("2026-10-04", steps=[{"name": "bills", "status": "ok"}]))
+        self.assertTrue(workflows.day_already_ran(date(2026, 10, 4)))
+
+    def test_multi_day_outage_lists_every_missed_day_once(self):
+        self.env(PORTAL_ENV)
+        self.nora_schedule(next_fire=lagos(2026, 10, 3, 18))
+        self.make_run("2026-10-03", "run_100000Z", _summary("2026-10-03"))  # run by hand meanwhile
+        schedule_worker.process_schedule_cycle(now=lagos(2026, 10, 5, 22))
+        ev = RunScheduleEvent.objects.get(event_type=RunScheduleEvent.TYPE_SKIPPED_MISSED)
+        self.assertEqual(ev.payload_json["target_dates"], ["2026-10-02", "2026-10-04"])  # 3 Oct already ran
+        self.assertEqual(RunJob.objects.count(), 0)
+
+    def test_dispatch_cancels_a_job_whose_day_finished_meanwhile(self):
+        job = RunJob.objects.create(scope=RunJob.SCOPE_COMPANY_A_DAILY, company_key="company_a",
+                                    target_date=date(2026, 10, 4), status=RunJob.STATUS_QUEUED)
+        self.make_run("2026-10-04", "run_170000Z", _summary("2026-10-04"))
+        with mock.patch.object(job_runner, "start_run_job") as start:
+            self.assertEqual(job_runner.dispatch_next_queued_job(), (None, "empty"))
+            start.assert_not_called()
+        job.refresh_from_db()
+        self.assertEqual(job.status, RunJob.STATUS_CANCELLED)
+        self.assertFalse(RunLock.objects.get(pk=1).active)
+
+    def test_nora_schedule_needs_company_a(self):
+        self.env(PORTAL_ENV)
+        odd = RunSchedule.objects.create(name="odd", scope=RunJob.SCOPE_COMPANY_A_DAILY, company_key="company_b",
+                                         cron_expr="0 18 * * *", timezone_name="Africa/Lagos", enabled=True,
+                                         next_fire_at=lagos(2026, 10, 5, 18))
+        schedule_worker.process_schedule_cycle(now=lagos(2026, 10, 5, 18, 1))
+        self.assertEqual(RunJob.objects.count(), 0)
+        self.assertTrue(RunScheduleEvent.objects.filter(schedule=odd, event_type=RunScheduleEvent.TYPE_SKIPPED_INVALID).exists())
+
+    def test_ops_scheduler_rechecks_the_owner_before_each_run(self):
+        self.env(OPS_ENV)
+        runs = []
+        clock = iter([lagos(2026, 10, 5, 17, 58), lagos(2026, 10, 5, 17, 59), lagos(2026, 10, 5, 18, 0),
+                      lagos(2026, 10, 5, 18, 0), lagos(2026, 10, 5, 18, 1)])
+
+        def flip_then_sleep(_s):
+            os.environ[workflows.OWNER_ENV] = "portal"  # the switch flips while the process runs
+
+        with mock.patch.object(ops_scheduler, "run_job", side_effect=lambda job: runs.append(job.name)):
+            ops_scheduler.run_scheduler(sleep=flip_then_sleep, now=lambda: next(clock), max_cycles=2)
+        os.environ.pop(workflows.OWNER_ENV, None)
+        self.assertEqual(runs, [])
