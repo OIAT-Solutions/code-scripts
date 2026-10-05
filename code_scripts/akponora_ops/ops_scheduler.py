@@ -94,8 +94,16 @@ JOBS = {
 }
 
 
+OWNER_ENV = "OIAT_COMPANY_A_DAILY_RUN_OWNER"  # ops_scheduler (default) | portal: see apps/epos_qbo/services/workflows.py
+
+
+def portal_owns_daily_run() -> bool:
+    return os.getenv(OWNER_ENV, "").strip().lower() == "portal"
+
+
 def daily_run_enabled() -> bool:
-    return env_flag(DAILY_ENABLED_ENV)
+    """daily_run is scheduled here only while this scheduler owns it (one owner at any time)."""
+    return env_flag(DAILY_ENABLED_ENV) and not portal_owns_daily_run()
 
 
 def run_job(job: OpsJob) -> int:
@@ -122,6 +130,10 @@ def configured_jobs() -> list[OpsJob]:
     """Jobs to schedule. With daily_run on, it is the only one unless individual crons are
     explicitly allowed (so the same step never runs twice a day by accident)."""
     jobs = [job for job in JOBS.values() if job.cron()]
+    if env_flag(DAILY_ENABLED_ENV) and portal_owns_daily_run():
+        LOGGER.warning("%s=portal: the portal schedule worker owns daily_run; this scheduler runs no Company A job",
+                       OWNER_ENV)
+        return []
     if daily_run_enabled() and not env_flag(ALLOW_INDIVIDUAL_ENV):
         ignored = [job.name for job in jobs if job.name != DAILY_RUN]
         if ignored:
@@ -163,10 +175,17 @@ def run_scheduler(*, sleep=time.sleep, now=None, max_cycles: int | None = None, 
             sleep(min(wait, 60))
             continue
         try:
-            run_job(JOBS[name])
+            if name == DAILY_RUN and portal_owns_daily_run():
+                # Re-checked at each run, not only at start-up (one owner at any time).
+                LOGGER.warning("Skipped daily_run: %s=portal now owns it", OWNER_ENV)
+            else:
+                run_job(JOBS[name])
         except Exception:
             LOGGER.exception("%s crashed", name)
-        due[name] = croniter(JOBS[name].cron(), clock()).get_next(datetime)
+        # daily_run keeps its own time even while the portal owns it, so the owner can flip back without
+        # a restart (its cron() is blank then, which croniter cannot use).
+        cron = JOBS[name].cron() or (os.getenv(DAILY_CRON_ENV, "").strip() or DAILY_DEFAULT_CRON)
+        due[name] = croniter(cron, clock()).get_next(datetime)
     return 0
 
 

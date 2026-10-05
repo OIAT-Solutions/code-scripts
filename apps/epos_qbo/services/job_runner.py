@@ -298,7 +298,22 @@ def _build_inventory_command(python_exe: str, cleaned: dict) -> list[str]:
     return [str(part) for part in cmd]
 
 
+# Exit codes that mean "the tool finished" per scope. daily_run: 0 all clean, 3 finished with items
+# waiting for review (recorded as succeeded; the review lives in its evidence), 2 a step failed.
+SUCCESS_EXIT_CODES = {RunJob.SCOPE_COMPANY_A_DAILY: {0, 3}}
+
+
+def succeeded(job: RunJob, exit_code) -> bool:
+    return exit_code in SUCCESS_EXIT_CODES.get(job.scope, {0})
+
+
 def build_command_for_job(job: RunJob) -> list[str]:
+    if job.scope == RunJob.SCOPE_COMPANY_A_DAILY:
+        if not job.target_date:
+            raise ValueError("Nora daily routine job needs its business date (bound when queued)")
+        # The full routine, unchanged: daily_run owns its steps, approvals, SHA gates, global lock
+        # and evidence. The date is the closed trading date bound at enqueue time, never "today".
+        return [sys.executable, "-m", "code_scripts.akponora_ops.daily_run", "--date", job.target_date.isoformat()]
     if job.scope == RunJob.SCOPE_WORKSPACE_READ:
         return [sys.executable, str(BASE_DIR / "manage.py"), "update_company_records", str(job.id)]
     if job.scope == RunJob.SCOPE_PORTAL_REVIEW:
@@ -349,13 +364,14 @@ def _monitor_process(job_id, popen: subprocess.Popen, log_handle):
             attach_started = time.monotonic()
             # Link artifacts before flipping the run out of RUNNING so dashboard completion
             # events observe status only after overview data is ready to refresh.
-            attached_artifacts = 0 if job.scope in {RunJob.SCOPE_PORTAL_REVIEW,RunJob.SCOPE_WORKSPACE_READ} else attach_recent_artifacts_to_job(job)
+            attached_artifacts = 0 if job.scope in {RunJob.SCOPE_PORTAL_REVIEW, RunJob.SCOPE_WORKSPACE_READ,
+                                                    RunJob.SCOPE_COMPANY_A_DAILY} else attach_recent_artifacts_to_job(job)
             attach_elapsed_ms = int((time.monotonic() - attach_started) * 1000)
 
             job.exit_code = exit_code
             job.finished_at = timezone.now()
-            job.status = RunJob.STATUS_SUCCEEDED if exit_code == 0 else RunJob.STATUS_FAILED
-            if exit_code != 0 and not job.failure_reason:
+            job.status = RunJob.STATUS_SUCCEEDED if succeeded(job, exit_code) else RunJob.STATUS_FAILED
+            if job.status == RunJob.STATUS_FAILED and not job.failure_reason:
                 job.failure_reason = f"Subprocess exited with code {exit_code}"
             job.save(update_fields=["exit_code", "finished_at", "status", "failure_reason"])
             if job.scheduled_by_id:
@@ -482,7 +498,26 @@ def start_run_job(job: RunJob, command: list[str]) -> RunJob:
 DISPATCH_START_FAILURE_LIMIT = 5
 
 
+# Execution placement. With OIAT_JOBS_DISPATCH_IN_WORKER_ONLY=1 only the schedule worker process
+# starts queued jobs: portal pages and Inbox actions just queue, so a web restart can never kill a
+# financial run that a page happened to start. Default off (the behaviour before the consolidation).
+WORKER_ONLY_ENV = "OIAT_JOBS_DISPATCH_IN_WORKER_ONLY"
+_IS_WORKER_PROCESS = False
+
+
+def mark_worker_process() -> None:
+    global _IS_WORKER_PROCESS
+    _IS_WORKER_PROCESS = True
+
+
+def dispatch_allowed_here() -> bool:
+    worker_only = str(os.getenv(WORKER_ONLY_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
+    return _IS_WORKER_PROCESS or not worker_only
+
+
 def dispatch_next_queued_job() -> tuple[RunJob | None, str]:
+    if not dispatch_allowed_here():
+        return None, "queued_for_worker"
     failure_count = 0
     while failure_count < DISPATCH_START_FAILURE_LIMIT:
         with transaction.atomic():
@@ -506,6 +541,16 @@ def dispatch_next_queued_job() -> tuple[RunJob | None, str]:
             lock.acquired_at = timezone.now()
             lock.save(update_fields=["active", "holder", "owner_run_job", "acquired_at", "updated_at"])
 
+        if job.scope == RunJob.SCOPE_COMPANY_A_DAILY and job.target_date:
+            from .workflows import day_already_ran
+
+            if day_already_ran(job.target_date):
+                # Re-checked at start: another run (e.g. from the Inbox) finished this day meanwhile.
+                release_run_lock(run_job=job, force=True)
+                RunJob.objects.filter(id=job.id).update(
+                    status=RunJob.STATUS_CANCELLED, finished_at=timezone.now(),
+                    failure_reason=f"{job.target_date.isoformat()} already has a completed daily run; not run again.")
+                continue
         try:
             command = build_command_for_job(job)
             started_job = start_run_job(job, command)

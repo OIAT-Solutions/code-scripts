@@ -46,7 +46,7 @@ LOG_ACTIVE_WINDOW = timedelta(minutes=15)
 # Slack between job.started_at and the real process start time.
 PID_START_TOLERANCE = timedelta(minutes=2)
 # Scopes whose subprocess always holds the global flock for its whole life.
-FLOCK_SCOPES = frozenset({RunJob.SCOPE_SINGLE, RunJob.SCOPE_ALL})
+FLOCK_SCOPES = frozenset({RunJob.SCOPE_SINGLE, RunJob.SCOPE_ALL, RunJob.SCOPE_COMPANY_A_DAILY})
 
 
 def max_runtime_hours() -> float:
@@ -161,6 +161,12 @@ def assess_running_job(job: RunJob, *, now: datetime, lock_free: bool | None) ->
             "the global run lock was free, so no pipeline process was running "
             f"(stored PID {job.pid or 'none'} is not this run)",
         )
+
+    if job.scope == RunJob.SCOPE_COMPANY_A_DAILY and lock_free is False:
+        # daily_run holds the global flock for its whole run and writes its step output to its evidence
+        # folders, not the job log. The PID may live in another container (the worker), so a held lock
+        # is the authoritative "still running" signal for this scope.
+        return StaleVerdict(False)
 
     if _log_recently_written(job, now):
         return StaleVerdict(False)

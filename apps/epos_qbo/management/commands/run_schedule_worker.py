@@ -24,6 +24,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        from apps.epos_qbo.services.job_runner import mark_worker_process
+
+        mark_worker_process()  # this process may start queued jobs even when execution is worker-only
         poll_seconds = options["poll_seconds"] or configured_poll_seconds()
         if poll_seconds < 1:
             poll_seconds = 1
