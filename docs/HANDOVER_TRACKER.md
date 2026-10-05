@@ -97,7 +97,15 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 - [ ] **Parked (Marvin: too frequent):** the "Funds Allocation" menu plus a server poller every 10 min. Brief kept at `BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md`; don't hand it to Claude in Chrome for now.
 - [ ] **Later (Marvin):** a similar staff sheet for credit-sales invoices.
 
-### B. Credit sales (in progress; includes Goldplates; Marvin's teammate: treat it as generic credit sales)
+### B. Credit sales (PAUSED 5 Oct: the team is sorting out the EPOS till / credit-sale process)
+- **Direction (5 Oct):** use **EPOS credit sales on the existing customer accounts** instead of a separate sheet.
+  - EPOS already has accounts for GOLDPLATE RESTAURANT – TALEA MALL / AYANGBUREN / DREAM PARK, BASK LOUNGE, JIFA FELIX, VERA AKPOREHA and OIAT. TALEA MALL has Max Credit ₦9M and balance ₦0 (never used).
+  - The credit tender is currently **off**; the team will turn it on and define the till process.
+  - The BookKeeping export already carries `Customer Full Name`, `Customer ID` and `Tender`.
+- **Pipeline change needed before credit sales go live:** credit-tender rows → one QBO Invoice per customer per day (not a SalesReceipt into Undeposited Funds), via a customer mapping file (EPOS customer → QBO customer; unknown = hold + Inbox); "pay on account" → ReceivePayment if EPOS exports it. Get **one test credit sale and one test repayment** first and read that day's export.
+- **Backlog** (paper invoices 0006232–0006242, ₦7.13M, outside EPOS): post once from the transcription; 25–30 Sep dated 30 Sep (non-stock line).
+- **The "Nora Mart Credit Sales" sheet + `credit_sheet.py`: parked.** Keep it only if it helps finish the backlog products; otherwise remove both.
+
 - [x] **Sheet "Nora Mart Credit Sales"** (`1x6dB0QX9KWuF6dsqTfBOgBgZ0r4tle1kF847pOXp1nk`; service account Editor), built 5 Oct by `credit_sheet setup` (`50f8a00`+).
   - Tabs: Read me, Invoices, Repayments, Customers, Customer prices, Products (6,143 EPOS products, server-owned).
   - Dropdowns; auto list price (agreed customer price, else EPOS); a red row when a price differs without name + reason.
