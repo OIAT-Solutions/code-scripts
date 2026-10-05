@@ -282,7 +282,7 @@ class CompanyAPortalPageTests(CompanyAOpsFixtureMixin, TestCase):
     def test_run_detail_page(self):
         response = self.client.get(reverse("epos_qbo:company-a-run-detail", args=["2026-10-02", "run_170000Z"]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Waiting for review · 2")
+        self.assertContains(response, "Recorded follow-ups · 2")
         self.assertContains(response, "standing auto-approval is off")
         self.assertContains(response, "Bills posted")
         self.assertContains(response, "&lt;b&gt;done&lt;/b&gt;")  # log tail escaped
@@ -335,22 +335,23 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "1", ops.CRON_ENV: "0 18 * * *"}):
             response = self.client.get(reverse("epos_qbo:schedules"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Products, bills, sales, stock checks and deposits.")
-        self.assertContains(response, "managed separately")
-        self.assertContains(response, "Daily at 18:00")
-        self.assertContains(response, "Africa/Lagos")
-        self.assertContains(response, reverse("epos_qbo:company-a-run-detail", args=["2026-10-02", "run_170000Z"]))
-        row = response.content.decode().split('id="company-a-schedule-row"')[1].split("</section>")[0]
-        self.assertIn("Enabled", row)
-        self.assertIn("Scheduled", row)
-        self.assertNotIn("<form", row)
+        rows = response.context["schedule_display_rows"]
+        routine = next(r for r in rows if r["name"] == "Daily routine")
+        self.assertEqual(routine["state"], "active")
+        self.assertEqual(routine["business_date"], "2026-10-02")
+        self.assertIsNotNone(routine["last_run"])
+        self.assertTrue(routine["managed"])
+        self.assertEqual(response.content.decode().count('<h1'), 1)
 
     def test_schedules_row_env_off(self):
-        response = self.client.get(reverse("epos_qbo:schedules"))
-        self.assertEqual(response.status_code, 200)
-        row = response.content.decode().split('id="company-a-schedule-row"')[1].split("</section>")[0]
-        self.assertIn("Disabled", row)
-        self.assertIn("No run record yet", row)
+        with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "0"}):
+            response = self.client.get(reverse("epos_qbo:schedules"), {"state": "paused"})
+        routine = next(r for r in response.context["schedule_display_rows"] if r["name"] == "Daily routine")
+        self.assertEqual(routine["state"], "paused")
+        self.assertIsNone(routine["next_run"])
+        self.assertIsNone(routine["last_run"])
+        response = self.client.get(reverse("epos_qbo:schedules"), {"state": "history"})
+        self.assertFalse(any(r["name"] == "Daily routine" for r in response.context["schedule_display_rows"]))
 
     def test_overview_card_without_hold(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))

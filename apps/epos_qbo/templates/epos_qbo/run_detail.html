@@ -8,14 +8,16 @@
 
 {% block content %}
 <div class="space-y-6" data-run-id="{{ job.id }}" data-run-status="{{ job.status }}">
-    <div><p class="portal-eyebrow">Run details</p><h1 class="text-3xl font-semibold tracking-tight mt-2">{{ business_company }}</h1><p class="portal-muted mt-3">{% if job.target_date %}Work for {{ job.target_date|date:"j F Y" }}{% else %}Business date not recorded{% endif %}</p></div>
+    <div><h1 class="text-3xl font-semibold tracking-tight">{{ business_company }}</h1><p class="portal-muted mt-3">{% if job.target_date %}Work for {{ job.target_date|date:"j F Y" }}{% else %}Business date not recorded{% endif %}</p></div>
     <section class="portal-panel p-6 space-y-4">
         {% include "components/business_status.html" with label=business_outcome.label tone=business_outcome.tone %}
         <p class="text-sm leading-relaxed">{{ business_outcome.sentence }}</p>
-        <p class="portal-muted">A finished run does not by itself confirm that sales were posted. Check the recorded results before retrying.</p>
+        {% if business_outcome.label != "Sales confirmed" %}<p class="portal-muted">Check the recorded results before retrying this run.</p>{% endif %}
         <a href="{% url 'epos_qbo:runs' %}{% if job.company_key %}?company={{ job.company_key|urlencode }}{% endif %}" class="btn btn-secondary">View daily runs</a>
     </section>
-    <details class="portal-panel p-6"><summary class="font-semibold cursor-pointer">Supporting records and technical details</summary><div class="space-y-6 mt-5">
+    {% if business_evidence or job.workflow_label == "Sales" %}<section class="portal-panel p-6 space-y-4"><h2 class="text-lg font-semibold">Sales evidence</h2>
+    {% for record in business_evidence %}<article class="border-b border-slate-100 dark:border-slate-700 pb-4"><h3 class="font-semibold">{{ record.company }} · {{ record.day|date:"j F Y" }}</h3><p class="text-sm mt-2">{% if record.preview %}Preview · nothing posted{% elif record.confirmed %}Sales confirmed{% else %}Posting not confirmed{% endif %}</p><dl class="grid sm:grid-cols-3 gap-4 text-sm mt-3"><div><dt class="portal-muted">EPOS total</dt><dd>{{ record.epos }}</dd></div><div><dt class="portal-muted">QuickBooks total</dt><dd>{{ record.qbo }}</dd></div><div><dt class="portal-muted">Difference</dt><dd>{{ record.difference }}</dd></div></dl></article>{% empty %}<p class="portal-muted">No sales evidence is attached to this run.</p>{% endfor %}</section>{% endif %}
+    <details class="portal-panel p-6"><summary class="font-semibold cursor-pointer">Downloads and diagnostics</summary><div class="space-y-6 mt-5">
     <p class="portal-muted">Internal reference: {{ job.id }}</p>
     {% if inventory_review_action %}
     <section class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm space-y-4">

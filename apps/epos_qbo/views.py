@@ -2358,7 +2358,34 @@ def schedules_page(request):
     now_default_time = now_default_local.strftime("%H:%M")
     now_default_abbrev = now_default_local.strftime("%Z").strip()
     schedule_rows = _schedule_rows(schedules, company_map)
+    state = request.GET.get("state", "active")
+    if state not in {"active", "paused", "history"}:
+        state = "active"
+    display_rows = []
+    company_a_row = company_a_views.safe_schedule_row()
+    if company_a_row:
+        sched = company_a_row["schedule"]
+        last = company_a_row["last_run"]
+        display_rows.append(dict(
+            name="Daily routine", company=company_map.get("company_a", "Akponora"),
+            state="active" if sched["enabled"] else "paused",
+            timing=sched.get("time_label"), zone="Africa/Lagos",
+            next_run=sched.get("next_run"), last_run=last.finished_at if last else None,
+            business_date=last.business_date if last else None,
+            outcome={"ok": "Completed", "clean": "Completed", "review": "Needs review", "failed": "Could not finish"}.get(last.status, "Outcome not confirmed") if last else "Not recorded",
+            managed=True, url=reverse("epos_qbo:company-a-run-detail", args=[last.business_date, last.run_id]) if last else "",
+        ))
+    for row in schedule_rows:
+        schedule = row["schedule"]
+        display_rows.append(dict(name=row["display_name"], company=row["business_subtitle"],
+            state="history" if row["one_time_completed"] else "active" if schedule.enabled else "paused",
+            timing=row["timing_primary"], zone=schedule.timezone_name,
+            next_run=schedule.next_fire_at if schedule.enabled and not row["one_time_completed"] else None,
+            last_run=row["last_run_at"], outcome=row["last_result_label"], managed=schedule.is_system_managed))
+
     context = {
+        "schedule_view": state,
+        "schedule_display_rows": [r for r in display_rows if r["state"] == state],
         "schedule_form": RunScheduleForm(initial=_schedule_create_initial()),
         "schedule_rows": schedule_rows,
         "schedule_sections": _group_schedule_rows(schedule_rows),
@@ -2867,6 +2894,16 @@ def run_detail(request, job_id):
     from .services.messages import job_outcome
     context["business_outcome"] = job_outcome(job, artifacts_list)
     context["business_company"] = company_display_name or "Several companies"
+    from .services.experience import confirmed_artifact, money_label, money
+    context["business_evidence"] = [dict(
+        day=a.target_date, company=a.company_key,
+        confirmed=confirmed_artifact(a),
+        preview=bool(a.upload_stats_json.get("dry_run")) if isinstance(a.upload_stats_json, dict) else False,
+        epos=money_label(money(a.reconcile_epos_total)),
+        qbo=money_label(money(a.reconcile_qbo_total)),
+        difference=money_label(money(a.reconcile_difference)),
+    ) for a in artifacts_list if a.kind == a.KIND_SALES_UPLOAD]
+
     return render(request, "epos_qbo/run_detail.html", context)
 
 

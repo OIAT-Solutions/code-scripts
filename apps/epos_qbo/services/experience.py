@@ -221,7 +221,7 @@ def home_context(company_key="", now=None, token_health=None):
         # to come today (Nora 18:00 / Goldplates 19:00 Lagos) is not reported missing.
         expected = expected_confirmed_date(key, now)
         expected_dates.append(expected)
-        waiting = len(items) if key == "company_a" else 0
+        waiting = sum(item.get("company_key", "company_a") == key for item in items)
         if key == "company_a":
             start = max(window_start, date(2026, 10, 1))
             confirmed, artifact_latest = artifact_confirmation(key, start, expected)

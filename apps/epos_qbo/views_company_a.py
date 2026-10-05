@@ -76,6 +76,7 @@ def company_a_run_detail(request, business_date: str, run_id: str):
         "uploaded": "Sales receipts posted", "skipped": "Receipts skipped", "failed": "Receipts not posted",
         "qbo_total": "QuickBooks sales total", "epos_total": "Till sales total",
         "alert": "Stock problems", "warn": "Stock warnings", "balance": "Receipts awaiting deposit",
+        "uf_balance": "Receipts awaiting deposit", "deposited": "Days recorded", "held": "Days needing follow-up",
         "last_deposit_date": "Last deposit day", "days_since_last_deposit": "Days since last deposit"}
     for step in run.steps:
         facts = []
@@ -83,9 +84,11 @@ def company_a_run_detail(request, business_date: str, run_id: str):
             for field, caption in field_labels.items():
                 if field in step.counts:
                     value = step.counts[field]
-                    if field in {"qbo_total", "epos_total", "balance"}:
+                    if isinstance(value, (list, tuple)):
+                        value = len(value)
+                    if field in {"qbo_total", "epos_total", "balance", "uf_balance"}:
                         value = experience.money_label(experience.money(value))
-                    if run.dry_run and field in {"items_created", "posted", "uploaded"}:
+                    if run.dry_run and field in {"items_created", "posted", "uploaded", "deposited"}:
                         continue
                     facts.append((caption, value))
         steps.append({"step": step, "label": "Stock checks" if step.name == "guard" else step.label,
@@ -95,7 +98,13 @@ def company_a_run_detail(request, business_date: str, run_id: str):
         {"label": "Daily runs", "url": reverse("epos_qbo:runs") + "?company=company_a"},
         {"label": day.strftime("%d %B %Y").lstrip("0") if day else run.business_date, "url": None},
     ])
+    groups = {}
+    for file in ops.evidence_files(run):
+        prefix = file["path"].split("/")[0]
+        caption = {"sales": "Sales reconciliation", "bills": "Purchase records", "catalogue": "Product mapping", "guard": "Item checks", "stock": "Stock comparison", "uf": "Deposit records"}.get(prefix, "Other records")
+        groups.setdefault(caption, []).append(file)
     context.update({
+        "evidence_groups": [{"label": label, "files": files} for label, files in groups.items()],
         "run": run,
         "business_day": day,
         "other_confirmation": other_confirmation,

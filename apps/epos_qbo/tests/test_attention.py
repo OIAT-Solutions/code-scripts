@@ -39,6 +39,16 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
     def post(self, token):
         return self.client.post(self.url, {"token": token, "reason": "Checked evidence", "approval_ref": "owner yes for PO123", "confirmed": "yes"})
 
+    def test_blockers_use_closed_trading_date_before_lagos_cutoff(self):
+        CompanyConfigRecord.objects.create(company_key='company_a', display_name='Akponora', is_active=True)
+        for day in ('2026-10-01', '2026-10-02'):
+            self.make_run(day, 'run_170000Z', _summary(day, steps=[
+                _step('sales', counts={'mode': 'post', 'reconcile_status': 'MATCH'})]))
+        now = datetime(2026, 10, 4, 1, 0, tzinfo=ZoneInfo('Africa/Lagos'))
+        with mock.patch.object(attention.ops, 'posting_hold', return_value={'active': False}):
+            self.assertEqual(attention.blockers(now), [])
+            self.assertTrue(attention.blockers(now.replace(hour=6)))
+
     def test_inbox_ready_and_held_and_escaping(self):
         items, errors = attention.inbox()
         self.assertEqual(len(items), 2)

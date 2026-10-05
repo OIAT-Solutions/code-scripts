@@ -30,6 +30,19 @@ class SchedulesUiTests(TestCase):
             },
         )
 
+    def test_schedule_state_navigation_preserves_enabled_state(self):
+        active = RunSchedule.objects.create(name='Active fixture', enabled=True, scope=RunJob.SCOPE_SINGLE, company_key='company_b', cron_expr='0 19 * * *')
+        RunSchedule.objects.create(name='Paused fixture', enabled=False, scope=RunJob.SCOPE_SINGLE, company_key='company_b', cron_expr='0 19 * * *')
+        response = self.client.get(reverse('epos_qbo:schedules'))
+        self.assertEqual(response.context['schedule_view'], 'active')
+        self.assertTrue(any(r['name'] == 'Active fixture' for r in response.context['schedule_display_rows']))
+        self.assertFalse(any(r['name'] == 'Paused fixture' for r in response.context['schedule_display_rows']))
+        response = self.client.get(reverse('epos_qbo:schedules'), {'state': 'paused'})
+        self.assertTrue(any(r['name'] == 'Paused fixture' for r in response.context['schedule_display_rows']))
+        active.refresh_from_db()
+        self.assertTrue(active.enabled)
+        self.assertEqual(response.content.decode().count('<h1'), 1)
+
     def _create_payload(self) -> dict[str, str]:
         return {
             "name": "Daily all companies",
