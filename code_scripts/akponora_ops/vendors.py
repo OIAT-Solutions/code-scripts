@@ -59,6 +59,8 @@ NAME_ENTITIES = ("Vendor", "Customer", "Employee")
 
 # action states
 CREATE = "CREATE"                 # genuinely new; would be / will be created
+LINK = "LINK"                     # same name as one existing QBO vendor bar capitals / spacing: link it
+LINKED = "LINKED"
 CREATED = "CREATED"
 HOLD_NEAR = "HOLD_NEAR_MATCH"     # possible typo / duplicate of an existing vendor
 HOLD_GATE = "HOLD_GATE_OFF"       # new, but automatic creation is off
@@ -78,6 +80,14 @@ def display_name(supplier: str) -> str:
     text = re.sub(r"[:\t\r\n]+", " ", clean(supplier))
     text = " ".join(text.split()).strip(" ,.;-_/")
     return text[:100].rstrip()
+
+
+def same_name(a: str, b: str) -> bool:
+    """Equal apart from capital letters, spacing and edge punctuation (owner, 5 Oct 2026:
+    'MEGA FROZEN FOODS' = QBO 'Mega frozen Foods')."""
+    def k(x):
+        return " ".join(clean(x).split()).strip(" ,.;:-_/").casefold()
+    return bool(k(a)) and k(a) == k(b)
 
 
 def score(name: str, vendor: dict, bill_counts=None) -> float:
@@ -141,8 +151,13 @@ def plan_actions(suppliers: list[dict], vendors: dict, *, history=None, bill_cou
                 act["best_score"] = 1.0
                 best = 1.0
         why = exclusions.describe("vendor", sup["name"]) if exclusions is not None else ""
+        twins = [v for v in pool if v.get("Active", True) and same_name(name, v.get("DisplayName", ""))]
         if why:
             act["state"], act["detail"] = EXCLUDED, f"supplier excluded: {why}"
+        elif len(twins) == 1:
+            act["state"], act["vendor_id"] = LINK, str(twins[0].get("Id"))
+            act["detail"] = (f"same name as QBO vendor {twins[0].get('Id')} '{twins[0].get('DisplayName')}' "
+                             "except capital letters / spacing: linked automatically")
         elif not name:
             act["state"], act["detail"] = HOLD_NEAR, "supplier name is empty after cleaning; map it by hand"
         elif best >= NEW_VENDOR_MAX_SCORE:
@@ -206,6 +221,14 @@ def apply_actions(actions: list[dict], *, client, vendors_path: Path, settings: 
     ``vendors_path`` immediately (so a crash later never orphans it)."""
     created = 0
     for act in actions:
+        if act["state"] == LINK:
+            # mapping only (no QBO write): the vendor already exists with the same name
+            act["state"] = LINKED
+            append_vendor_rows(vendors_path, [{
+                "EPOS Supplier Id": act["supplier_id"], "EPOS Supplier Name": act["epos_name"],
+                "QBO Vendor Id": act["vendor_id"], "QBO Vendor Name": act["detail"].split("'")[1],
+                "Approved By": "auto-link: same name bar capitals/spacing (owner yes 2026-10-05)"}])
+            continue
         if act["state"] != CREATE:
             continue
         if settings is None:

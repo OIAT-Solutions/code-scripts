@@ -1030,6 +1030,8 @@ def vendor_stage(pos, vmap, ctx, *, window, vendors_path: Path, create: bool, wr
                                       exclusions=exclusions)
     if not create:
         for act in actions:
+            if act["state"] == vendor_ops.LINK:
+                act["detail"] += " - plan only; scheduled mode records the link"
             if act["state"] == vendor_ops.CREATE:
                 act["detail"] += f" - plan only; scheduled mode creates it when {vendor_ops.AUTO_ENV}=1"
         return actions
@@ -1124,13 +1126,13 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
     vendor_actions = vendor_stage(pos, vmap, ctx, window=window, vendors_path=vpath,
                                   create=bool(getattr(a, "create_vendors", False)), write_client=write_client,
                                   history=history, exclusions=exclusions)
-    if any(act["state"] == vendor_ops.CREATED for act in vendor_actions):
+    if any(act["state"] in (vendor_ops.CREATED, vendor_ops.LINKED) for act in vendor_actions):
         vmap = load_vendor_map(read_csv(vpath))
     entries = plan_bills(pos, registry=registry, ctx=ctx, vmap=vmap, window=window, tax_mode=a.tax_mode,
                          lookback=lookback, dup_days=a.dup_days, dup_min_value=Decimal(a.dup_min_value),
                          exclusions=exclusions)
     by_key = {act["key"]: act for act in vendor_actions
-              if act["state"] not in (vendor_ops.CREATED, vendor_ops.EXCLUDED)}
+              if act["state"] not in (vendor_ops.CREATED, vendor_ops.LINKED, vendor_ops.EXCLUDED)}
     for e in entries:
         act = by_key.get(vendor_key(e["po"]["supplier"]))
         if act and e["status"] == "HOLD":

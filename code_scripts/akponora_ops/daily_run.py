@@ -242,6 +242,7 @@ class DailyRun:
                       "adopted": posted.get("ADOPTED", 0), "capped": posted.get("CAPPED", 0),
                       "held_live": posted.get("HELD_LIVE", 0),
                       "vendors_created": sum(v.get("state") == "CREATED" for v in vendors),
+                      "vendors_linked": sum(v.get("state") == "LINKED" for v in vendors),
                       "vendors_held": sum(str(v.get("state", "")).startswith("HOLD") for v in vendors)}
         res.counts["holds"] = [{"po": h.get("po"), "supplier": h.get("supplier") or "", "total": h.get("total_inc"),
                                 "reason": (h.get("reasons") or [""])[0]} for h in (summary.get("holds") or [])[:10]]
@@ -818,6 +819,8 @@ def slack_text(summary: dict) -> str:
                 text += f" · {len(waiting)} waiting for you"
             if c.get("vendors_created"):
                 text += f" · {c['vendors_created']} new supplier(s) added"
+            if c.get("vendors_linked"):
+                text += f" · {c['vendors_linked']} supplier(s) linked by name"
             for w in waiting:
                 who = f"PO {w.get('po')}, {w.get('supplier') or 'no supplier'}, {naira_text(w.get('total'))}"
                 if w.get("vendor_hint") is not None:

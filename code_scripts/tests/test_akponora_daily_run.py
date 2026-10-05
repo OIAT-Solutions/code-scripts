@@ -462,6 +462,24 @@ class VendorAutoCreateTests(unittest.TestCase):
         self.assertTrue(any("HOLD_NEAR_MATCH" in r for r in e["3981"]["reasons"]))
         self.assertNotIn("NIGERIAN BOTLING COMPANY", self.vendor_rows())
 
+    def test_same_name_bar_capitals_and_spacing_links_automatically(self):
+        """5 Oct 2026: EPOS 'MEGA FROZEN FOODS' = QBO 'Mega frozen Foods' (score 1.00) was held."""
+        os.environ.update(VENDOR_ENV)
+        from code_scripts.tests.test_bills_sync import VENDORS
+
+        fake = VendorFakeQBO(vendors={**VENDORS, "12": {"Id": "12", "DisplayName": "Mega frozen Foods", "Active": True}})
+        _, summary, e = self.scheduled_plan([order(3984, [WATER], supplier="MEGA FROZEN  FOODS.")], fake)
+        self.assertEqual(fake.vendor_posts(), [])  # nothing created in QBO
+        act = summary["vendor_actions"][0]
+        self.assertEqual(act["state"], vendor_ops.LINKED)
+        self.assertEqual(e["3984"]["status"], "READY", e["3984"]["reasons"])
+        row = next(r for r in self.vendor_rows().values() if r["QBO Vendor Id"] == "12")
+        self.assertEqual((row["QBO Vendor Id"], act["vendor_id"]), ("12", "12"))
+        self.assertEqual(e["3984"]["payload"]["VendorRef"]["value"], "12")
+        self.assertTrue(row["Approved By"].startswith("auto-link"))
+        self.assertTrue(vendor_ops.same_name("MEGA FROZEN FOODS", "Mega frozen  Foods"))
+        self.assertFalse(vendor_ops.same_name("MEGA FROZEN FOODS", "MEGA FROZEN FOOD"))  # a letter differs: still held
+
     def test_cap_limits_new_vendors_per_run(self):
         os.environ.update({**VENDOR_ENV, vendor_ops.MAX_ENV: "1"})
         fake = VendorFakeQBO()
