@@ -46,7 +46,7 @@ def company_a_runs(request):
     runs = ops.list_runs(include_dry=True)
     context = _shell_context([
         {"label": "Runs", "url": reverse("epos_qbo:runs")},
-        {"label": "Company A daily runs", "url": None},
+        {"label": "Akponora daily routine", "url": None},
     ])
     context.update({
         "runs": [r for r in runs if show_dry or not r.dry_run],
@@ -128,7 +128,7 @@ def company_a_evidence(request, business_date: str, run_id: str):
         LOGGER.warning("Refused Company A evidence path %r for %s/%s: %s", rel, business_date, run_id, exc)
         raise Http404("Evidence file not available") from None
     context = _shell_context([
-        {"label": "Company A daily runs", "url": reverse("epos_qbo:company-a-runs")},
+        {"label": "Akponora daily routine", "url": reverse("epos_qbo:company-a-runs")},
         {"label": f"{run.business_date} · {run.run_id}",
          "url": reverse("epos_qbo:company-a-run-detail", args=[run.business_date, run.run_id])},
         {"label": rel, "url": None},

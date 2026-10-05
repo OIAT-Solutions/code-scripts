@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Company A daily runs • EPOS → QBO{% endblock %}
+{% block title %}Akponora daily routine · OIAT Portal{% endblock %}
 
 {% block topbar %}
 {% include "components/topbar.html" %}
@@ -10,8 +10,8 @@
 <div class="space-y-6">
     <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-            <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Company A daily runs</h1>
-            <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">AKPONORA: products → bills → sales → health check → deposits. Runs in the {{ schedule.container }} container; this page is read-only.</p>
+            <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Akponora daily routine</h1>
+            <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Every run of the daily routine: products, bills, sales, credit sales, health check, stock and banking.</p>
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
                 {% if schedule.enabled %}Schedule: {{ schedule.time_label|default:schedule.cron }} ({{ schedule.cron }}) {{ schedule.timezone }}{% if schedule.next_run %} · next run {{ schedule.next_run|date:"Y-m-d H:i" }}{% endif %}{% else %}Schedule disabled ({{ schedule.enabled_env }} not set){% endif %}
             </p>

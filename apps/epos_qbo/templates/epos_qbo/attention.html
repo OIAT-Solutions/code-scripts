@@ -4,7 +4,7 @@
 {% block content %}
 {% include "components/attention_banners.html" %}
 <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
-  <div><h1 class="text-2xl font-semibold">Needs your attention</h1><p class="text-sm text-slate-500 mt-2">Everything waiting for a person. Each decision runs the same checked tool as the daily routine.</p></div>
+  <div><h1 class="text-2xl font-semibold">Needs your attention</h1><p class="text-sm text-slate-500 mt-2">Decisions waiting for you. Each shows what was found and what happens when you approve it.</p></div>
   <a href="{% url 'epos_qbo:runs' %}?company=company_a" class="btn btn-secondary">View daily runs</a>
 </div>
 {% for error in errors %}<p role="alert" class="border border-red-300 bg-red-50 text-red-900 dark:bg-red-950/30 dark:text-red-200 dark:border-red-900 rounded-lg p-4 mb-4">{{ error }}</p>{% endfor %}

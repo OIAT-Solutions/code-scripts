@@ -4190,7 +4190,7 @@ def api_tokens_page(request):
 
     context = {
         "page_title": "QuickBooks Connections",
-        "page_subtitle": "Monitor, refresh, and test QuickBooks Online API tokens for each configured company.",
+        "page_subtitle": "Whether each company is connected to QuickBooks, and when its connection needs renewing.",
         "company_views": company_views,
         "summary": summary,
         "has_companies": bool(company_views),

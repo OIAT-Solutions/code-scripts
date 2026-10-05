@@ -2,7 +2,7 @@
 {% block title %}Admin · OIAT Portal{% endblock %}
 {% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
-<div><p class="portal-eyebrow">Workspace management</p><h1 class="text-3xl font-semibold tracking-tight mt-2">Admin</h1><p class="portal-muted mt-3">Connections, settings and support tools.</p></div>
+<div><h1 class="text-3xl font-semibold tracking-tight">Admin</h1><p class="portal-muted mt-3">QuickBooks connections, portal settings and support tools.</p></div>
 <div class="grid gap-5 sm:grid-cols-2">
 <a href="{% url 'epos_qbo:api-tokens' %}" class="portal-panel p-6 hover:border-slate-400"><h2 class="font-semibold text-lg">QuickBooks connections</h2><p class="portal-muted mt-2">Check whether each company can connect to QuickBooks.</p></a>
 <a href="{% url 'epos_qbo:settings' %}" class="portal-panel p-6 hover:border-slate-400"><h2 class="font-semibold text-lg">Portal settings</h2><p class="portal-muted mt-2">Shared defaults, alerts and automatic updates.</p></a>

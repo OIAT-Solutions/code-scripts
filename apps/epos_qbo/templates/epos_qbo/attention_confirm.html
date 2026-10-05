@@ -3,7 +3,7 @@
 {% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="portal-panel p-6 space-y-5">
-<div><p class="portal-eyebrow">Confirm</p><h1 class="text-2xl font-semibold mt-2 break-words">{{ title }}</h1></div>
+<div><h1 class="text-2xl font-semibold break-words">{{ title }}</h1></div>
 <p class="text-sm leading-relaxed">{{ description }}</p>
 {% if facts %}<dl class="grid sm:grid-cols-[12rem_1fr] gap-x-6 gap-y-2 text-sm border-t border-slate-100 dark:border-slate-700 pt-4">{% for label, value in facts %}<dt class="text-slate-500 dark:text-slate-400">{{ label }}</dt><dd class="font-medium break-words">{{ value }}</dd>{% endfor %}</dl>{% endif %}
 {% if item %}<p class="portal-muted">This decision applies only to what you see now. If the evidence changes before the job runs, the job stops and asks for a new review.</p>

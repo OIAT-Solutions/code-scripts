@@ -4,7 +4,7 @@
 {% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-end justify-between gap-5" data-active-runs='{{ active_run_ids_json|safe }}'>
-<div><h1 class="text-3xl font-semibold tracking-tight">Home</h1><p class="portal-muted mt-3">Sales, open tasks and scheduled work across companies.</p></div>
+<div><h1 class="text-3xl font-semibold tracking-tight">Home</h1><p class="portal-muted mt-3">Where each company stands today: confirmed sales, open tasks and the next scheduled run.</p></div>
 <form method="get" class="flex flex-wrap items-end gap-3"><label class="text-sm font-medium" for="home-company">Company<select id="home-company" name="company" class="portal-input mt-2" onchange="this.form.submit()"><option value="">All companies</option>{% for opt in overview_company_options %}{% if opt.value %}<option value="{{ opt.value }}" {% if opt.value == overview_selected_company %}selected{% endif %}>{{ opt.label }}</option>{% endif %}{% endfor %}</select></label><noscript><button class="btn btn-secondary">Apply</button></noscript><a href="{% url 'epos_qbo:runs' %}" class="btn btn-secondary">View daily runs</a></form>
 </div>
 <div id="overview-panels-root" data-panels-url="{% url 'epos_qbo:overview-panels' %}">{% include "components/overview_refresh.html" %}</div>

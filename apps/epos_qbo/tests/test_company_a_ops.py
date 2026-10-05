@@ -273,7 +273,7 @@ class CompanyAPortalPageTests(CompanyAOpsFixtureMixin, TestCase):
     def test_runs_list_page(self):
         response = self.client.get(reverse("epos_qbo:company-a-runs"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Company A daily runs")
+        self.assertContains(response, "Akponora daily routine")
         self.assertContains(response, "run_080000Z_dry")
         self.assertContains(response, "Dry run")
         self.assertContains(response, "₦812,345.50")

@@ -3,7 +3,7 @@
 {% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="space-y-6">
-<div><p class="portal-eyebrow">Your workspace</p><h1 class="text-3xl font-semibold tracking-tight mt-2">Companies</h1><p class="portal-muted mt-3">Open a company to see its sales, waiting decisions and latest work.</p></div>
+<div><h1 class="text-3xl font-semibold tracking-tight">Companies</h1><p class="portal-muted mt-3">The companies the portal looks after. Open one for its sales, bills, banking and open tasks.</p></div>
 <form method="get" class="portal-panel p-5 flex flex-wrap gap-4 items-end">
 <label class="text-sm font-medium w-full sm:flex-1 min-w-0">Find a company<input class="portal-input mt-2" type="search" name="search" value="{{ search }}" placeholder="Company name"></label>
 <label class="text-sm font-medium w-full sm:w-auto">Show<select class="portal-input mt-2" name="state"><option value="">All companies</option><option value="attention" {% if directory_state == 'attention' %}selected{% endif %}>Needs attention</option><option value="current" {% if directory_state == 'current' %}selected{% endif %}>Up to date</option></select></label>

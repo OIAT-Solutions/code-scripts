@@ -1,5 +1,5 @@
 <nav aria-label="Main navigation" class="flex-1 overflow-y-auto py-6 px-3 space-y-2">
-<p class="px-3 pb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Your workspace</p>
+
 {% with current=request.resolver_match.url_name %}
 <a href="{% url 'epos_qbo:overview' %}" {% if current == 'overview' or current == 'overview-root' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:widget-linear" width="20"></iconify-icon>Home</a>
 <a href="{% url 'epos_qbo:attention' %}" {% if current == 'attention' or current == 'attention-confirm' %}aria-current="page"{% endif %} class="portal-nav"><iconify-icon icon="solar:inbox-linear" width="20"></iconify-icon>Needs your attention</a>
