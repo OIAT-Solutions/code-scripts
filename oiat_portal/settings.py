@@ -86,7 +86,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core",
     "apps.epos_qbo",
-    "apps.websites",
     "apps.dashboard",
 ]
 
@@ -159,11 +158,6 @@ PORTAL_SOLUTIONS = [
         "name": "EPOS -> QBO",
         "description": "Monitor runs, manage companies, and trigger sync jobs.",
         "url_name": "epos_qbo:overview",
-    },
-    {
-        "name": "Websites",
-        "description": "Monitor website logs, endpoint health, and site operations.",
-        "url_name": "websites:index",
     },
 ]
 

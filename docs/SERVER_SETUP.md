@@ -249,6 +249,10 @@ Duplicate-PO holds, unit-cost holds and unmapped-product holds are fixed at the 
 | 19:00 daily | Goldplates (Company B) sales sync | `scheduler` | Its own portal schedule row |
 | as needed | `daily_run --date <day> [--only …]` | `scheduler` | The Inbox, or `docker compose exec scheduler …`. Catch-up / re-run after a hold |
 
+## 10a. Old files (automatic)
+
+Once a day (after 04:00 Lagos, never during a run) the scheduler deletes working files older than **31 days** (EPOS downloads and transformed CSVs in `Uploaded/`, `uploads/` staging, logs, reports, exports) and Akponora daily-run evidence older than **90 days**. Configs, tokens, mappings, approvals, the DocNumber ledger and tool state are never touched. Duplicate protection does not depend on old files: every receipt is checked against QuickBooks. Preview by hand: `docker compose exec scheduler python manage.py prune_old_files --dry-run`.
+
 ## 11. Turning it off
 
 - **Everything for Company A:** pause **"Nora daily routine"** on the Schedules page. Company A then has no schedule at all.

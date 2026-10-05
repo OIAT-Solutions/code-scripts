@@ -135,7 +135,7 @@ class DailyRunTests(unittest.TestCase):
             self.assertEqual(env["SLACK_WEBHOOK_URL_A"], "")
         self.assertEqual(len(self.slack), 2)  # a start message, then one summary
         self.assertIn("daily run started", self.slack[0])
-        self.assertTrue(self.slack[1].startswith(":large_yellow_circle: *Nora Mart · Fri 2 Oct* · done · "))
+        self.assertTrue(self.slack[1].startswith(":large_yellow_circle: *Nora Mart · business day Fri 2 Oct* · ₦3,211,950 sales posted · "))
 
     def test_catalogue_crash_still_runs_bills_and_sales(self):
         runner = FakeRunner(raise_on={"catalogue"})
@@ -258,7 +258,8 @@ class DailyRunTests(unittest.TestCase):
         self.assertEqual(summary["exit_code"], 0)
         self.assertIn("*stock* [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks",
                       dr.technical_text(summary))
-        self.assertIn("*Checks*   ran normally · 2 new product(s) added · 11 items negative in QuickBooks", self.slack[-1])
+        self.assertIn("*Checks:* all ran\n• 2 new products added\n• 11 items with negative stock in QuickBooks\n",
+                      self.slack[-1])
 
     def test_stock_step_is_read_only_in_dry_run_too(self):
         runner = FakeRunner()
@@ -564,24 +565,27 @@ class SlackMessageTests(unittest.TestCase):
     def test_first_live_run_reads_clearly(self):
         lines = dr.slack_text(self.summary()).splitlines()
         self.assertEqual(lines, [
-            ":red_circle: *Nora Mart · Fri 2 Oct* · banking stopped · 4 to-dos",
+            ":red_circle: *Nora Mart · business day Fri 2 Oct* · banking stopped · ₦4,857,550 sales posted · 4 to-dos",
             "",
-            "*Sales*   ₦4,857,550 posted · 6 receipts · matches EPOS",
-            "*Bills*   7 posted · ₦190,350 · 2 waiting for you",
-            "*Banking*   stopped part-way on 27 Sep · 28, 30 Sep go on the next run",
-            "*Checks*   ran normally · 19 items negative in QuickBooks",
+            "*Sales:* ₦4,857,550 posted (6 receipts) · matches EPOS",
+            "*Bills:* ₦190,350 posted (7 bills)",
+            "• 2 waiting for you",
+            "*Banking:* stopped part-way on 27 Sep · 28, 30 Sep go on the next run",
+            "• ₦33,912,600 still in Undeposited Funds",
+            "*Checks:* all ran",
+            "• 19 items with negative stock in QuickBooks",
             "",
             "*To do*",
-            f":bust_in_silhouette: *You* · approve PO 3969, UNCLE'S SAM BAKERY AND CAFE, ₦27,000 (looks like a repeat of PO 3967) → {self.INBOX}",
-            f":bust_in_silhouette: *You* · PO 3970, FLOURISH COOL WATER, ALPINE FRESH WATER, ₦20,000: supplier looks like FLOURISH, link or create it → {self.INBOX}",
+            f":bust_in_silhouette: *You* · PO 3969 (UNCLE'S SAM BAKERY AND CAFE, ₦27,000) looks like PO 3967: approve if real → {self.INBOX}",
+            f":bust_in_silhouette: *You* · PO 3970 (FLOURISH COOL WATER, ALPINE FRESH WATER, ₦20,000): link supplier to FLOURISH or create it → {self.INBOX}",
             ":convenience_store: *Store* · complete the till sales breakdown for 25, 26, 29 Sep and 1, 2 Oct → "
             "<https://docs.google.com/spreadsheets/d/15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A|Till sheet>",
             f":hammer_and_wrench: *OIAT* · banking stopped part-way on 27 Sep; nothing posts twice → {self.RUN}",
             "",
-            f"₦33,912,600 still in Undeposited Funds · finished 18:25 · {self.RUN}",
+            f"Finished 18:25 · {self.RUN}",
         ])
 
-    def test_a_clean_day_is_five_lines(self):
+    def test_a_clean_day_is_short(self):
         s = self.summary()
         s["steps"][1] = {"name": "bills", "status": dr.OK, "counts": {"posted": 3, "posted_total": "61000.00",
                                                                         "waiting_items": []}}
@@ -590,30 +594,67 @@ class SlackMessageTests(unittest.TestCase):
         s["steps"][4]["counts"]["by_status"]["NEGATIVE_QBO"] = 0
         text = dr.slack_text(s)
         self.assertEqual(text.splitlines(), [
-            ":large_green_circle: *Nora Mart · Fri 2 Oct* · all done", "",
-            "*Sales*   ₦4,857,550 posted · 6 receipts · matches EPOS",
-            "*Bills*   3 posted · ₦61,000",
-            "*Banking*   ₦4,857,550 banked for 2 Oct",
-            "*Checks*   ran normally", "",
-            f"₦29,055,050 still in Undeposited Funds · finished 18:25 · {self.RUN}"])
+            ":large_green_circle: *Nora Mart · business day Fri 2 Oct* · ₦4,857,550 sales posted · all done", "",
+            "*Sales:* ₦4,857,550 posted (6 receipts) · matches EPOS",
+            "*Bills:* ₦61,000 posted (3 bills)",
+            "*Banking:* ₦4,857,550 banked for 2 Oct",
+            "• ₦29,055,050 still in Undeposited Funds",
+            "*Checks:* all ran, nothing new", "",
+            f"Finished 18:25 · {self.RUN}"])
+
+    def test_4_oct_bills_are_grouped_and_stock_shows_its_trend(self):
+        """4 Oct 2026: the Bills line was a run-on of counts and naira, 'supplier(s)', and the negative-stock
+        number had no direction."""
+        s = self.summary(business_date="2026-10-04", previous_stock_negative=26)
+        s["steps"][1] = {"name": "bills", "status": dr.REVIEW, "counts": {
+            "posted": 5, "posted_total": "2190750.00", "cash_paid": 10, "cash_paid_total": "167250.00",
+            "routine_repeats": 2, "vendors_linked": 1,
+            "waiting_items": [{"po": "3976", "supplier": "UNCLE SAMS BAKERY AND CAFE", "total": "72000.00",
+                               "status": "HOLD", "why": "possible duplicate receipt of EPOS PO 3862 (...)"}]}}
+        s["steps"][4]["counts"]["by_status"]["NEGATIVE_QBO"] = 29
+        s["steps"][5] = {"name": "uf", "status": dr.REVIEW, "counts": {
+            "uf_balance": "8834975.00", "ready": [],
+            "deposited": [{"day": "2026-10-01", "total": "4000000"}, {"day": "2026-10-02", "total": "5000000"},
+                          {"day": "2026-10-03", "total": "5479325"}],
+            "held": [{"day": "2026-10-04", "status": "WAITING_SHEET", "reason": "CASH (System 1) box is blank"},
+                     {"day": "2026-09-29", "status": "HELD", "reason": "sheet total differs from receipts (tolerance)"}]}}
+        lines = dr.slack_text(s).splitlines()
+        self.assertEqual(lines[0], ":large_yellow_circle: *Nora Mart · business day Sun 4 Oct* · ₦4,857,550 sales posted · 3 to-dos")
+        self.assertEqual(lines[3:10], [
+            "*Bills:* ₦2,190,750 posted (5 bills)",
+            "• ₦167,250 paid in cash (10 bills)",
+            "• 1 waiting for you · 2 routine repeat orders let through · 1 supplier linked by name",
+            "*Banking:* ₦14,479,325 banked for 1, 2, 3 Oct",
+            "• ₦8,834,975 still in Undeposited Funds",
+            "*Checks:* all ran",
+            "• 29 items with negative stock in QuickBooks (3 more than last run)"])
+        self.assertIn(f":bust_in_silhouette: *You* · PO 3976 (UNCLE SAMS BAKERY AND CAFE, ₦72,000) looks like PO 3862: approve if real → {self.INBOX}", lines)
+        self.assertIn(f":hammer_and_wrench: *OIAT* · banking for 29 Sep on hold: till sheet and sales don't agree → {self.RUN}", lines)
+        self.assertNotIn("(s)", "\n".join(lines))
+        s["previous_stock_negative"] = 29
+        self.assertIn("• 29 items with negative stock in QuickBooks (same as last run)", dr.slack_text(s))
+        s["previous_stock_negative"] = 31
+        self.assertIn("(2 fewer than last run)", dr.slack_text(s))
 
     def test_new_item_alerts_and_approval_days(self):
         s = self.summary(previous_guard_alert=430)
         s["steps"][5]["status"] = dr.REVIEW
         s["steps"][5]["counts"]["held"] = []
         text = dr.slack_text(s)
-        self.assertIn("*Checks*   ran normally · 7 new item alert(s) · 19 items negative in QuickBooks", text)
-        self.assertIn(f":hammer_and_wrench: *OIAT* · 7 new item alert(s) → {self.RUN}", text)
-        self.assertIn("*Banking*   ₦7,079,250 for 28, 30 Sep waiting for you", text)
+        self.assertIn("*Checks:* all ran\n• 7 new item alerts\n• 19 items with negative stock in QuickBooks", text)
+        self.assertIn(f":hammer_and_wrench: *OIAT* · look at 7 new item alerts → {self.RUN}", text)
+        self.assertIn("*Banking:* ₦7,079,250 for 28, 30 Sep waiting for you", text)
         self.assertIn(f"*You* · approve banking ₦7,079,250 for 28, 30 Sep → {self.INBOX}", text)
-        self.assertTrue(text.startswith(":large_yellow_circle: *Nora Mart · Fri 2 Oct* · done · 4 to-dos"))
+        self.assertTrue(text.startswith(":large_yellow_circle: *Nora Mart · business day Fri 2 Oct* · ₦4,857,550 sales posted · 4 to-dos"))
 
     def test_failed_sales_is_red_and_has_no_error_text(self):
         s = self.summary()
         s["steps"][2] = {"name": "sales", "status": dr.FAILED, "detail": "run_pipeline exited 1; see /data/x/log.txt",
                          "counts": {}}
         text = dr.slack_text(s)
-        self.assertTrue(text.startswith(":red_circle: *Nora Mart · Fri 2 Oct* · sales didn't post"))
+        self.assertTrue(text.startswith(":red_circle: *Nora Mart · business day Fri 2 Oct* · sales didn't post · 5 to-dos"))
+        self.assertIn(":hammer_and_wrench: *OIAT* · sales didn't post", text)
+        self.assertIn("*Sales:* didn't post", text)
         self.assertNotIn("/data/", text)
         self.assertNotIn("exited", text)
         self.assertNotIn("DocNumber", dr.slack_text(self.summary()))
@@ -623,14 +664,14 @@ class SlackMessageTests(unittest.TestCase):
         text = dr.slack_text(s)
         self.assertNotIn("not banked after", text)  # 25 Sep is exactly 7 days before 2 Oct: still quiet
         text = dr.slack_text(self.summary(business_date="2026-10-03"))
-        self.assertIn(":hammer_and_wrench: *OIAT* · Fri 25 Sep still not banked after 8 days. Follow up with the store", text)
+        self.assertIn(":hammer_and_wrench: *OIAT* · 25 Sep not banked after 8 days: follow up with the store", text)
         text = dr.slack_text(self.summary(business_date="2026-10-05", uf_aged_days=7))
-        self.assertIn("*OIAT* · 3 days still not banked after more than 7 days (25, 26, 27 Sep; oldest 10 days)", text)
+        self.assertIn("*OIAT* · 3 days not banked after more than 7 days (25, 26, 27 Sep; oldest 10 days): follow up", text)
 
     def test_start_message(self):
         text = dr.start_text("2026-10-02", banking_on=True,
                              links=dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_x"))
-        self.assertEqual(text, ":arrow_forward: *Nora Mart · Fri 2 Oct* · daily run started (sales, bills, banking, "
+        self.assertEqual(text, ":arrow_forward: *Nora Mart · business day Fri 2 Oct* · daily run started (sales, bills, banking, "
                                "checks) · summary to follow · <https://portal.example.com/epos-qbo/company-a/daily-runs/|Daily runs>")
 
     def test_bills_waiting_reads_the_evidence(self):
@@ -658,3 +699,14 @@ class SlackMessageTests(unittest.TestCase):
                     {"steps": [{"name": "guard", "status": dr.REVIEW, "counts": {"alert": alert}}]}))
             self.assertEqual(dr.previous_guard_alert(root, "2026-10-02"), 430)
             self.assertIsNone(dr.previous_guard_alert(root, "2026-09-30"))
+
+    def test_previous_stock_negative_reads_the_last_real_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for day, run, neg in (("2026-10-01", "run_170000Z", 26), ("2026-10-02", "run_180000Z_dry", 99)):
+                (root / day / run).mkdir(parents=True)
+                (root / day / run / "summary.json").write_text(json.dumps(
+                    {"steps": [{"name": "stock", "status": dr.OK, "counts": {"by_status": {"NEGATIVE_QBO": neg}}}]}))
+            self.assertEqual(dr.previous_stock_negative(root, "2026-10-03"), 26)
+            self.assertIsNone(dr.previous_stock_negative(root, "2026-10-01"))
+            self.assertIsNone(dr.previous_stock_negative(root / "missing", "2026-10-03"))

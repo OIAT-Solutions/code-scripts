@@ -10,7 +10,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.epos_qbo.business_date import get_target_trading_date
+from apps.epos_qbo.business_date import get_business_timezone, get_target_trading_date
 
 from ..models import RunJob, RunSchedule, RunScheduleEvent, SchedulerWorkerHeartbeat
 from .job_runner import dispatch_next_queued_job
@@ -509,7 +509,28 @@ def process_schedule_cycle(*, now: datetime | None = None, max_due: int = 25) ->
         dispatch_next_queued_job()
 
     _record_heartbeat(current)
+    _daily_housekeeping(current)
     return stats
+
+
+HOUSEKEEPING_HOUR = 4  # Lagos time: quiet hours, well away from the 18:00 / 19:00 runs
+
+
+def _daily_housekeeping(now: datetime) -> None:
+    """Once per day, after 04:00 Lagos and with no run in progress: delete old working files."""
+    from . import housekeeping
+
+    local = now.astimezone(get_business_timezone())
+    if local.hour < HOUSEKEEPING_HOUR or not housekeeping.due(local.date()):
+        return
+    if RunJob.objects.filter(status=RunJob.STATUS_RUNNING).exists():
+        return
+    try:
+        res = housekeeping.prune(today=local.date())
+        housekeeping.mark_done(local.date(), res)
+        logger.info("Housekeeping: removed %s", res.as_dict())
+    except Exception:  # noqa: BLE001 - clean-up must never stop the scheduler
+        logger.exception("Housekeeping failed")
 
 
 def _record_heartbeat(now: datetime | None = None) -> None:

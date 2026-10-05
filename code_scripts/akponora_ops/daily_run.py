@@ -461,6 +461,7 @@ class DailyRun:
                    "exit_code": code, "status": {0: "clean", 2: "failed", 3: "review"}[code],
                    "run_dir": str(self.run_dir), "started_at": self.started_at, "finished_at": _now_utc(),
                    "previous_guard_alert": previous_guard_alert(self.day_dir.parent, self.date),
+                   "previous_stock_negative": previous_stock_negative(self.day_dir.parent, self.date),
                    "uf_aged_days": aged_days(self.base_env),
                    "links": self.links(),
                    "steps": [asdict(r) for r in self.results],
@@ -649,12 +650,21 @@ def previous_guard_alert(daily_root: Path, day: str) -> int | None:
     """Item-check ALERT count of the last real (not dry) run before ``day``; None when there is none
     (or when anything about the old evidence can't be read - this must never break a run)."""
     try:
-        return _previous_guard_alert(daily_root, day)
+        return _previous_count(daily_root, day, "guard", lambda c: c["alert"] if "alert" in c else None)
     except Exception:  # noqa: BLE001
         return None
 
 
-def _previous_guard_alert(daily_root: Path, day: str) -> int | None:
+def previous_stock_negative(daily_root: Path, day: str) -> int | None:
+    """Items negative in QuickBooks at the last real stock check before ``day`` (None when unknown)."""
+    try:
+        return _previous_count(daily_root, day, "stock",
+                               lambda c: (c.get("by_status") or {}).get("NEGATIVE_QBO") if c.get("by_status") else None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _previous_count(daily_root: Path, day: str, step: str, pick: Callable) -> int | None:
     try:
         days = sorted((p for p in Path(daily_root).iterdir() if p.is_dir() and p.name < day), reverse=True)
     except OSError:
@@ -663,10 +673,17 @@ def _previous_guard_alert(daily_root: Path, day: str) -> int | None:
         runs = sorted((p for p in folder.glob("run_*") if not p.name.endswith("_dry")), reverse=True)
         for run in runs:
             summary = read_json(run / "summary.json", {}) or {}
-            guard = next((s for s in summary.get("steps") or [] if s.get("name") == "guard"), None)
-            if guard and guard.get("status") in (OK, REVIEW) and "alert" in (guard.get("counts") or {}):
-                return int(guard["counts"]["alert"])
+            found = next((s for s in summary.get("steps") or [] if s.get("name") == step), None)
+            if found and found.get("status") in (OK, REVIEW):
+                value = pick(found.get("counts") or {})
+                if value is not None:
+                    return int(value)
     return None
+
+
+def day_title(day: str) -> str:
+    """'*Nora Mart · business day Fri 2 Oct*' - the bold title every Slack message starts with."""
+    return f"*Nora Mart · business day {short_day(day)}*"
 
 
 def start_text(day: str, *, dry_run: bool = False, only=None, banking_on: bool = False, links=None) -> str:
@@ -675,7 +692,7 @@ def start_text(day: str, *, dry_run: bool = False, only=None, banking_on: bool =
     names = [label for step, label in parts if label and (not only or step in only)]
     if not only or any(s in only for s in ("catalogue", "guard", "stock")):
         names.append("checks")
-    return (f":arrow_forward: *Nora Mart · {short_day(day)}* · daily run started ({', '.join(names)})"
+    return (f":arrow_forward: {day_title(day)} · daily run started ({', '.join(names)})"
             + (" · _practice run, nothing will be posted_" if dry_run else "")
             + " · summary to follow · " + link(links.get("runs", ""), "Daily runs"))
 
@@ -703,7 +720,7 @@ def _bank_reason(reason: str) -> str:
     if "box is blank" in text or "sheet day is blank" in text:
         return "till sales breakdown incomplete"
     if "differ" in text or "tolerance" in text or "outside" in text and "sheet total" in text:
-        return "till sheet and sales differ by more than allowed"
+        return "till sheet and sales don't agree"
     if "outside this tool" in text or "deposited" in text and "by hand" in text:
         return "some of the day's sales were banked by hand"
     if "closing date" in text or "closed" in text:
@@ -736,9 +753,24 @@ def _lagos_time(iso: str | None) -> str:
         return ""
 
 
+def _plural(n: int, word: str, many: str | None = None) -> str:
+    return f"{n:,} {word if n == 1 else (many or word + 's')}"
+
+
+def _trend(now: int, before) -> str:
+    """'(3 more than last run)' / '(2 fewer than last run)' / '(same as last run)'; '' when unknown."""
+    if before is None:
+        return ""
+    if now == before:
+        return " (same as last run)"
+    return f" ({abs(now - before):,} {'more' if now > before else 'fewer'} than last run)"
+
+
 def slack_text(summary: dict) -> str:
-    """The daily Slack summary: a headline, the same four lines every day, then who needs to do what.
-    No error text or file paths (they are behind 'Open run'); the technical version is ``technical_text``."""
+    """The daily Slack summary, read on a phone: a one-line headline (status, business day, sales posted,
+    to-do count), one *bold* line per area with any extra facts as bullets under it, then who needs to do
+    what (who · what → where) and a short footer. No error text or file paths (they are behind 'Open run');
+    the technical version is ``technical_text``."""
     from decimal import Decimal
 
     steps = {s["name"]: s for s in summary.get("steps") or []}
@@ -752,12 +784,17 @@ def slack_text(summary: dict) -> str:
     store: list[str] = []
     oiat: list[str] = []
     stopped: list[str] = []   # headline words for anything that failed
+    sales_posted = ""         # the headline number
 
     def counts(name):
         return (steps.get(name) or {}).get("counts") or {}
 
     def status(name):
         return (steps.get(name) or {}).get("status")
+
+    def section(label, text, bullets=()):
+        lines.append(f"*{label}:* {text}")
+        lines.extend(f"• {b}" for b in bullets if b)
 
     # Sales
     if status("sales") not in (None, SKIPPED, DISABLED):
@@ -775,75 +812,82 @@ def slack_text(summary: dict) -> str:
             uploaded, skipped = c.get("uploaded") or 0, c.get("skipped") or 0
             amount = naira_text(c.get("qbo_total")) if c.get("qbo_total") is not None else ""
             if uploaded:
-                text = f"{amount} posted · {uploaded} receipts" if amount else f"{uploaded} receipts posted"
+                text = f"{amount} posted ({_plural(uploaded, 'receipt')})" if amount else \
+                    f"{_plural(uploaded, 'receipt')} posted"
+                sales_posted = amount
             elif skipped:
-                text = f"already in QuickBooks · {skipped} receipts"
+                text = f"already in QuickBooks ({_plural(skipped, 'receipt')})"
             else:
                 text = "nothing to post"
             rec = c.get("reconcile_status") or ""
             if rec == "MATCH":
                 text += " · matches EPOS"
             elif rec:
-                text += f" · *doesn't match EPOS* ({naira_text(c.get('epos_total'))})"
-                oiat.append(f"sales don't match EPOS for this day → {run}")
-        lines.append(f"*Sales*   {text}")
+                text += f" · *doesn't match EPOS* (EPOS {naira_text(c.get('epos_total'))})"
+                oiat.append(f"sales don't match EPOS → {run}")
+        section("Sales", text)
 
-    # Bills
+    # Bills: what posted, then cash paid, then what waits / was noted
     if status("bills") not in (None, SKIPPED, DISABLED):
         c = counts("bills")
         if status("bills") == FAILED:
-            text = "didn't run"
             stopped.append("bills didn't run")
             oiat.append(f"bills didn't run → {run}")
+            section("Bills", "didn't run")
         else:
             waiting = c.get("waiting_items") or []
             posted = c.get("posted") or 0
             if dry:
                 ready = c.get("ready") or 0
-                text = f"{ready} ready · {naira_text(c.get('ready_total'))}" if ready else "no new purchase orders"
+                text = (f"{naira_text(c.get('ready_total'))} ready ({_plural(ready, 'bill')}), nothing posted"
+                        if ready else "no new purchase orders")
             elif posted:
                 total = c.get("posted_total")
-                text = f"{posted} posted" + (f" · {naira_text(total)}" if total not in (None, "") else "")
+                text = (f"{naira_text(total)} posted ({_plural(posted, 'bill')})" if total not in (None, "")
+                        else f"{_plural(posted, 'bill')} posted")
             else:
                 text = "nothing new to post" if not waiting else "nothing posted"
+            bullets = []
             if c.get("cash_paid"):
-                text += f" · {c['cash_paid']} paid in cash ({naira_text(c.get('cash_paid_total'))})"
+                bullets.append(f"{naira_text(c.get('cash_paid_total'))} paid in cash ({_plural(c['cash_paid'], 'bill')})")
             if c.get("cash_pay_failed"):
-                oiat.append(f"a cash payment for a bill didn't go through; it is retried next run → {run}")
-            if c.get("routine_repeats"):
-                n = c["routine_repeats"]
-                text += f" · {n} routine repeat order{'s' if n != 1 else ''}"
+                oiat.append(f"a bill's cash payment didn't go through; retried next run → {run}")
+            notes = []
             if waiting:
-                text += f" · {len(waiting)} waiting for you"
+                notes.append(f"{len(waiting)} waiting for you")
+            if c.get("routine_repeats"):
+                notes.append(f"{_plural(c['routine_repeats'], 'routine repeat order')} let through")
             if c.get("vendors_created"):
-                text += f" · {c['vendors_created']} new supplier(s) added"
+                notes.append(f"{_plural(c['vendors_created'], 'new supplier')} added")
             if c.get("vendors_linked"):
-                text += f" · {c['vendors_linked']} supplier(s) linked by name"
+                notes.append(f"{_plural(c['vendors_linked'], 'supplier')} linked by name")
+            bullets.append(" · ".join(notes))
+            section("Bills", text, bullets)
             for w in waiting:
-                who = f"PO {w.get('po')}, {w.get('supplier') or 'no supplier'}, {naira_text(w.get('total'))}"
+                po = f"PO {w.get('po')} ({w.get('supplier') or 'no supplier'}, {naira_text(w.get('total'))})"
                 if w.get("vendor_hint") is not None:
                     hint = w["vendor_hint"]
-                    you.append(f"{who}: supplier {'looks like ' + hint + ', link or create it' if hint else 'needs linking or creating'} → {inbox}")
+                    you.append(f"{po}: link supplier to {hint} or create it → {inbox}" if hint
+                               else f"{po}: link or create the supplier → {inbox}")
                 elif "duplicate" in (w.get("why") or "").lower():
                     m = __import__("re").search(r"PO (\d+)", w.get("why") or "")
                     earlier = f"PO {m.group(1)}" if m else "an earlier order"
-                    if w.get("status") == "HOLD":
-                        you.append(f"{who} looks like a repeat of {earlier}: if it's a real order, Approve repeat order → {inbox}")
-                    else:
-                        you.append(f"approve {who} (looks like a repeat of {earlier}) → {inbox}")
+                    you.append(f"{po} looks like {earlier}: approve if real → {inbox}")
                 else:
-                    you.append(f"approve {who} → {inbox}")
-        lines.append(f"*Bills*   {text}")
+                    you.append(f"approve {po} → {inbox}")
 
-    # Banking
+    # Banking (and what is still in Undeposited Funds)
+    uf_balance = counts("uf").get("uf_balance")
+    uf_line = (f"{naira_text(Decimal(str(uf_balance)).quantize(Decimal('1')))} still in Undeposited Funds"
+               if uf_balance not in (None, "") else "")
     if status("uf") not in (None, SKIPPED):
         c = counts("uf")
         if status("uf") == DISABLED:
-            lines.append("*Banking*   off")
+            section("Banking", "off")
         elif status("uf") == FAILED and not c:
-            lines.append("*Banking*   didn't run")
             stopped.append("banking didn't run")
             oiat.append(f"banking didn't run → {run}")
+            section("Banking", "didn't run")
         else:
             def total(items):
                 return sum((Decimal(str(d.get("total") or 0)) for d in items), Decimal(0))
@@ -866,13 +910,13 @@ def slack_text(summary: dict) -> str:
                 you.append(f"approve banking {naira_text(total(ready))} for {day_list(d['day'] for d in ready)} → {inbox}")
             if not bits:
                 bits.append("nothing new to bank")
-            lines.append(f"*Banking*   {' · '.join(bits)}")
+            section("Banking", " · ".join(bits), [uf_line])
             sheet_days = defaultdict(list)
             for d in held:
                 if d.get("status") == "WAITING_SHEET":
                     sheet_days[_bank_reason(d.get("reason"))].append(d["day"])
                 elif d.get("status") == "HELD" and d["day"] not in stop_days:
-                    oiat.append(f"banking for {short_day(d['day'])} is on hold: {_bank_reason(d.get('reason'))} → {run}")
+                    oiat.append(f"banking for {day_list([d['day']])} on hold: {_bank_reason(d.get('reason'))} → {run}")
             for reason, days in sheet_days.items():
                 if reason == "till sales breakdown incomplete":
                     store.append(f"complete the till sales breakdown for {day_list(days)} → {sheet}")
@@ -885,13 +929,14 @@ def slack_text(summary: dict) -> str:
             old = sorted((d for d in held if days_waiting(d["day"], summary["business_date"]) > limit),
                          key=lambda d: d["day"])
             if len(old) == 1:
-                oiat.append(f"{short_day(old[0]['day'])} still not banked after "
-                            f"{days_waiting(old[0]['day'], summary['business_date'])} days. Follow up with the store → {sheet}")
+                oiat.append(f"{day_list([old[0]['day']])} not banked after "
+                            f"{days_waiting(old[0]['day'], summary['business_date'])} days: follow up with the store → {sheet}")
             elif old:
-                oiat.append(f"{len(old)} days still not banked after more than {limit} days ({day_list(d['day'] for d in old)}; "
-                            f"oldest {days_waiting(old[0]['day'], summary['business_date'])} days). Follow up with the store → {sheet}")
+                oiat.append(f"{len(old)} days not banked after more than {limit} days ({day_list(d['day'] for d in old)}; "
+                            f"oldest {days_waiting(old[0]['day'], summary['business_date'])} days): "
+                            f"follow up with the store → {sheet}")
 
-    # Checks (products, item check, stock): one line, detail only when something changed
+    # Checks (products, item check, stock): did they run, and what changed
     check_bits, broken = [], []
     for name, label in (("catalogue", "products"), ("guard", "item check"), ("stock", "stock check")):
         if status(name) == FAILED:
@@ -901,47 +946,51 @@ def slack_text(summary: dict) -> str:
         created = (c.get("items_created") or 0) + (c.get("mapping_only") or 0)
         waiting = (c.get("review") or 0) + (c.get("hold") or 0)
         if created:
-            check_bits.append(f"{created} new product(s) added")
+            check_bits.append(f"{_plural(created, 'new product')} added")
         if waiting:
-            you.append(f"{waiting} new EPOS product(s) need a decision → {inbox}")
+            you.append(f"decide on {_plural(waiting, 'new EPOS product')} → {inbox}")
     if status("guard") not in (None, SKIPPED, DISABLED, FAILED):
         alert, prev = counts("guard").get("alert") or 0, summary.get("previous_guard_alert")
         if prev is not None and alert > prev:
-            check_bits.append(f"{alert - prev:,} new item alert(s)")
-            oiat.append(f"{alert - prev:,} new item alert(s) → {run}")
+            check_bits.append(f"{_plural(alert - prev, 'new item alert')}")
+            oiat.append(f"look at {_plural(alert - prev, 'new item alert')} → {run}")
     if status("stock") not in (None, SKIPPED, DISABLED, FAILED):
         neg = (counts("stock").get("by_status") or {}).get("NEGATIVE_QBO") or 0
+        prev = summary.get("previous_stock_negative")
         if neg:
-            check_bits.append(f"{neg:,} item{'s' if neg != 1 else ''} negative in QuickBooks")
+            check_bits.append(f"{_plural(neg, 'item')} with negative stock in QuickBooks{_trend(neg, prev)}")
+        elif prev:
+            check_bits.append("no items with negative stock in QuickBooks (was {:,})".format(prev))
     if broken:
         stopped.append(f"{' and '.join(broken)} didn't run")
         oiat.append(f"{' and '.join(broken)} didn't run → {run}")
-        lines.append(f"*Checks*   {' and '.join(broken)} didn't run" + (" · " + " · ".join(check_bits) if check_bits else ""))
+        section("Checks", f"{' and '.join(broken)} didn't run", check_bits)
     elif any(status(n) not in (None, SKIPPED, DISABLED) for n in ("catalogue", "guard", "stock")):
-        lines.append("*Checks*   ran normally" + (" · " + " · ".join(check_bits) if check_bits else ""))
+        section("Checks", "all ran" + ("" if check_bits else ", nothing new"), check_bits)
 
     todo = [f":bust_in_silhouette: *You* · {x}" for x in you] + [f":convenience_store: *Store* · {x}" for x in store] \
         + [f":hammer_and_wrench: *OIAT* · {x}" for x in oiat]
     n = len(todo)
-    count = f"{n} to-do{'s' if n != 1 else ''}"
+    head_bits = []
     if stopped:
-        head = f":red_circle: *Nora Mart · {short_day(summary['business_date'])}* · {stopped[0]} · {count}"
+        icon = ":red_circle:"
+        head_bits.append(stopped[0])
     elif todo:
-        head = f":large_yellow_circle: *Nora Mart · {short_day(summary['business_date'])}* · done · {count}"
+        icon = ":large_yellow_circle:"
     else:
-        head = f":large_green_circle: *Nora Mart · {short_day(summary['business_date'])}* · all done"
+        icon = ":large_green_circle:"
+    if sales_posted and not dry:
+        head_bits.append(f"{sales_posted} sales posted")
+    head_bits.append(f"{n} to-do{'s' if n != 1 else ''}" if todo else "all done")
     if dry:
-        head += " · _practice run, nothing posted_"
-    out = [head, ""] + lines
+        head_bits.append("_practice run, nothing posted_")
+    out = [f"{icon} {day_title(summary['business_date'])} · " + " · ".join(head_bits), ""] + lines
     if todo:
         out += ["", "*To do*"] + todo
     foot = []
-    uf = counts("uf").get("uf_balance")
-    if uf not in (None, ""):
-        foot.append(f"{naira_text(Decimal(str(uf)).quantize(Decimal('1')))} still in Undeposited Funds")
     finished = _lagos_time(summary.get("finished_at"))
     if finished:
-        foot.append(f"finished {finished}")
+        foot.append(f"Finished {finished}")
     if links.get("run"):
         foot.append(run)
     if foot:
@@ -1046,7 +1095,7 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
     wait = float(os.getenv(LOCK_WAIT_ENV, "").strip() or 30)
     lock = acquire_lock(f"akponora_daily_run:{day}{':dry' if a.dry_run else ''}", wait_minutes=wait, sleep=sleep)
     if lock is None:
-        text = (f":red_circle: *Nora Mart · {short_day(day)}* · didn't start\n\n"
+        text = (f":red_circle: {day_title(day)} · didn't start\n\n"
                 f":hammer_and_wrench: *OIAT* · another pipeline job was still running after {wait:g} minutes, so "
                 "nothing ran. Re-run the daily run from the portal once it has finished.")
         print(text)

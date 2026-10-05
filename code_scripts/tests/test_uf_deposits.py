@@ -867,7 +867,7 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(self.day_states()["2026-10-01"], ufd.DEPOSITED)
         self.assertEqual(self.day_states()["2026-10-02"], ufd.WAITING_SHEET)
         human = self.slack[-1]
-        self.assertIn("*Banking*   ₦3,199,500 banked for 1 Oct", human)
+        self.assertIn("*Banking:* ₦3,199,500 banked for 1 Oct", human)
         self.assertIn("*Store* · complete the till sales breakdown for 2 Oct", human)
         self.assertIn("₦3,199,500 still in Undeposited Funds", human)
 
