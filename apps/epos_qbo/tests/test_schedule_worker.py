@@ -312,3 +312,27 @@ class CompanyAScheduleRulesTests(TestCase):
         # 05:00 Lagos on 2 Oct onwards -> 1 Oct.
         cutoff = datetime(2026, 10, 2, 4, 0, tzinfo=dt_timezone.utc)
         self.assertEqual(get_target_trading_date(now=cutoff).isoformat(), "2026-10-01")
+
+
+class WorkerLoopTests(TestCase):
+    def test_a_locked_database_never_crashes_the_worker(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+        from django.db import OperationalError
+
+        calls = []
+
+        def cycle():
+            calls.append(1)
+            if len(calls) == 1:
+                raise OperationalError("database is locked")
+            raise KeyboardInterrupt  # stop the loop on the second cycle
+
+        err = StringIO()
+        with mock.patch("apps.epos_qbo.management.commands.run_schedule_worker.process_schedule_cycle", side_effect=cycle), \
+                mock.patch("apps.epos_qbo.management.commands.run_schedule_worker.time.sleep"):
+            with self.assertRaises(KeyboardInterrupt):
+                call_command("run_schedule_worker", poll_seconds=1, stdout=StringIO(), stderr=err)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("database busy", err.getvalue())

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from django.core.management.base import BaseCommand
+from django.db import OperationalError, close_old_connections
 
 from apps.epos_qbo.services.schedule_worker import configured_poll_seconds, process_schedule_cycle
 
@@ -36,7 +37,17 @@ class Command(BaseCommand):
         )
 
         while True:
-            stats = process_schedule_cycle()
+            try:
+                stats = process_schedule_cycle()
+            except OperationalError as exc:
+                # A busy SQLite database (e.g. a migrate on web start) must never crash the worker:
+                # a container restart would also kill a running job. Log and retry next cycle.
+                self.stderr.write(f"cycle skipped: database busy ({exc}); retrying in {poll_seconds}s")
+                close_old_connections()
+                if once:
+                    break
+                time.sleep(poll_seconds)
+                continue
             if any(
                 stats.get(k, 0) > 0
                 for k in [
