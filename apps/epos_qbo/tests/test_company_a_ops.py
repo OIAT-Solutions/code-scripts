@@ -57,7 +57,7 @@ class CompanyAOpsFixtureMixin:
         env = mock.patch.dict(os.environ, {}, clear=False)
         env.start()
         self.addCleanup(env.stop)
-        for key in (ops.ENABLED_ENV, ops.CRON_ENV, ops.UF_ENV, "SCHEDULE_TZ"):
+        for key in (ops.UF_ENV,):
             os.environ.pop(key, None)
 
     def make_run(self, day, run_id, summary=None, *, raw=None, files=None):
@@ -149,20 +149,24 @@ class CompanyAOpsServiceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertIsNone(ops.guard_alerts())
         self.assertFalse(ops.posting_hold()["active"])
 
-    def test_schedule_info_env_on_off(self):
+    def test_schedule_info_comes_from_the_daily_routine_schedule_row(self):
+        from apps.epos_qbo.services import workflows
+
         info = ops.schedule_info()
         self.assertFalse(info["enabled"])
         self.assertIsNone(info["next_run"])
-        with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "1", ops.CRON_ENV: "0 18 * * *"}):
-            now = datetime(2026, 10, 3, 12, 0, tzinfo=ZoneInfo("Africa/Lagos"))
-            info = ops.schedule_info(now)
+        sched, _ = workflows.ensure_daily_routine_schedule(now=datetime(2026, 10, 3, 12, 0, tzinfo=ZoneInfo("Africa/Lagos")))
+        sched.enabled = True
+        sched.save()
+        info = ops.schedule_info()
         self.assertTrue(info["enabled"])
         self.assertEqual(info["cron"], "0 18 * * *")
         self.assertEqual(info["time_label"], "Daily at 18:00")
         self.assertEqual(info["timezone"], "Africa/Lagos")
         self.assertEqual(info["next_run"], datetime(2026, 10, 3, 18, 0, tzinfo=ZoneInfo("Africa/Lagos")))
-        with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "1", ops.CRON_ENV: "nonsense"}):
-            self.assertFalse(ops.schedule_info()["cron_valid"])
+        sched.cron_expr = "nonsense"
+        sched.save()
+        self.assertFalse(ops.schedule_info()["cron_valid"])
 
     def test_posting_hold_and_last_cleared(self):
         self.assertFalse(ops.posting_hold()["active"])
@@ -330,22 +334,30 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
                          "qbo": {"realm_id": "123"},
                          "epos": {"username_env_key": "EPOS_USERNAME_A", "password_env_key": "EPOS_PASSWORD_A"}})
 
-    def test_schedules_row_env_on(self):
+    def _daily_routine(self, enabled):
+        from apps.epos_qbo.services import workflows
+
+        sched, _ = workflows.ensure_daily_routine_schedule()
+        sched.enabled = enabled
+        sched.save()
+        return sched
+
+    def test_schedules_row_enabled(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
-        with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "1", ops.CRON_ENV: "0 18 * * *"}):
-            response = self.client.get(reverse("epos_qbo:schedules"))
+        self._daily_routine(True)
+        response = self.client.get(reverse("epos_qbo:schedules"))
         self.assertEqual(response.status_code, 200)
         rows = response.context["schedule_display_rows"]
         routine = next(r for r in rows if r["name"] == "Daily routine")
         self.assertEqual(routine["state"], "active")
         self.assertEqual(routine["business_date"], "2026-10-02")
         self.assertIsNotNone(routine["last_run"])
-        self.assertTrue(routine["managed"])
+        self.assertEqual(sum(1 for r in rows if r["name"] == "Daily routine"), 1)
         self.assertEqual(response.content.decode().count('<h1'), 1)
 
-    def test_schedules_row_env_off(self):
-        with mock.patch.dict(os.environ, {ops.ENABLED_ENV: "0"}):
-            response = self.client.get(reverse("epos_qbo:schedules"), {"state": "paused"})
+    def test_schedules_row_paused(self):
+        self._daily_routine(False)
+        response = self.client.get(reverse("epos_qbo:schedules"), {"state": "paused"})
         routine = next(r for r in response.context["schedule_display_rows"] if r["name"] == "Daily routine")
         self.assertEqual(routine["state"], "paused")
         self.assertIsNone(routine["next_run"])

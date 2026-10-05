@@ -9,7 +9,7 @@
 
 ## What runs every day: `daily_run`
 
-One routine runs everything, in order, for the last closed business day. On the server it runs at 06:00 Lagos (setup, env, holds and approvals: [`SERVER_SETUP.md`](SERVER_SETUP.md)):
+One routine runs everything, in order, for the last closed business day. On the server the portal schedule worker (`scheduler` container) runs it at 18:00 Lagos, from the portal schedule row "Nora daily routine" (setup, env, holds and approvals: [`SERVER_SETUP.md`](SERVER_SETUP.md)):
 
 ```bash
 .venv/bin/python -m code_scripts.akponora_ops.daily_run [--date YYYY-MM-DD] [--dry-run] [--only catalogue,bills,sales,guard,stock,uf]
@@ -24,7 +24,7 @@ One routine runs everything, in order, for the last closed business day. On the 
 | 5 | **stock** | `stock_snapshot run`: read-only EPOS stock vs QBO QtyOnHand per item → `STATE_ROOT/ops/company_a/stock_snapshot/latest.json` (portal Products & Stock). Report only; a failure never affects the other steps |
 | 6 | **uf** | `uf_deposits scheduled`: each day's receipts in Undeposited Funds → Bank Deposits by the till sheet + true-up transfers (below). Off unless `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1`; posts only with `OIAT_COMPANY_A_UF_AUTO_POST=1` + ref |
 
-Exit 0 = clean, 3 = waits for review, 2 = a step failed. One Slack summary; evidence under `STATE_ROOT/ops/company_a/daily/<day>/`. It holds the global run lock. While `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`, the portal scheduler never schedules Company A, and the individual job crons below are ignored. Each job below can still be run on its own.
+Exit 0 = clean, 3 = waits for review, 2 = a step failed. One Slack summary; evidence under `STATE_ROOT/ops/company_a/daily/<day>/`. It holds the global run lock. The portal schedule worker is the only scheduler; Company A sales run only inside this routine, never in a sales schedule. Each job below can still be run on its own.
 
 Until the server is on, sales are still posted by hand from this repo (dry-run, then chat yes + post).
 
@@ -32,15 +32,15 @@ Until the server is on, sales are still posted by hand from this repo (dry-run, 
 
 ## Portal (read-only view of the daily run)
 
-The OIAT Portal shows Company A without any new write action (phase 1). It reads the same `STATE_ROOT` as the `akponora-ops` container:
+The OIAT Portal shows Company A without any new write action (phase 1). It reads the same `STATE_ROOT` as the `scheduler` container:
 
-- **Schedules**: a system-managed row "Company A daily run (products → bills → sales → health check → deposits)" with enabled/disabled (`OIAT_COMPANY_A_DAILY_RUN_ENABLED`), cron and timezone (`OIAT_COMPANY_A_DAILY_RUN_CRON`, `SCHEDULE_TZ`), next run, and the last run's result. It is not editable in the portal.
+- **Schedules**: the row "Nora daily routine" (workflow "Daily routine", scope `company_a_daily`): enabled/paused, cron and timezone (default 18:00 Africa/Lagos), next run, and the last run's result. Turn it on or off and change its time here. `python manage.py ensure_workflow_schedules` creates it paused if it is missing. Only one Daily routine per company; inventory sync cannot be scheduled.
 - **Company A daily** (sidebar; `/epos-qbo/company-a/daily-runs/`): every run newest first, real vs dry, overall status, a chip per step, sales posted ₦, bills posted (count / ₦), items / vendors created, items waiting. A run's page shows each step's summary, its review items, the last lines of each step's `log.txt`, and links to view its CSV / JSON evidence in the page (only files inside that run's folder under `STATE_ROOT/ops/company_a`).
 - **Overview** and the **Company A company page**: a Company A card (last real run, what posted, what is waiting, Undeposited Funds step) and a red banner when the posting hold is in place. The company page also has a Holds & alerts panel (posting hold details, latest item-guard alerts by check).
 
-Approvals, clearing the hold and "Run now" are not in the portal yet (see the roadmap §4/§5). Do them as described below.
+Approvals and running a day ("Run daily for date") are in the portal Inbox. Clearing a posting hold is not in the portal yet; do it as described below.
 
-**Stuck portal runs.** A portal run left "running" by a dead process (e.g. a container restart; found 3 Oct 2026: a Company B run stuck since 21 Aug blocked every Company B schedule) is now closed automatically by the scheduler every cycle and before a manual "Run now". It is marked failed with "Marked failed: the run stopped without reporting back (detected …)" plus the reason, and a "Run failed" event, when: the global run lock (`STATE_ROOT/logs/.oiat_global_run.lock`) is free for a sales run older than 5 minutes; or its PID is gone / now belongs to a newer process and its log has been quiet 15 minutes; or it has run longer than `OIAT_RUNJOB_MAX_HOURS` (default 6). A skip now names the blocking run and how long it has run. Manual check: `python manage.py reconcile_run_jobs`. The lock is shared with the `akponora-ops` daily run, so the daily run holding it never makes a portal run look stale.
+**Stuck portal runs.** A portal run left "running" by a dead process (e.g. a container restart; found 3 Oct 2026: a Company B run stuck since 21 Aug blocked every Company B schedule) is now closed automatically by the scheduler every cycle and before a manual "Run now". It is marked failed with "Marked failed: the run stopped without reporting back (detected …)" plus the reason, and a "Run failed" event, when: the global run lock (`STATE_ROOT/logs/.oiat_global_run.lock`) is free for a sales run older than 5 minutes; or its PID is gone / now belongs to a newer process and its log has been quiet 15 minutes; or it has run longer than `OIAT_RUNJOB_MAX_HOURS` (default 6). A skip now names the blocking run and how long it has run. Manual check: `python manage.py reconcile_run_jobs`. The lock is shared with the daily run, so the daily run holding it never makes a portal run look stale.
 
 ---
 
@@ -139,7 +139,7 @@ Approvals, clearing the hold and "Run now" are not in the portal yet (see the ro
 - Method (same as 26 Sep): whole receipts are deposited by tender (Cash → 100100, Card → card banks, Transfer → transfer banks, mixed → both) with LinkedTxn (minorversion 65, `TxnLineId 0`); then Bank→Bank true-up transfers make each bank's day total = sheet amount × receipts total / sheet total. Deposits follow the receipts; the mix follows the sheet. DocNumber `UF<yymmdd><bank no>`; transfer memo tag `UFTU <day> <from>><to>`; every memo `UF deposit <day> from till sheet; approval <ref>`.
 - Days are independent (owner, 3 Oct 2026): every run re-evaluates each day since 2026-09-25 that is not yet deposited and posts every day whose gates pass; a held or missing day never blocks a later one.
 - Holds (that day only): blank or unfinished sheet day (a CASH box or SYSTEM empty), unmapped / inactive till line, sheet vs receipts beyond max(₦1,000, 0.5 %), receipts deposited by hand, closed period, missing bank, or above `OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL` (₦15M) in automatic mode.
-- Tolerance toggle: `OIAT_COMPANY_A_UF_TOLERANCE` (₦) and `OIAT_COMPANY_A_UF_TOLERANCE_PCT` (%), read every run. In `.env` (then `docker compose up -d akponora-ops`), or without a restart in `STATE_ROOT/ops/company_a/uf_deposits/settings.env` (wins over `.env`; only these two keys).
+- Tolerance toggle: `OIAT_COMPANY_A_UF_TOLERANCE` (₦) and `OIAT_COMPANY_A_UF_TOLERANCE_PCT` (%), read every run. In `.env` (then `docker compose up -d scheduler web`), or without a restart in `STATE_ROOT/ops/company_a/uf_deposits/settings.env` (wins over `.env`; only these two keys).
 - Per-day state `STATE_ROOT/ops/company_a/uf_deposits/days.json` (floor 2026-09-25): `DEPOSITED` (final) / `READY` / `HELD` (reason) / `WAITING_SHEET` / `NO_SALES`. An old `cursor.json` is migrated on first read (days up to it = `DEPOSITED`).
 - Till-sheet status every run (step `summary.json` and the daily Slack): "Till sheet: last day entered 1 Oct. Missing: 25, 26, 29 Sep. Waiting to deposit: none. Deposited: …". Same on demand, read-only: `.venv/bin/python -m code_scripts.akponora_ops.uf_deposits status`.
 - Automatic (chat yes to enable): `OIAT_COMPANY_A_UF_DEPOSIT_ENABLED=1` + `OIAT_COMPANY_A_UF_AUTO_POST=1` + `OIAT_COMPANY_A_UF_APPROVAL_REF`. Enabled alone = plan every day, nothing posted.
@@ -194,30 +194,14 @@ Exit 0 written, 2 failed (previous `latest.json` kept), 5 another snapshot runni
 
 ---
 
-## Ops scheduler (container)
+## Scheduling
 
-Separate from the portal sales scheduler. With `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1` it runs only `daily_run` (`OIAT_COMPANY_A_DAILY_RUN_CRON`, default `0 6 * * *`), and the individual crons below are ignored unless `OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS=1`. **Keep them unset while the daily run is on.** Opt-in:
+One scheduler: the portal schedule worker (`python manage.py run_schedule_worker`, the `scheduler` container). It starts every job; pages and Inbox actions only queue (start within one poll, 15 s). What can be scheduled is the workflow catalogue (`apps/epos_qbo/services/workflows.py`): "Daily routine" for Company A only (one per company), "Sales sync" for every other company. The individual jobs (catalogue, bills, item guard) have no schedule of their own; they run inside `daily_run`, or by hand as above. Details: [`SCHEDULING_AUTHORITY.md`](SCHEDULING_AUTHORITY.md).
 
-```bash
-docker compose --profile akponora-ops up -d akponora-ops
-```
-
-A job runs only when its cron is set in `.env`:
-
-| Env | Example | Job |
-| --- | --- | --- |
-| `OIAT_AKPONORA_CATALOGUE_SYNC_CRON` | `30 6 * * *` | catalogue sync (`scheduled`) |
-| `OIAT_AKPONORA_BILLS_SYNC_CRON` | `0 9,15 * * *` | bills sync (`scheduled`) |
-| `OIAT_AKPONORA_ITEM_GUARD_CRON` | `0 19 * * *` | item guard (`--fail-on-alert`) |
-| `SCHEDULE_TZ` | `Africa/Lagos` | timezone for all three |
-
-Optional: `OIAT_AKPONORA_<JOB>_CMD` override, `OIAT_AKPONORA_OPS_SLACK_WEBHOOK_URL` (else the pipeline webhook). Evidence under `STATE_ROOT/ops/company_a/` (and `…/runs/` when `STATE_ROOT` is set). Jobs that can write take the global run lock and skip while a sales run holds it.
-
-List / one-shot:
+Run one day by hand on the server:
 
 ```bash
-.venv/bin/python -m code_scripts.akponora_ops.ops_scheduler --list
-.venv/bin/python -m code_scripts.akponora_ops.ops_scheduler --run-now item_guard
+docker compose exec scheduler python -m code_scripts.akponora_ops.daily_run --date <day> [--only …]
 ```
 
 ---

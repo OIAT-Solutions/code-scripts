@@ -68,7 +68,7 @@ from .services.config_sync import (
     sync_record_to_json,
     validate_company_config,
 )
-from .services.job_runner import dispatch_next_queued_job, read_log_chunk, resolve_python_executable
+from .services.job_runner import read_log_chunk, resolve_python_executable
 from .services.inventory_categories import load_inventory_categories_by_company
 from .services.inventory_review_slack import send_inventory_review_action_queued
 from .services.inventory_review import REASON_GROUPS, parse_inventory_review_csv
@@ -1754,12 +1754,9 @@ def _scheduler_env_for_display():
     """Build read-only scheduler/env key-value dict for Settings page."""
     return {
         "OIAT_SCHEDULER_POLL_SECONDS": os.environ.get("OIAT_SCHEDULER_POLL_SECONDS", "(default 15)"),
-        "OIAT_SCHEDULER_ENABLE_ENV_FALLBACK": os.environ.get("OIAT_SCHEDULER_ENABLE_ENV_FALLBACK", "(default 1)"),
         "OIAT_BUSINESS_TIMEZONE": getattr(settings, "OIAT_BUSINESS_TIMEZONE", os.environ.get("OIAT_BUSINESS_TIMEZONE", "(default Africa/Lagos)")),
         "OIAT_BUSINESS_DAY_CUTOFF_HOUR": os.environ.get("OIAT_BUSINESS_DAY_CUTOFF_HOUR") or getattr(settings, "OIAT_BUSINESS_DAY_CUTOFF_HOUR", "(default 5)"),
         "OIAT_BUSINESS_DAY_CUTOFF_MINUTE": os.environ.get("OIAT_BUSINESS_DAY_CUTOFF_MINUTE") or getattr(settings, "OIAT_BUSINESS_DAY_CUTOFF_MINUTE", "(default 0)"),
-        "SCHEDULE_CRON": os.environ.get("SCHEDULE_CRON", "(default 0 18 * * *)"),
-        "SCHEDULE_TZ": os.environ.get("SCHEDULE_TZ", "(default from OIAT_BUSINESS_TIMEZONE)"),
     }
 
 
@@ -2047,26 +2044,7 @@ def _schedule_create_initial() -> dict:
 def _operator_schedule_name(schedule: RunSchedule) -> str:
     if schedule.name == "All Companies Daily Run":
         return "Daily Sales Sync"
-    if schedule.name == "Legacy Env Fallback":
-        return "System Fallback Schedule"
     return schedule.name
-
-
-def _inventory_options(schedule: RunSchedule) -> dict:
-    return schedule.inventory_options_json if isinstance(schedule.inventory_options_json, dict) else {}
-
-
-def _first_inventory_category(schedule: RunSchedule) -> str:
-    categories = _inventory_options(schedule).get("categories") or []
-    if isinstance(categories, str):
-        return categories.strip()
-    if isinstance(categories, list) and categories:
-        return str(categories[0] or "").strip()
-    return ""
-
-
-def _inventory_product_filter(schedule: RunSchedule) -> str:
-    return str(_inventory_options(schedule).get("product_filter") or "").strip()
 
 
 def _company_display(company_map: dict[str, str], company_key: str | None) -> str:
@@ -2077,33 +2055,17 @@ def _company_display(company_map: dict[str, str], company_key: str | None) -> st
 
 
 def _schedule_subtitle(schedule: RunSchedule, company_map: dict[str, str]) -> str:
-    if schedule.name == "Legacy Env Fallback" and schedule.is_system_managed:
-        return "Legacy environment configuration"
     if schedule.scope == RunJob.SCOPE_ALL:
         return "Sales Sync · All eligible companies"
     if schedule.scope == RunJob.SCOPE_SINGLE:
         company = _company_display(company_map, schedule.company_key)
         return f"Sales Sync · {company}" if company else "Sales Sync · One company"
-    if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-        parts = ["Inventory Sync"]
-        company = _company_display(company_map, schedule.company_key)
-        if company:
-            parts.append(company)
-        category = _first_inventory_category(schedule)
-        product = _inventory_product_filter(schedule)
-        if category:
-            parts.append(f"Category: {category}")
-        if product:
-            parts.append(f"Product: {product}")
-        if not category and not product:
-            parts.append("All products")
-        return " · ".join(parts) if parts else "Inventory"
     return schedule.get_scope_display()
 
 
 def _schedule_workflow(schedule: RunSchedule) -> str:
-    if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-        return RunScheduleForm.WORKFLOW_INVENTORY
+    if schedule.scope == RunJob.SCOPE_COMPANY_A_DAILY:
+        return RunScheduleForm.WORKFLOW_DAILY_ROUTINE
     return RunScheduleForm.WORKFLOW_SALES
 
 
@@ -2114,9 +2076,10 @@ def _schedule_company_target(schedule: RunSchedule) -> str:
 
 
 def _schedule_workflow_label(schedule: RunSchedule) -> str:
-    if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-        return "Inventory Sync"
-    return "Sales Sync"
+    from .services.workflows import WORKFLOWS
+
+    entry = WORKFLOWS.get(schedule.scope if schedule.scope != RunJob.SCOPE_ALL else RunJob.SCOPE_SINGLE)
+    return entry.name if entry else schedule.get_scope_display()
 
 
 def _friendly_cron_label(schedule: RunSchedule) -> str:
@@ -2265,8 +2228,6 @@ def _schedule_rows(schedules: list[RunSchedule], company_map: dict[str, str]) ->
                 "current_status_label": result["current"],
                 "one_time_completed": one_time_completed,
                 "status_subtext": status_subtext,
-                "category": _first_inventory_category(schedule),
-                "product_filter": _inventory_product_filter(schedule),
                 "run_once_date_value": run_once_date_value,
                 "run_once_time_value": run_once_time_value,
             }
@@ -2323,7 +2284,7 @@ def _operator_schedule_form_error_message(form: RunScheduleForm) -> str:
 def schedules_page(request):
     _ensure_company_records()
     now_utc = timezone.now()
-    schedules = list(RunSchedule.objects.order_by("-is_system_managed", "name", "created_at"))
+    schedules = list(RunSchedule.objects.order_by("name", "created_at"))
     recent_events = list(
         RunScheduleEvent.objects.select_related("schedule", "run_job", "run_job__scheduled_by")
         .order_by("-created_at")[:60]
@@ -2346,12 +2307,16 @@ def schedules_page(request):
         }
         for company in companies
     ]
-    inventory_company_options = [c for c in company_options if c.get("inventory_enabled")]
-    inventory_company_default_key = (
-        str(inventory_company_options[0]["company_key"])
-        if len(inventory_company_options) == 1
-        else ""
-    )
+    from .services import workflows as catalogue
+
+    workflow_form_values = {RunJob.SCOPE_SINGLE: RunScheduleForm.WORKFLOW_SALES,
+                            RunJob.SCOPE_COMPANY_A_DAILY: RunScheduleForm.WORKFLOW_DAILY_ROUTINE}
+    schedulable_workflows = [dict(key=w.key, name=w.name, description=w.description,
+                                  form_value=workflow_form_values[w.key]) for w in catalogue.schedulable_workflows()]
+    sales_company_options = [c for c in company_options
+                             if catalogue.WORKFLOWS[RunJob.SCOPE_SINGLE].available_for(c["company_key"])]
+    daily_routine_company_options = [c for c in company_options
+                                     if catalogue.WORKFLOWS[RunJob.SCOPE_COMPANY_A_DAILY].available_for(c["company_key"])]
     default_tz_name = _schedule_default_timezone_name()
     default_tz = _safe_zoneinfo(default_tz_name)
     now_default_local = now_utc.astimezone(default_tz)
@@ -2362,7 +2327,6 @@ def schedules_page(request):
     if state not in {"active", "paused", "history"}:
         state = "active"
     from .services import company_a_ops as ops
-    from .services import workflows
 
     def last_real_daily_run():
         try:
@@ -2378,39 +2342,23 @@ def schedules_page(request):
                 "failed": "Could not finish"}.get(last.status, "Outcome not confirmed")
 
     display_rows = []
-    # One row per workflow: once the portal schedule owns Nora's routine, the env-cron row is not shown.
-    company_a_row = None if workflows.portal_owns_company_a_daily() else company_a_views.safe_schedule_row()
-    if company_a_row:
-        sched = company_a_row["schedule"]
-        last = last_real_daily_run()
-        display_rows.append(dict(
-            name="Daily routine", company=company_map.get("company_a", "Akponora"),
-            state="active" if sched["enabled"] else "paused",
-            timing=sched.get("time_label"), zone="Africa/Lagos",
-            next_run=sched.get("next_run"), last_run=last.finished_at if last else None,
-            business_date=last.business_date if last else None,
-            outcome=daily_outcome(last),
-            managed=True, url=reverse("epos_qbo:company-a-run-detail", args=[last.business_date, last.run_id]) if last else "",
-        ))
     for row in schedule_rows:
         schedule = row["schedule"]
         if schedule.scope == RunJob.SCOPE_COMPANY_A_DAILY:
-            if company_a_row is not None:
-                continue  # the env cron still owns it: the row above is the one that runs
             last = last_real_daily_run()
             display_rows.append(dict(
                 name="Daily routine", company=company_map.get(schedule.company_key or "company_a", "Akponora"),
                 state="active" if schedule.enabled else "paused", timing=row["timing_primary"],
                 zone=schedule.timezone_name, next_run=schedule.next_fire_at if schedule.enabled else None,
                 last_run=last.finished_at if last else None, business_date=last.business_date if last else None,
-                outcome=daily_outcome(last), managed=False,
+                outcome=daily_outcome(last),
                 url=reverse("epos_qbo:company-a-run-detail", args=[last.business_date, last.run_id]) if last else ""))
             continue
         display_rows.append(dict(name=row["display_name"], company=row["business_subtitle"],
             state="history" if row["one_time_completed"] else "active" if schedule.enabled else "paused",
             timing=row["timing_primary"], zone=schedule.timezone_name,
             next_run=schedule.next_fire_at if schedule.enabled and not row["one_time_completed"] else None,
-            last_run=row["last_run_at"], outcome=row["last_result_label"], managed=schedule.is_system_managed))
+            last_run=row["last_run_at"], outcome=row["last_result_label"]))
 
     context = {
         "schedule_view": state,
@@ -2421,23 +2369,22 @@ def schedules_page(request):
         "recent_events": recent_events,
         "companies": companies,
         "company_options": company_options,
-        "inventory_company_options": inventory_company_options,
-        "inventory_company_default_key": inventory_company_default_key,
+        "schedulable_workflows": schedulable_workflows,
+        "sales_company_options": sales_company_options,
+        "daily_routine_company_options": daily_routine_company_options,
         "default_schedule_timezone_name": default_tz_name,
         "default_schedule_timezone_now_label": f"{now_default_time} {now_default_abbrev}".strip(),
         "active_run_ids_json": json.dumps([str(run_id) for run_id in active_run_ids]),
         "schedule_target_date_mode": RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
         "single_scope": RunJob.SCOPE_SINGLE,
         "all_scope": RunJob.SCOPE_ALL,
-        "inventory_scope": RunJob.SCOPE_INVENTORY_PIPELINE,
         "schedule_type_recurring": RunSchedule.SCHEDULE_TYPE_RECURRING,
         "schedule_type_one_time": RunSchedule.SCHEDULE_TYPE_ONE_TIME,
         "workflow_sales": RunScheduleForm.WORKFLOW_SALES,
-        "workflow_inventory": RunScheduleForm.WORKFLOW_INVENTORY,
+        "workflow_daily_routine": RunScheduleForm.WORKFLOW_DAILY_ROUTINE,
         "company_target_all": RunScheduleForm.COMPANY_TARGET_ALL,
         "company_target_one": RunScheduleForm.COMPANY_TARGET_ONE,
         "scheduler_status": get_scheduler_status(),
-        "company_a_schedule": company_a_views.safe_schedule_row(),
     }
     context.update(_nav_context())
     context.update(
@@ -2496,9 +2443,6 @@ def schedule_create(request):
 @require_POST
 def schedule_update(request, schedule_id):
     schedule = get_object_or_404(RunSchedule, id=schedule_id)
-    if schedule.is_system_managed:
-        messages.error(request, "System-managed schedules cannot be edited.")
-        return redirect("epos_qbo:schedules")
 
     was_one_time_completed = schedule.is_one_time and schedule.completed_at is not None
     previous_run_once_at = schedule.run_once_at
@@ -2543,9 +2487,6 @@ def schedule_update(request, schedule_id):
 @require_POST
 def schedule_toggle(request, schedule_id):
     schedule = get_object_or_404(RunSchedule, id=schedule_id)
-    if schedule.is_system_managed:
-        messages.error(request, "System-managed schedules cannot be toggled manually.")
-        return redirect("epos_qbo:schedules")
 
     schedule.enabled = not schedule.enabled
     schedule.updated_by = request.user
@@ -2572,10 +2513,7 @@ def schedule_toggle(request, schedule_id):
 @require_POST
 def schedule_run_now(request, schedule_id):
     schedule = get_object_or_404(RunSchedule, id=schedule_id)
-    if schedule.is_system_managed:
-        messages.error(request, "System-managed schedules cannot be run manually.")
-        return redirect("epos_qbo:schedules")
-    if schedule.scope in {RunJob.SCOPE_SINGLE, RunJob.SCOPE_INVENTORY_PIPELINE} and not (
+    if schedule.scope == RunJob.SCOPE_SINGLE and not (
         schedule.company_key or ""
     ).strip():
         messages.error(request, "Schedule is missing company key.")
@@ -2589,7 +2527,7 @@ def schedule_run_now(request, schedule_id):
         messages.error(request, "Could not queue run for schedule.")
         return redirect("epos_qbo:schedules")
 
-    dispatch_next_queued_job()
+    # queued: the schedule worker starts it (pages never start jobs)
     job.refresh_from_db()
     if job.status == RunJob.STATUS_RUNNING:
         messages.success(request, f"Scheduled run started: {job.friendly_id}")
@@ -2604,9 +2542,6 @@ def schedule_run_now(request, schedule_id):
 @require_POST
 def schedule_delete(request, schedule_id):
     schedule = get_object_or_404(RunSchedule, id=schedule_id)
-    if schedule.is_system_managed:
-        messages.error(request, "System-managed schedules cannot be deleted.")
-        return redirect("epos_qbo:schedules")
 
     schedule_name = schedule.name
     schedule.delete()
@@ -3033,7 +2968,7 @@ def trigger_run(request):
         requested_by=request.user,
         status=RunJob.STATUS_QUEUED,
     )
-    dispatch_next_queued_job()
+    # queued: the schedule worker starts it (pages never start jobs)
 
     job.refresh_from_db()
     if job.status == RunJob.STATUS_RUNNING:
@@ -3076,7 +3011,7 @@ def trigger_inventory_run(request):
         requested_by=request.user,
         status=RunJob.STATUS_QUEUED,
     )
-    dispatch_next_queued_job()
+    # queued: the schedule worker starts it (pages never start jobs)
 
     job.refresh_from_db()
     mode_label = _inventory_mode_label(mode) or "Inventory run"
@@ -4838,7 +4773,7 @@ def company_inventory_missing_create(request, company_key):
         )
         return redirect(redirect_back)
 
-    dispatch_next_queued_job()
+    # queued: the schedule worker starts it (pages never start jobs)
     send_inventory_review_action_queued(company=company, job=job, request=request)
     scope_note = ""
     if cat_label != "All categories":

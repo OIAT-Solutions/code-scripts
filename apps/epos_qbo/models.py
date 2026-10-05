@@ -697,7 +697,6 @@ class RunSchedule(models.Model):
     last_fired_at = models.DateTimeField(null=True, blank=True)
     last_result = models.CharField(max_length=32, choices=LAST_RESULT_CHOICES, blank=True)
     last_error = models.TextField(blank=True)
-    is_system_managed = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -722,7 +721,6 @@ class RunSchedule(models.Model):
         ordering = ["name", "created_at"]
         indexes = [
             models.Index(fields=["enabled", "next_fire_at"], name="epos_qbo_rs_enabled_next_idx"),
-            models.Index(fields=["is_system_managed", "enabled"], name="epos_qbo_rs_system_enabled_idx"),
             models.Index(fields=["scope", "company_key"], name="epos_qbo_rs_scope_company_idx"),
         ]
 
@@ -989,8 +987,6 @@ def _operator_schedule_name(name: str) -> str:
     raw = (name or "").strip()
     if raw == "All Companies Daily Run":
         return "Daily Sales Sync"
-    if raw == "Legacy Env Fallback":
-        return "System Fallback Schedule"
     return raw or "-"
 
 

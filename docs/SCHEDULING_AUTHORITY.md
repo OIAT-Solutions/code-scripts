@@ -1,8 +1,8 @@
 # One scheduling authority for EPOS/QBO workflows
 
-Status: implemented and tested locally on branch `claude/scheduling-authority` (5 Oct 2026). **Not deployed.**
-Production activation needs Marvin's approval of the cutover below (AGENTS.md). It was written against
-`docs/CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` and `docs/OIAT_PORTAL_DELIVERY_PLAN.md`.
+Status (5 Oct 2026): done. The cutover below was completed on 5 Oct 2026, and the legacy scheduling stack
+was removed the same day (see "Legacy removal"). The portal schedule worker is the only scheduler. It was
+written against `docs/CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` and `docs/OIAT_PORTAL_DELIVERY_PLAN.md`.
 
 ## Before (5 Oct 2026)
 
@@ -16,19 +16,22 @@ Production activation needs Marvin's approval of the cutover below (AGENTS.md). 
 
 Two authorities: the portal worker excluded Company A while `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`.
 
-## After
+## How it works now
 
-The **portal schedule worker** is the one authority. It decides when and what runs. The worker process
-executes each job as a subprocess of the existing business tool.
+The **portal schedule worker** (`python manage.py run_schedule_worker`, the `scheduler` container) is the one
+authority. It decides when and what runs, and it is the only process that starts jobs. It executes each job
+as a subprocess of the existing business tool. There is no owner switch and no env fallback schedule.
 
+- **Catalogue** (`apps/epos_qbo/services/workflows.py`, `WORKFLOWS`): only these can be scheduled.
+  - "Daily routine" (`company_a_daily`): Company A only, one per company. Row "Nora daily routine", default 18:00 Africa/Lagos, created paused by `python manage.py ensure_workflow_schedules`. Turned on/off and timed on the Schedules page.
+  - "Sales sync" (`single_company`): every company except Company A. Goldplates (company_b) runs at 19:00 Lagos.
+  - The worker refuses any other scope (inventory sync can no longer be scheduled). Company A sales are never in a sales schedule: all-company runs always exclude Company A, and a Company A Sales sync schedule is refused. No env switch changes that.
 - **Nora's routine:** a `RunJob` scope `company_a_daily` runs
   `python -m code_scripts.akponora_ops.daily_run --date <D>`, unchanged.
   - `D` is the closed trading date bound when the job is queued (`get_target_trading_date` at the due time; same 05:00 Lagos contract as `daily_run`, tested).
   - Steps, approval references, SHA gates, the global file lock, preview exclusion and evidence all stay inside `daily_run`.
   - Exit 0 and 3 are recorded as succeeded (3 = finished with items waiting for review); 2 is failed.
-- **Ownership:** one switch, `OIAT_COMPANY_A_DAILY_RUN_OWNER`.
-  - `ops_scheduler` (the default, today's behaviour): the portal row records `skipped_not_owner`.
-  - `portal`: the akponora-ops cron refuses to schedule `daily_run`.
+  - It runs inside the `scheduler` container, which gets every `OIAT_COMPANY_A_*` switch from `env_file: .env`. The sales step still posts only with `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1` and `OIAT_COMPANY_A_STANDING_APPROVAL_REF`.
   - Only the oldest "Nora daily routine" row can ever queue; duplicates are skipped.
 - **Missed runs (Nora):**
   - A fire more than `OIAT_SCHEDULE_MISSED_GRACE_MINUTES` (180) late is **not run**. It records `skipped_missed`, posts a Slack OIAT line, and leaves the day unconfirmed on Home.
@@ -36,7 +39,7 @@ executes each job as a subprocess of the existing business tool.
   - A day with a completed real run is never replayed (`skipped_done`).
   - Dry runs and failed runs don't count as done.
 - **Goldplates:** unchanged (business rules and missed-run behaviour).
-- **Execution placement:** with `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY=1`, only the worker process starts queued jobs. Pages and Inbox actions only queue (start within one poll, 15 s), so a web restart can't kill a financial run. The worker starts queued jobs every cycle.
+- **Execution placement:** only the worker process starts queued jobs, always. Pages and Inbox actions only queue (start within one poll, `OIAT_SCHEDULER_POLL_SECONDS`, 15 s), so a web restart can't kill a financial run. The worker starts queued jobs every cycle.
 - **Locks:**
   - The portal `RunLock` (database) wraps the job.
   - `daily_run` takes the global file lock itself; `job_runner` never takes it (tested), so there is no nested acquisition and no deadlock.
@@ -47,11 +50,10 @@ executes each job as a subprocess of the existing business tool.
 - **Interface summary:** `workflows.workflow_summaries()` returns one row per workflow:
   - company, workflow id/name, enabled, completed, cron, timezone, next due;
   - last run, last business date, outcome, expected date, freshness, permitted actions;
-  - `owner` (diagnostic only).
 
   No heartbeat is used as proof of health. For Codex's Schedules / Home presentation.
 
-## Changed files (branch `claude/scheduling-authority`)
+## Changed files (branch `claude/scheduling-authority`, history)
 
 - `apps/epos_qbo/models.py`: `RunJob.SCOPE_COMPANY_A_DAILY`; event types `skipped_missed`, `skipped_done`, `skipped_not_owner`.
 - `apps/epos_qbo/migrations/0021_workflow_scheduling.py`: choices only; no data change.
@@ -67,7 +69,9 @@ executes each job as a subprocess of the existing business tool.
 
 No template or frontend changes. `views.py` is unchanged: its `dispatch_next_queued_job()` calls become "queue only" under the worker-only flag. Codex should show "Queued" rather than "Started" for those actions.
 
-## Production cutover (for approval; outside 17:45–19:30 Lagos)
+## Production cutover (done 5 Oct 2026; history)
+
+Steps 1 to 5 were carried out on 5 Oct 2026. The owner switch and worker-only flag they mention were removed the same day (see "Legacy removal").
 
 1. **Release.**
    - Merge this branch and Codex's interface checkpoint into the main branch. Run both suites.
@@ -90,11 +94,29 @@ No template or frontend changes. `views.py` is unchanged: its `dispatch_next_que
    - A `queued` event at 18:00 and a `company_a_daily` job running in the `scheduler` container.
    - The `daily_run` evidence folder and Slack summary.
    - Job `succeeded` (exit 0 or 3); Home confirms the day.
-6. **Rollback** (any time):
+6. **Rollback** (no longer applies after the legacy removal):
    - remove `OIAT_COMPANY_A_DAILY_RUN_OWNER` (or set `ops_scheduler`) and pause the row;
    - `docker compose up -d scheduler akponora-ops`;
    - image rollback if needed: `docker tag oiat-portal:rollback-<date> oiat-portal:latest`, then `up -d`.
-7. **Later:** after a clean week, retire the akponora-ops cron (compose profile) in its own reviewed change.
+
+## Legacy removal (5 Oct 2026)
+
+Removed:
+
+- The `akponora-ops` container / compose service and `code_scripts/akponora_ops/ops_scheduler.py` (its cron loop, `--list`, `--run-now`, the `OIAT_AKPONORA_<JOB>_CRON` / `_CMD` env vars, `OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS`). `COMPOSE_PROFILES=akponora-ops` no longer means anything.
+- The owner switch `OIAT_COMPANY_A_DAILY_RUN_OWNER`, and `OIAT_COMPANY_A_DAILY_RUN_ENABLED` / `OIAT_COMPANY_A_DAILY_RUN_CRON`. The Daily routine's on/off and time are the portal row "Nora daily routine".
+- `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY`: pages and Inbox actions always only queue; only the worker starts jobs.
+- The env fallback schedule (`OIAT_SCHEDULER_ENABLE_ENV_FALLBACK`, `SCHEDULE_CRON`, `SCHEDULE_TZ`, the "Legacy Env Fallback" / "System Fallback Schedule" row, `is_system_managed`). Migration `0022_remove_legacy_schedules` deletes that row and the legacy inventory schedules and drops the field.
+- Scheduled inventory sync: the worker refuses any scope not in the catalogue.
+
+Still in use: `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED` + `OIAT_COMPANY_A_STANDING_APPROVAL_REF`, the other `OIAT_COMPANY_A_*` feature switches, `OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES`, `OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK`, `OIAT_SCHEDULER_POLL_SECONDS`, `OIAT_SCHEDULE_MISSED_GRACE_MINUTES`, `OIAT_SCHEDULE_RUN_ALLOWANCE_MINUTES`.
+
+Deploy:
+
+1. After the evening runs (not between 17:45 and 19:30 Lagos), build the image.
+2. `docker compose up -d --remove-orphans` (removes the old `akponora-ops` container).
+3. `docker compose exec web python manage.py migrate` (0022).
+4. Delete these obsolete `.env` lines: `OIAT_COMPANY_A_DAILY_RUN_ENABLED`, `OIAT_COMPANY_A_DAILY_RUN_CRON`, `OIAT_COMPANY_A_DAILY_RUN_OWNER`, `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY`, `COMPOSE_PROFILES=akponora-ops`, `SCHEDULE_CRON`, `SCHEDULE_TZ`, `OIAT_SCHEDULER_ENABLE_ENV_FALLBACK`.
 
 ## Independent review (5 Oct 2026) and outcome
 
@@ -102,16 +124,16 @@ Review of `06bbe6d`; fixed in the follow-up commit. Tests were added for each fi
 
 | # | Finding | Outcome |
 | --- | --- | --- |
-| 1, 2 | The Nora row was created system-managed, so the env-fallback logic disabled it, and the Schedules page couldn't enable or run it | Fixed: user-managed row; fallback never touches it |
+| 1, 2 | The Nora row was created system-managed, so the env-fallback logic disabled it, and the Schedules page couldn't enable or run it | Fixed: user-managed row; fallback never touches it (removed 5 Oct: no fallback) |
 | 3 | A web-side reconcile could mark a live, silent daily job failed (PID in another container; step output not in the job log) | Fixed: a held global flock means "running" for `company_a_daily`; scope added to the flock rules |
 | 4 | A partial Inbox run (`--only`) counted as the day done | Fixed: only a full routine with no skipped steps counts |
 | 5 | A stale due time could raise a false "missed" alert | Fixed: days that already ran are filtered out first; enabling recomputes the due time |
-| 6 | The owner switch was read once at ops_scheduler start | Fixed: re-checked before each run; the loop no longer crashes after a flip (found by the test). **Both containers must still be recreated together after the `.env` edit** (step 4) |
+| 6 | The owner switch was read once at ops_scheduler start | Fixed: re-checked before each run; the loop no longer crashes after a flip (found by the test). **Both containers must still be recreated together after the `.env` edit** (step 4). (Removed 5 Oct: no owner switch) |
 | 7 | Slack HTTP call inside the DB transaction | Fixed: `transaction.on_commit` |
 | 8 | Goldplates Home and Inbox banners now use the expected date (no "missing" before 19:00 + 90 min Lagos) | Kept: Marvin asked for this for both companies (5 Oct). It's a presentation rule, not a Goldplates pipeline change |
 | 9 | A duplicate daily job could queue for the same date (Inbox plus schedule) | Fixed: re-checked at dispatch; cancelled if the day finished meanwhile |
 | 10 | A multi-day outage reported one day | Fixed: every missed day listed once (minus days that ran) |
 | 11 | Cron defaults differed | Fixed: both use the ops default; production sets `0 18 * * *` |
 | 12 | A Nora row with the wrong or blank company | Fixed: refused |
-| 13 | Worker-only mode needs the scheduler up; SQLite has no row locks | Noted: page actions show "Queued" (Codex). The worker is the only dispatcher in worker-only mode, so races disappear once it's on |
+| 13 | Worker-only mode needs the scheduler up; SQLite has no row locks | Noted: page actions show "Queued" (Codex). The worker is the only dispatcher in worker-only mode, so races disappear once it's on. (5 Oct: worker-only is now always on) |
 | 14 | The summary's "confirmed" rule differed from Home's | Fixed: same verified-sales rule |

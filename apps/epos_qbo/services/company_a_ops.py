@@ -1,7 +1,7 @@
 """Read-only view over the Company A (AKPONORA) daily-run evidence.
 
-The daily routine (``python -m code_scripts.akponora_ops.daily_run``) runs in the separate
-``akponora-ops`` container and writes, per run::
+The daily routine (``python -m code_scripts.akponora_ops.daily_run``), started by the portal schedule
+worker as a ``company_a_daily`` job, writes per run::
 
     STATE_ROOT/ops/company_a/daily/<business_date>/run_<HHMMSSZ>[_dry]/summary.json
     STATE_ROOT/ops/company_a/daily/<business_date>/run_<HHMMSSZ>[_dry]/<step>/{log.txt,*.csv,*.json}
@@ -28,15 +28,8 @@ from zoneinfo import ZoneInfo
 from code_scripts import paths as _paths
 
 COMPANY_KEY = "company_a"
-ENABLED_ENV = "OIAT_COMPANY_A_DAILY_RUN_ENABLED"
-CRON_ENV = "OIAT_COMPANY_A_DAILY_RUN_CRON"
 UF_ENV = "OIAT_COMPANY_A_UF_DEPOSIT_ENABLED"
-try:  # keep the default in step with the ops scheduler when it is importable
-    from code_scripts.akponora_ops.ops_scheduler import DAILY_DEFAULT_CRON as DEFAULT_CRON
-except Exception:  # noqa: BLE001 - the portal must still render without it
-    DEFAULT_CRON = "0 6 * * *"
 DEFAULT_TZ = "Africa/Lagos"
-CONTAINER = "akponora-ops"
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 RUN_RE = re.compile(r"^run_[0-9A-Za-z_-]{1,64}$")
@@ -140,13 +133,12 @@ def _parse_dt(value: Any) -> datetime | None:
     return dt
 
 
-def schedule_timezone_name() -> str:
-    return os.getenv("SCHEDULE_TZ", "").strip() or DEFAULT_TZ
-
-
 def _tz() -> ZoneInfo:
+    """Times on the pages are shown in the store's local time (the business timezone)."""
+    from ..business_date import get_business_timezone
+
     try:
-        return ZoneInfo(schedule_timezone_name())
+        return get_business_timezone()
     except Exception:  # noqa: BLE001
         return ZoneInfo(DEFAULT_TZ)
 
@@ -156,40 +148,26 @@ def _local(dt: datetime | None) -> datetime | None:
 
 
 # --------------------------------------------------------------------------- schedule
-def schedule_info(now: datetime | None = None) -> dict:
-    """Schedule of the daily run from its current owner: the portal "Nora daily routine" schedule
-    when OIAT_COMPANY_A_DAILY_RUN_OWNER=portal, else the akponora-ops env cron."""
-    from . import workflows
-
-    if workflows.portal_owns_company_a_daily():
-        s = workflows.daily_routine_schedule()
-        info = {"enabled": bool(s and s.enabled), "cron": s.cron_expr if s else "", "timezone": s.timezone_name if s else "",
-                "next_run": (s.next_fire_at.astimezone(ZoneInfo(s.timezone_name)) if s and s.enabled and s.next_fire_at else None),
-                "cron_valid": bool(s and s.cron_expr), "time_label": "", "container": "scheduler",
-                "enabled_env": workflows.OWNER_ENV, "cron_env": "portal schedule"}
-        parts = info["cron"].split()
-        if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:] == ["*", "*", "*"]:
-            info["time_label"] = f"Daily at {int(parts[1]):02d}:{int(parts[0]):02d}"
-        return info
-    enabled = _truthy(os.getenv(ENABLED_ENV))
-    cron = os.getenv(CRON_ENV, "").strip() or DEFAULT_CRON
-    tz_name = schedule_timezone_name()
-    info = {"enabled": enabled, "cron": cron, "timezone": tz_name, "next_run": None, "cron_valid": True,
-            "time_label": "", "container": CONTAINER, "enabled_env": ENABLED_ENV, "cron_env": CRON_ENV}
+def _cron_valid(expr: str) -> bool:
     try:
         from croniter import croniter
 
-        if not croniter.is_valid(cron):
-            info["cron_valid"] = False
-            return info
-        parts = cron.split()
-        if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:] == ["*", "*", "*"]:
-            info["time_label"] = f"Daily at {int(parts[1]):02d}:{int(parts[0]):02d}"
-        if enabled:
-            base = (now or datetime.now(_tz())).astimezone(_tz())
-            info["next_run"] = croniter(cron, base).get_next(datetime)
+        return bool(expr) and croniter.is_valid(expr)
     except Exception:  # noqa: BLE001
-        info["cron_valid"] = False
+        return False
+
+
+def schedule_info(now: datetime | None = None) -> dict:
+    """Nora's Daily routine schedule (the portal schedule row; there is no other scheduler)."""
+    from . import workflows
+
+    s = workflows.daily_routine_schedule()
+    info = {"enabled": bool(s and s.enabled), "cron": s.cron_expr if s else "", "timezone": s.timezone_name if s else "",
+            "next_run": (s.next_fire_at.astimezone(ZoneInfo(s.timezone_name)) if s and s.enabled and s.next_fire_at else None),
+            "cron_valid": _cron_valid(s.cron_expr if s else ""), "time_label": ""}
+    parts = info["cron"].split()
+    if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:] == ["*", "*", "*"]:
+        info["time_label"] = f"Daily at {int(parts[1]):02d}:{int(parts[0]):02d}"
     return info
 
 
@@ -622,5 +600,5 @@ def overview_card() -> dict:
 
 def schedule_row() -> dict:
     sched = schedule_info()
-    last = latest_run()
+    last = latest_run(real_only=True)
     return {"schedule": sched, "last_run": last, "hold": posting_hold()}

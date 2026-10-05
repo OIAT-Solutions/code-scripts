@@ -182,7 +182,7 @@ Keep Django variable tags on one line — never wrap `{{ ... }}` across multiple
 
 ### Docker / Scheduler
 
-The `docker-compose.yml` defines a `scheduler` service that runs the schedule worker. Env vars: `OIAT_SCHEDULER_POLL_SECONDS` (default 15), `SCHEDULE_CRON` (default `0 18 * * *`), `SCHEDULE_TZ` (default `Africa/Lagos`).
+The `docker-compose.yml` defines a `scheduler` service that runs the schedule worker: the only scheduler and the only process that starts jobs (pages and Inbox actions just queue). Schedules are `RunSchedule` rows from the workflow catalogue (`apps/epos_qbo/services/workflows.py`): "Daily routine" (`company_a` only; runs `code_scripts.akponora_ops.daily_run`) and "Sales sync" (every other company). There is no env-var schedule. Env vars: `OIAT_SCHEDULER_POLL_SECONDS` (default 15), `OIAT_SCHEDULE_MISSED_GRACE_MINUTES` (default 180). See [docs/SCHEDULING_AUTHORITY.md](docs/SCHEDULING_AUTHORITY.md).
 
 ## Key Environment Variables
 

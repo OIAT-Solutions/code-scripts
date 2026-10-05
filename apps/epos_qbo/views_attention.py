@@ -15,7 +15,7 @@ from django.urls import reverse
 from django.views.decorators.http import require_GET, require_http_methods
 
 from .models import PortalReviewAction, RunJob
-from .services import attention, attention_actions, job_runner
+from .services import attention, attention_actions
 from .views_company_a import _shell_context
 
 SALT = "company-a-review-confirmation"
@@ -259,7 +259,6 @@ def _confirm_post(request):
             return redirect("epos_qbo:run-detail", job_id=existing.job_id)
     except (signing.BadSignature, ValueError, KeyError) as exc:
         return HttpResponseBadRequest(str(exc))
-    # Existing dispatcher starts a monitored subprocess, never runs the tool in this request.
-    job_runner.dispatch_next_queued_job()
+    # Queued only: the schedule worker starts the monitored subprocess (pages never start jobs).
     messages.success(request, "Queued. The result and your decision are recorded under Recent decisions.")
     return redirect("epos_qbo:run-detail", job_id=job.id)

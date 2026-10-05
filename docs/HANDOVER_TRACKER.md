@@ -15,7 +15,7 @@ Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP
 | Portal redesign branch | `codex/portal-redesign-phase1`, in worktree **`/private/tmp/oiat-portal-redesign-phase1`**. ⚠️ It lives under `/private/tmp`, which can be wiped on reboot. **Push it or copy it before any restart.** It contains all main-branch work up to `d98255b` plus Codex's portal pages. Checkpoint `07a6e82` = Codex's unfinished WIP (Codex hit its usage limit and will **not** resume) |
 | Evidence/data (never commit) | `code-scripts/outputs/…`, `code-scripts/runtime/…`, `../MISC/AKPONORA Investigation/COGS Analysis/As of 30th September 2026/` |
 | Mac QBO token | **Retired** (`runtime/code_scripts/qbo_tokens.sqlite.retired`). **Never call QuickBooks from the Mac.** The server owns the tokens |
-| Production server | `oiat-srv-01` (Windows, Docker Desktop). Repo `C:\Users\oiatadmin\Documents\prod\epos_to_qbo_automation\code-scripts`. Containers: `web`, `scheduler`, `akponora-ops`, `caddy`, `cloudflared`. Data volume `/data` (STATE_ROOT) |
+| Production server | `oiat-srv-01` (Windows, Docker Desktop). Repo `C:\Users\oiatadmin\Documents\prod\epos_to_qbo_automation\code-scripts`. Containers: `web`, `scheduler`, `caddy`, `cloudflared` (`akponora-ops` is removed at the next deploy). Data volume `/data` (STATE_ROOT) |
 | SSH to server | `ssh -i ~/.ssh/oiat_server oiatadmin@oiat-srv-01` (Tailscale; key in macOS keychain agent). The shell is `cmd`. Helper: `/private/tmp/claude-501/srv.sh "<cmd>"` (volatile; recreate it with the snippet below) |
 | Portal | `https://portal.oiatsolutions.com` (Tailscale only; Marvin signed in on Chrome on this Mac) |
 | Server docs | [`SERVER_SETUP.md`](SERVER_SETUP.md), [`AKPONORA_DAILY_OPERATIONS.md`](AKPONORA_DAILY_OPERATIONS.md) |
@@ -39,8 +39,8 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 **Company A: AKPONORA / NORA MINI MART (`company_a`, realm 9341455406194328)**
 - **New items:** live since 1 Oct on 3,938 Inventory `AKP-` and 492 NonInventory `AKP-NS-` items; all legacy items are `LEGACY —`. September is closed. FIFO COGS works.
 - **Item categories check (4 Oct):** 0 of 4,431 items misfiled (`outputs/category_check_20261004/`).
-- **Unattended `daily_run`** at **18:00 Lagos** in the `akponora-ops` container: products → bills (+ cash payments) → sales → item check → stock → deposits.
-  - Server code: `5ed4b36`; it needs a rebuild to take effect (see §4 A1).
+- **Unattended `daily_run`** at **18:00 Lagos**, run by the portal schedule worker (`scheduler` container, "Nora daily routine" schedule) since 5 Oct: products → bills (+ cash payments) → sales → item check → stock → deposits.
+  - Server code: `80ca6fd` (built 5 Oct).
   - The 4 Oct run (business date 3 Oct) took 12.8 min, down from 26.
 - **Slack:** a one-line start message, then a summary grouped by You / Store / OIAT.
 - **Deposits:** on, auto, ₦8M/day cap.
@@ -80,7 +80,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 ## 4. Open items
 
 ### A. Daily operations
-1. [ ] **Rebuild** for `5ed4b36` (cash payments for cash POs, Approve repeat order). Marvin: `docker compose build web scheduler akponora-ops`, then `docker compose up -d web scheduler akponora-ops`. Do it outside 17:45–19:30 Lagos.
+1. [x] **Rebuilt** 5 Oct with the scheduling cutover (cash payments for cash POs, Approve repeat order are live).
 2. [ ] **After the next run, check:**
    - October cash bills paid from Petty Cash (`bills/cash_payments.json`); expected include 80546 (PO 3978) and the water POs;
    - POs 3970 and 3979 posted (routine / linked);
@@ -103,8 +103,13 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
   - Home and the Inbox expect the day whose scheduled run has passed: no "missing day" before 18:00 / 19:00 Lagos.
   - 563 portal + 673 pipeline tests pass.
 - [x] **Merged 5 Oct** into `cursor/post-akponora-qbo-writes-51f3` at `126cb9a`: scheduling authority (`e54b0cb`, after the independent review) + Codex `codex/oiat-portal-ux` `847b25f` (phase 1 slices 1–2). Conflicts were in `experience.py` / `attention.py`: kept the per-company expected date plus Codex's per-company task count. 577 portal + 674 pipeline tests pass; no pending migrations beyond 0021. Server checkout is at `126cb9a`.
-- [ ] **Deploy (behaviour unchanged):** Marvin builds; then `up -d web scheduler akponora-ops`, `migrate` (0021), `ensure_workflow_schedules` (creates the paused Nora row). The owner stays `ops_scheduler`.
-- [ ] **Cutover** (`SCHEDULING_AUTHORITY.md` step 4) with Marvin's yes: `.env` gets `OIAT_COMPANY_A_DAILY_RUN_OWNER=portal` + `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY=1`; recreate all three containers together; enable the Nora row. Recommended after one clean night on the new build.
+- [x] **Deployed and cut over 5 Oct** (Marvin: "i want it today"): migrate 0021, `ensure_workflow_schedules`, owner `portal`, Nora row enabled (first portal-owned run 5 Oct 18:00 Lagos). A dry run inside the `scheduler` container for 4 Oct worked; its catalogue step failed on a dropped EPOS list page (5,893 of 6,143) → the pull now retries up to 3 times.
+- [ ] **Legacy removal** (Marvin, 5 Oct: "are we using legacy things or not? if we are not then get rid"). Built and tested; deploy after the evening runs.
+  - Removed: the `akponora-ops` container and `ops_scheduler`; the owner switch; the env fallback schedule (`OIAT_SCHEDULER_ENABLE_ENV_FALLBACK`, `SCHEDULE_CRON`, `SCHEDULE_TZ`, `is_system_managed`); the Company A env gates in the worker; the worker-only flag (pages never start jobs now); inventory schedules (legacy inventory stack can't be scheduled).
+  - "Add schedule" offers the workflow catalogue: **Daily routine** (Akponora only, one per company) and **Sales sync** (every other company).
+  - Migration `0022_remove_legacy_schedules` deletes the fallback row and the inventory schedules.
+  - Deploy: build; `docker compose up -d --remove-orphans`; `docker compose exec web python manage.py migrate`. Then delete from `.env`: `OIAT_COMPANY_A_DAILY_RUN_ENABLED`, `OIAT_COMPANY_A_DAILY_RUN_CRON`, `OIAT_COMPANY_A_DAILY_RUN_OWNER`, `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY`, `COMPOSE_PROFILES=akponora-ops`, `SCHEDULE_CRON`, `SCHEDULE_TZ`, `OIAT_SCHEDULER_ENABLE_ENV_FALLBACK`.
+  - Separate decision: the legacy inventory tools themselves (`inventory_pipeline` / `inventory_sync` jobs and their portal pages).
 
 ### A2. Till sheet feedback (Marvin, 4 Oct)
 - [x] **"Banked" notes in the till sheet** (`till_sheet_marks`). Column B of each day's title row shows:

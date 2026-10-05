@@ -64,8 +64,6 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
 STEPS = ("catalogue", "bills", "sales", "guard", "stock", "uf")
-ENABLED_ENV = "OIAT_COMPANY_A_DAILY_RUN_ENABLED"
-CRON_ENV = "OIAT_COMPANY_A_DAILY_RUN_CRON"
 DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"

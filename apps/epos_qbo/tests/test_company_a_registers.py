@@ -195,7 +195,7 @@ class ProductsAndStockTests(RegisterFixtures, TestCase):
         self.assertEqual(job.inventory_options_json["action"], "stock")
         self.assertEqual(workspace_jobs.command("stock", job.id)[-2:], ["code_scripts.akponora_ops.stock_snapshot", "run"])
         self.assertEqual(workspace_jobs.command("stock", job.id, mode="qbo")[-1], "--no-epos")
-        self.assertEqual(dispatch.call_count, 1)
+        dispatch.assert_not_called()  # queued; the schedule worker starts it
         self.assertEqual(self.client.post(url, {"action": "stock", "mode": "rm -rf"}).status_code, 400)
         self.assertEqual(self.client.post(url, {"action": "shell"}).status_code, 400)
 

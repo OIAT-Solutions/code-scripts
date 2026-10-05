@@ -6,21 +6,11 @@
         createWorkflow: '{{ workflow_sales }}',
         createTarget: '{{ company_target_all }}',
         createCompanyKey: '',
-        inventoryDefaultCompanyKey: '{{ inventory_company_default_key|default:'' }}',
-        enforceInventoryTarget() {
-            if (this.createWorkflow === '{{ workflow_inventory }}') {
-                this.createTarget = '{{ company_target_one }}';
-                if (!this.createCompanyKey && this.inventoryDefaultCompanyKey) {
-                    this.createCompanyKey = this.inventoryDefaultCompanyKey;
-                }
-            }
-        }
-     }"
-     x-effect="enforceInventoryTarget()">
+     }">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-            <h2 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Portal schedule controls</h2>
-            <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Manage Sales and Inventory schedules.</p>
+            <h2 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Manage schedules</h2>
+            <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Add, edit, pause or run any workflow's schedule.</p>
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">
                 Default schedule timezone: {{ default_schedule_timezone_name }} · Current time: {{ default_schedule_timezone_now_label }}
             </p>
@@ -50,7 +40,7 @@
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Name</label>
-                        <input type="text" name="name" required class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" placeholder="Sunday Inventory Sync">
+                        <input type="text" name="name" required class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" placeholder="Goldplates daily sales">
                     </div>
                     <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 md:self-end md:h-10">
                         <input type="checkbox" name="enabled" checked class="rounded border-slate-300 dark:border-slate-600">
@@ -71,70 +61,42 @@
                     </div>
                     <div>
                         <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Workflow</label>
-                        <select name="workflow" x-model="createWorkflow" @change="enforceInventoryTarget()" class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
-                            <option value="{{ workflow_sales }}">Sales Sync</option>
-                            <option value="{{ workflow_inventory }}">Inventory Sync</option>
+                        <select name="workflow" x-model="createWorkflow" class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
+                            {% for wf in schedulable_workflows %}
+                            <option value="{{ wf.form_value }}">{{ wf.name }}</option>
+                            {% endfor %}
                         </select>
+                        {% for wf in schedulable_workflows %}
+                        <p x-show="createWorkflow === '{{ wf.form_value }}'" x-cloak class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ wf.description }}</p>
+                        {% endfor %}
                     </div>
-                    <div>
+                    <div x-show="createWorkflow === '{{ workflow_sales }}'">
                         <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Company target</label>
-                        <!-- Use separate selects so Inventory Sync cannot submit "all". -->
-                        <select name="company_target"
-                                x-show="createWorkflow === '{{ workflow_sales }}'"
-                                :disabled="createWorkflow !== '{{ workflow_sales }}'"
-                                x-model="createTarget"
+                        <select name="company_target" :disabled="createWorkflow !== '{{ workflow_sales }}'" x-model="createTarget"
                                 class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
                             <option value="{{ company_target_all }}">All eligible companies</option>
                             <option value="{{ company_target_one }}">One company</option>
                         </select>
-                        <select name="company_target"
-                                x-show="createWorkflow === '{{ workflow_inventory }}'"
-                                x-cloak
-                                :disabled="createWorkflow !== '{{ workflow_inventory }}'"
-                                x-model="createTarget"
-                                class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
-                            <option value="{{ company_target_one }}">One company</option>
-                        </select>
                     </div>
-                    <div x-show="createTarget === '{{ company_target_one }}'" x-cloak>
+                    <div x-show="createWorkflow === '{{ workflow_sales }}' && createTarget === '{{ company_target_one }}'" x-cloak>
                         <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Company</label>
-                        <!-- Separate selects so Inventory Sync only lists inventory-enabled companies. -->
-                        <select name="company_key"
-                                x-show="createWorkflow === '{{ workflow_sales }}'"
-                                :disabled="createWorkflow !== '{{ workflow_sales }}'"
-                                x-model="createCompanyKey"
+                        <select name="company_key" :disabled="createWorkflow !== '{{ workflow_sales }}'" x-model="createCompanyKey"
                                 class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
                             <option value="">Select company</option>
-                            {% for company in company_options %}
-                            <option value="{{ company.company_key }}">{{ company.display_name }} ({{ company.company_key }})</option>
-                            {% endfor %}
-                        </select>
-                        <select name="company_key"
-                                x-show="createWorkflow === '{{ workflow_inventory }}'"
-                                x-cloak
-                                :disabled="createWorkflow !== '{{ workflow_inventory }}'"
-                                x-model="createCompanyKey"
-                                class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
-                            <option value="">Select company</option>
-                            {% for company in inventory_company_options %}
+                            {% for company in sales_company_options %}
                             <option value="{{ company.company_key }}">{{ company.display_name }} ({{ company.company_key }})</option>
                             {% endfor %}
                         </select>
                     </div>
-                </div>
-                <p x-show="createWorkflow === '{{ workflow_inventory }}'" x-cloak class="mt-2 text-xs text-slate-500 dark:text-slate-400">Inventory Sync currently supports one inventory-enabled company.</p>
-            </section>
-
-            <section x-show="createWorkflow === '{{ workflow_inventory }}'" x-cloak>
-                <p class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">Inventory filters</p>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Category</label>
-                        <input type="text" name="category" class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" placeholder="ALCOHOLS &amp; SPIRITS">
-                    </div>
-                    <div>
-                        <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Product filter</label>
-                        <input type="text" name="product_filter" class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
+                    <div x-show="createWorkflow === '{{ workflow_daily_routine }}'" x-cloak>
+                        <label class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Company</label>
+                        <input type="hidden" name="company_target" value="{{ company_target_one }}" :disabled="createWorkflow !== '{{ workflow_daily_routine }}'">
+                        <select name="company_key" :disabled="createWorkflow !== '{{ workflow_daily_routine }}'"
+                                class="mt-1 w-full h-10 px-3 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm">
+                            {% for company in daily_routine_company_options %}
+                            <option value="{{ company.company_key }}">{{ company.display_name }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                 </div>
             </section>
@@ -322,9 +284,6 @@
                                             {% if row.status_subtext %}
                                             <div class="text-[11px] text-slate-500 dark:text-slate-400">{{ row.status_subtext }}</div>
                                             {% endif %}
-                                            {% if schedule.is_system_managed %}
-                                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap leading-none bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30" title="Controlled by fallback env: OIAT_SCHEDULER_ENABLE_ENV_FALLBACK, SCHEDULE_CRON, SCHEDULE_TZ">System-managed <iconify-icon icon="solar:info-circle-linear" width="12" class="opacity-80 shrink-0" aria-hidden="true"></iconify-icon></span>
-                                            {% endif %}
                                         </div>
                                     </td>
                                     <td class="px-4 py-3 align-top">
@@ -344,7 +303,6 @@
                                         {% endif %}
                                     </td>
                                     <td class="px-4 py-3 align-middle">
-                                        {% if not schedule.is_system_managed %}
                                         <div class="flex justify-center" x-data="{ menuOpen: false, menuX: 0, menuY: 0 }">
                                             <button type="button" x-ref="scheduleMenuBtn"
                                                     @click="menuOpen = !menuOpen; if (menuOpen) { $nextTick(() => { const b = $refs.scheduleMenuBtn; const r = b.getBoundingClientRect(); menuX = r.left; menuY = r.bottom + 6 }) }"
@@ -378,15 +336,10 @@
                                                 </div>
                                             </template>
                                         </div>
-                                        {% else %}
-                                        <span class="block text-center text-slate-400 dark:text-slate-500">—</span>
-                                        {% endif %}
                                     </td>
                                 </tr>
-                                {% if not schedule.is_system_managed %}
                                 <tr x-show="openEditId === '{{ schedule.id }}'" x-cloak x-transition class="bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100"
-                                    x-data="{ runType: '{{ schedule.schedule_type }}', workflow: '{{ row.workflow }}', target: '{{ row.company_target }}' }"
-                                    x-effect="if (workflow === '{{ workflow_inventory }}') target = '{{ company_target_one }}'">
+                                    x-data="{ runType: '{{ schedule.schedule_type }}', workflow: '{{ row.workflow }}', target: '{{ row.company_target }}' }">
                                     <td colspan="5" class="px-4 py-4">
                                         <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">Edit schedule</p>
                                         <form method="post" action="{% url 'epos_qbo:schedule-update' schedule.id %}" class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
@@ -406,60 +359,38 @@
                                             <div>
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Workflow</label>
                                                 <select name="workflow" x-model="workflow" class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
-                                                    <option value="{{ workflow_sales }}">Sales Sync</option>
-                                                    <option value="{{ workflow_inventory }}">Inventory Sync</option>
+                                                    {% for wf in schedulable_workflows %}
+                                                    <option value="{{ wf.form_value }}">{{ wf.name }}</option>
+                                                    {% endfor %}
                                                 </select>
                                             </div>
-                                            <div>
+                                            <div x-show="workflow === '{{ workflow_sales }}'">
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Company target</label>
-                                                <!-- Separate selects so Inventory Sync cannot submit "all". -->
-                                                <select name="company_target"
-                                                        x-show="workflow === '{{ workflow_sales }}'"
-                                                        :disabled="workflow !== '{{ workflow_sales }}'"
-                                                        x-model="target"
+                                                <select name="company_target" :disabled="workflow !== '{{ workflow_sales }}'" x-model="target"
                                                         class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
                                                     <option value="{{ company_target_all }}">All eligible companies</option>
                                                     <option value="{{ company_target_one }}">One company</option>
                                                 </select>
-                                                <select name="company_target"
-                                                        x-show="workflow === '{{ workflow_inventory }}'"
-                                                        x-cloak
-                                                        :disabled="workflow !== '{{ workflow_inventory }}'"
-                                                        x-model="target"
-                                                        class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
-                                                    <option value="{{ company_target_one }}">One company</option>
-                                                </select>
                                             </div>
-                                            <div x-show="target === '{{ company_target_one }}'" x-cloak class="md:col-span-2">
+                                            <div x-show="workflow === '{{ workflow_sales }}' && target === '{{ company_target_one }}'" x-cloak class="md:col-span-2">
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Company</label>
-                                                <!-- Separate selects so Inventory Sync only lists inventory-enabled companies. -->
-                                                <select name="company_key"
-                                                        x-show="workflow === '{{ workflow_sales }}'"
-                                                        :disabled="workflow !== '{{ workflow_sales }}'"
+                                                <select name="company_key" :disabled="workflow !== '{{ workflow_sales }}'"
                                                         class="mt-1 w-full max-w-xs h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
                                                     <option value="">—</option>
-                                                    {% for company in company_options %}
-                                                    <option value="{{ company.company_key }}" {% if schedule.company_key == company.company_key %}selected{% endif %}>{{ company.display_name }} ({{ company.company_key }})</option>
-                                                    {% endfor %}
-                                                </select>
-                                                <select name="company_key"
-                                                        x-show="workflow === '{{ workflow_inventory }}'"
-                                                        x-cloak
-                                                        :disabled="workflow !== '{{ workflow_inventory }}'"
-                                                        class="mt-1 w-full max-w-xs h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
-                                                    <option value="">—</option>
-                                                    {% for company in inventory_company_options %}
+                                                    {% for company in sales_company_options %}
                                                     <option value="{{ company.company_key }}" {% if schedule.company_key == company.company_key %}selected{% endif %}>{{ company.display_name }} ({{ company.company_key }})</option>
                                                     {% endfor %}
                                                 </select>
                                             </div>
-                                            <div x-show="workflow === '{{ workflow_inventory }}'" x-cloak>
-                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Category</label>
-                                                <input type="text" name="category" value="{{ row.category }}" class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 text-sm">
-                                            </div>
-                                            <div x-show="workflow === '{{ workflow_inventory }}'" x-cloak>
-                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Product filter</label>
-                                                <input type="text" name="product_filter" value="{{ row.product_filter }}" class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 text-sm">
+                                            <div x-show="workflow === '{{ workflow_daily_routine }}'" x-cloak class="md:col-span-2">
+                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Company</label>
+                                                <input type="hidden" name="company_target" value="{{ company_target_one }}" :disabled="workflow !== '{{ workflow_daily_routine }}'">
+                                                <select name="company_key" :disabled="workflow !== '{{ workflow_daily_routine }}'"
+                                                        class="mt-1 w-full max-w-xs h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
+                                                    {% for company in daily_routine_company_options %}
+                                                    <option value="{{ company.company_key }}" {% if schedule.company_key == company.company_key %}selected{% endif %}>{{ company.display_name }}</option>
+                                                    {% endfor %}
+                                                </select>
                                             </div>
                                             <div class="md:col-span-2" x-show="runType === '{{ schedule_type_recurring }}'">
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Cron</label>
@@ -503,7 +434,6 @@
                                         </form>
                                     </td>
                                 </tr>
-                                {% endif %}
                                 {% endwith %}
                                 {% endfor %}
                             {% else %}
@@ -530,7 +460,7 @@
                                     {{ section.rows|length }}
                                 </span>
                             </div>
-                            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Disabled, completed, or system-managed schedules.</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Paused and completed schedules.</p>
                         </div>
                     </div>
                 </div>
@@ -578,9 +508,6 @@
                                             {% if row.status_subtext %}
                                             <div class="text-[11px] text-slate-500 dark:text-slate-400">{{ row.status_subtext }}</div>
                                             {% endif %}
-                                            {% if schedule.is_system_managed %}
-                                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap leading-none bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30" title="Controlled by fallback env: OIAT_SCHEDULER_ENABLE_ENV_FALLBACK, SCHEDULE_CRON, SCHEDULE_TZ">System-managed <iconify-icon icon="solar:info-circle-linear" width="12" class="opacity-80 shrink-0" aria-hidden="true"></iconify-icon></span>
-                                            {% endif %}
                                         </div>
                                     </td>
                                     <td class="px-4 py-3 align-top">
@@ -600,7 +527,6 @@
                                         {% endif %}
                                     </td>
                                     <td class="px-4 py-3 align-middle">
-                                        {% if not schedule.is_system_managed %}
                                         <div class="flex justify-center opacity-95" x-data="{ menuOpen: false, menuX: 0, menuY: 0 }">
                                             <button type="button" x-ref="scheduleMenuBtn"
                                                     @click="menuOpen = !menuOpen; if (menuOpen) { $nextTick(() => { const b = $refs.scheduleMenuBtn; const r = b.getBoundingClientRect(); menuX = r.left; menuY = r.bottom + 6 }) }"
@@ -634,15 +560,10 @@
                                                 </div>
                                             </template>
                                         </div>
-                                        {% else %}
-                                        <span class="block text-center text-slate-400 dark:text-slate-500">—</span>
-                                        {% endif %}
                                     </td>
                                 </tr>
-                                {% if not schedule.is_system_managed %}
                                 <tr x-show="openEditId === '{{ schedule.id }}'" x-cloak x-transition class="bg-slate-50/80 dark:bg-slate-800/60 text-slate-900 dark:text-slate-100"
-                                    x-data="{ runType: '{{ schedule.schedule_type }}', workflow: '{{ row.workflow }}', target: '{{ row.company_target }}' }"
-                                    x-effect="if (workflow === '{{ workflow_inventory }}') target = '{{ company_target_one }}'">
+                                    x-data="{ runType: '{{ schedule.schedule_type }}', workflow: '{{ row.workflow }}', target: '{{ row.company_target }}' }">
                                     <td colspan="5" class="px-4 py-4">
                                         <p class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-3">Edit schedule</p>
                                         <form method="post" action="{% url 'epos_qbo:schedule-update' schedule.id %}" class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl">
@@ -662,60 +583,38 @@
                                             <div>
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Workflow</label>
                                                 <select name="workflow" x-model="workflow" class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
-                                                    <option value="{{ workflow_sales }}">Sales Sync</option>
-                                                    <option value="{{ workflow_inventory }}">Inventory Sync</option>
+                                                    {% for wf in schedulable_workflows %}
+                                                    <option value="{{ wf.form_value }}">{{ wf.name }}</option>
+                                                    {% endfor %}
                                                 </select>
                                             </div>
-                                            <div>
+                                            <div x-show="workflow === '{{ workflow_sales }}'">
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Company target</label>
-                                                <!-- Separate selects so Inventory Sync cannot submit "all". -->
-                                                <select name="company_target"
-                                                        x-show="workflow === '{{ workflow_sales }}'"
-                                                        :disabled="workflow !== '{{ workflow_sales }}'"
-                                                        x-model="target"
+                                                <select name="company_target" :disabled="workflow !== '{{ workflow_sales }}'" x-model="target"
                                                         class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
                                                     <option value="{{ company_target_all }}">All eligible companies</option>
                                                     <option value="{{ company_target_one }}">One company</option>
                                                 </select>
-                                                <select name="company_target"
-                                                        x-show="workflow === '{{ workflow_inventory }}'"
-                                                        x-cloak
-                                                        :disabled="workflow !== '{{ workflow_inventory }}'"
-                                                        x-model="target"
-                                                        class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
-                                                    <option value="{{ company_target_one }}">One company</option>
-                                                </select>
                                             </div>
-                                            <div x-show="target === '{{ company_target_one }}'" x-cloak class="md:col-span-2">
+                                            <div x-show="workflow === '{{ workflow_sales }}' && target === '{{ company_target_one }}'" x-cloak class="md:col-span-2">
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Company</label>
-                                                <!-- Separate selects so Inventory Sync only lists inventory-enabled companies. -->
-                                                <select name="company_key"
-                                                        x-show="workflow === '{{ workflow_sales }}'"
-                                                        :disabled="workflow !== '{{ workflow_sales }}'"
+                                                <select name="company_key" :disabled="workflow !== '{{ workflow_sales }}'"
                                                         class="mt-1 w-full max-w-xs h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
                                                     <option value="">—</option>
-                                                    {% for company in company_options %}
-                                                    <option value="{{ company.company_key }}" {% if schedule.company_key == company.company_key %}selected{% endif %}>{{ company.display_name }} ({{ company.company_key }})</option>
-                                                    {% endfor %}
-                                                </select>
-                                                <select name="company_key"
-                                                        x-show="workflow === '{{ workflow_inventory }}'"
-                                                        x-cloak
-                                                        :disabled="workflow !== '{{ workflow_inventory }}'"
-                                                        class="mt-1 w-full max-w-xs h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
-                                                    <option value="">—</option>
-                                                    {% for company in inventory_company_options %}
+                                                    {% for company in sales_company_options %}
                                                     <option value="{{ company.company_key }}" {% if schedule.company_key == company.company_key %}selected{% endif %}>{{ company.display_name }} ({{ company.company_key }})</option>
                                                     {% endfor %}
                                                 </select>
                                             </div>
-                                            <div x-show="workflow === '{{ workflow_inventory }}'" x-cloak>
-                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Category</label>
-                                                <input type="text" name="category" value="{{ row.category }}" class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 text-sm">
-                                            </div>
-                                            <div x-show="workflow === '{{ workflow_inventory }}'" x-cloak>
-                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Product filter</label>
-                                                <input type="text" name="product_filter" value="{{ row.product_filter }}" class="mt-1 w-full h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 text-sm">
+                                            <div x-show="workflow === '{{ workflow_daily_routine }}'" x-cloak class="md:col-span-2">
+                                                <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Company</label>
+                                                <input type="hidden" name="company_target" value="{{ company_target_one }}" :disabled="workflow !== '{{ workflow_daily_routine }}'">
+                                                <select name="company_key" :disabled="workflow !== '{{ workflow_daily_routine }}'"
+                                                        class="mt-1 w-full max-w-xs h-9 px-2 rounded-md border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm">
+                                                    {% for company in daily_routine_company_options %}
+                                                    <option value="{{ company.company_key }}" {% if schedule.company_key == company.company_key %}selected{% endif %}>{{ company.display_name }}</option>
+                                                    {% endfor %}
+                                                </select>
                                             </div>
                                             <div class="md:col-span-2" x-show="runType === '{{ schedule_type_recurring }}'">
                                                 <label class="text-xs font-medium text-slate-600 dark:text-slate-300 uppercase tracking-wider">Cron</label>
@@ -759,7 +658,6 @@
                                         </form>
                                     </td>
                                 </tr>
-                                {% endif %}
                                 {% endwith %}
                                 {% endfor %}
                             {% else %}

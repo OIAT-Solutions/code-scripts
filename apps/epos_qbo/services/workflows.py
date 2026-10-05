@@ -1,29 +1,26 @@
-"""One scheduling authority for the EPOS/QBO workflows (design: docs/SCHEDULING_AUTHORITY.md).
+"""The one EPOS/QBO scheduling authority: the workflow catalogue and its rules.
 
-The portal schedule worker (``manage.py run_schedule_worker``) decides *when and what* runs, from
-``RunSchedule`` rows; the worker process executes each ``RunJob`` as a subprocess of the existing
-business tool. Nothing here posts to QuickBooks or duplicates daily_run's accounting logic.
+The portal schedule worker (``manage.py run_schedule_worker``) is the only scheduler and the only process
+that starts jobs. A ``RunSchedule`` row says when a catalogue workflow runs for a company; the worker
+queues a ``RunJob`` and runs the workflow's existing tool as a subprocess. Nothing here posts to
+QuickBooks or duplicates a tool's accounting logic.
 
-Ownership of Nora's (company_a) daily routine is a single switch, ``OIAT_COMPANY_A_DAILY_RUN_OWNER``:
+Catalogue (``WORKFLOWS``): what can be scheduled, for which companies.
+* ``company_a_daily`` Daily routine (Nora / company_a only): code_scripts.akponora_ops.daily_run for one
+  closed trading date - products, bills (+ cash payments), sales, item check, stock, banking.
+* ``single_company`` Sales sync (any company except company_a, whose sales are in its Daily routine).
 
-* ``ops_scheduler`` (default; the state before the cutover): the akponora-ops cron runs daily_run;
-  the portal's "Nora daily routine" schedule is shown but never enqueues (event ``skipped_not_owner``).
-* ``portal``: the portal worker enqueues ``company_a_daily`` jobs; the akponora-ops cron refuses to
-  run daily_run. Exactly one owner at any time, during and after the migration.
-
-Missed runs (Nora daily routine): a fire that is late by more than ``OIAT_SCHEDULE_MISSED_GRACE_MINUTES``
-(180) - the worker was offline - is not run automatically. It is recorded as ``skipped_missed`` and the
-business date stays unconfirmed (Home and Slack show it); a person runs it deliberately from the Inbox.
-A business date that already has a completed real run is never replayed (``skipped_done``). Company B
-keeps its existing behaviour (one catch-up run of the latest closed day on restart).
-
-``expected_confirmed_date`` answers "which business date should be confirmed by now?": the latest
-closed date whose scheduled run time (plus a run allowance) has passed. Before tonight's run, the
-expected date is the day before, so a day that simply hasn't run yet is not reported missing.
+Rules for the Daily routine: one schedule per company (duplicates never queue); a fire more than
+``OIAT_SCHEDULE_MISSED_GRACE_MINUTES`` (180) late is not run (``skipped_missed``, Slack, Home shows the
+day unconfirmed; a person runs it from the Inbox); a day with a completed full routine is never replayed
+(``skipped_done``). ``expected_confirmed_date``: the latest closed date whose scheduled run (plus a run
+allowance) has passed - a day still to run tonight is not "missing" on Home.
 """
+
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -32,15 +29,11 @@ from django.utils import timezone
 from ..business_date import get_business_day_cutoff, get_business_timezone, get_target_trading_date
 from ..models import RunJob, RunSchedule
 
-OWNER_ENV = "OIAT_COMPANY_A_DAILY_RUN_OWNER"
-OWNER_OPS, OWNER_PORTAL = "ops_scheduler", "portal"
 MISSED_GRACE_ENV = "OIAT_SCHEDULE_MISSED_GRACE_MINUTES"
 RUN_ALLOWANCE_ENV = "OIAT_SCHEDULE_RUN_ALLOWANCE_MINUTES"
 DAILY_NAME = "Nora daily routine"
 COMPANY_A = "company_a"
-DAILY_CRON_ENV = "OIAT_COMPANY_A_DAILY_RUN_CRON"
-DAILY_ENABLED_ENV = "OIAT_COMPANY_A_DAILY_RUN_ENABLED"
-DEFAULT_DAILY_CRON = "0 6 * * *"  # same default as ops_scheduler (production sets 0 18 * * * in .env)
+DEFAULT_DAILY_CRON = "0 18 * * *"  # 18:00 Lagos: staff have the day to correct EPOS first
 COMPLETED_STATUSES = {"ok", "review"}  # daily_run exit 0 / 3: the routine finished
 
 
@@ -51,13 +44,34 @@ def _env_minutes(name: str, default: int) -> timedelta:
         return timedelta(minutes=default)
 
 
-def company_a_daily_owner() -> str:
-    value = str(os.getenv(OWNER_ENV, "")).strip().lower()
-    return OWNER_PORTAL if value == OWNER_PORTAL else OWNER_OPS
+@dataclass(frozen=True)
+class Workflow:
+    key: str  # the RunJob scope it runs
+    name: str
+    description: str
+    only_companies: tuple = ()  # empty = any company not in except_companies
+    except_companies: tuple = ()
+    one_per_company: bool = False
+
+    def available_for(self, company_key: str) -> bool:
+        if self.only_companies:
+            return company_key in self.only_companies
+        return company_key not in self.except_companies
 
 
-def portal_owns_company_a_daily() -> bool:
-    return company_a_daily_owner() == OWNER_PORTAL
+WORKFLOWS = {
+    RunJob.SCOPE_COMPANY_A_DAILY: Workflow(
+        RunJob.SCOPE_COMPANY_A_DAILY, "Daily routine",
+        "Products, bills (cash bills paid), sales, item check, stock check and banking from the till sheet, "
+        "for the last closed business day.", only_companies=(COMPANY_A,), one_per_company=True),
+    RunJob.SCOPE_SINGLE: Workflow(
+        RunJob.SCOPE_SINGLE, "Sales sync",
+        "Download the day's EPOS sales and post them to QuickBooks.", except_companies=(COMPANY_A,)),
+}
+
+
+def schedulable_workflows(company_key: str | None = None) -> list[Workflow]:
+    return [w for w in WORKFLOWS.values() if company_key is None or w.available_for(company_key)]
 
 
 def missed_grace() -> timedelta:
@@ -84,17 +98,13 @@ def daily_routine_schedule() -> RunSchedule | None:
 
 
 def ensure_daily_routine_schedule(*, now: datetime | None = None) -> tuple[RunSchedule, bool]:
-    """Create the portal schedule for Nora's daily routine if it is missing (paused: the cutover
-    enables it together with ``OIAT_COMPANY_A_DAILY_RUN_OWNER=portal``). Never changes an existing row."""
+    """Create Nora's Daily routine schedule if it is missing (paused). Never changes an existing row."""
     existing = daily_routine_schedule()
     if existing is not None:
         return existing, False
     sched = RunSchedule(name=DAILY_NAME, enabled=False, scope=RunJob.SCOPE_COMPANY_A_DAILY, company_key=COMPANY_A,
-                        cron_expr=os.getenv(DAILY_CRON_ENV, "").strip() or DEFAULT_DAILY_CRON,
-                        timezone_name=os.getenv("SCHEDULE_TZ", "").strip() or "Africa/Lagos",
-                        # NOT system-managed: the env-fallback logic disables system rows, and the
-                        # Schedules page only lets staff enable / pause / run user rows.
-                        is_system_managed=False, parallel=1, continue_on_failure=False)
+                        cron_expr=DEFAULT_DAILY_CRON, timezone_name="Africa/Lagos",
+                        parallel=1, continue_on_failure=False)
     sched.next_fire_at = sched.compute_next_fire_at(from_dt=now or timezone.now())
     sched.save()
     return sched, True
@@ -130,13 +140,8 @@ def sales_confirmed(run) -> bool:
 def _cron_and_tz(company_key: str) -> tuple[str, str] | None:
     """The recurring schedule that produces a company's daily sales confirmation."""
     if company_key == COMPANY_A:
-        if portal_owns_company_a_daily():
-            s = daily_routine_schedule()
-            return (s.cron_expr, s.timezone_name) if s is not None and s.enabled and s.cron_expr else None
-        if str(os.getenv(DAILY_ENABLED_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}:
-            return (os.getenv(DAILY_CRON_ENV, "").strip() or "0 6 * * *",
-                    os.getenv("SCHEDULE_TZ", "").strip() or "Africa/Lagos")
-        return None
+        s = daily_routine_schedule()
+        return (s.cron_expr, s.timezone_name) if s is not None and s.enabled and s.cron_expr else None
     s = (RunSchedule.objects.filter(enabled=True, completed_at__isnull=True,
                                     schedule_type=RunSchedule.SCHEDULE_TYPE_RECURRING,
                                     scope__in=[RunJob.SCOPE_SINGLE, RunJob.SCOPE_ALL])
@@ -178,23 +183,18 @@ def expected_confirmed_date(company_key: str, now: datetime | None = None) -> da
 def workflow_summaries(now: datetime | None = None) -> list[dict]:
     """Company-neutral schedule summary per workflow (for Home / Schedules / the agency console).
 
-    ``owner`` is diagnostic only. ``freshness``: ``current`` (expected date confirmed), ``behind``,
+    ``freshness``: ``current`` (expected date confirmed), ``behind``,
     ``paused`` or ``unknown``. A worker heartbeat is not used as proof of any workflow's health."""
     from . import company_a_ops as ops
 
     now = now or timezone.now()
     out = []
-    # Nora daily routine
-    owner = company_a_daily_owner()
+    # Daily routine
     sched = daily_routine_schedule()
-    if owner == OWNER_PORTAL:
-        enabled = bool(sched and sched.enabled)
-        cron = sched.cron_expr if sched else ""
-        tz_name = sched.timezone_name if sched else ""
-        next_due = sched.next_fire_at if enabled else None
-    else:
-        info = ops.schedule_info(now)
-        enabled, cron, tz_name, next_due = info["enabled"], info["cron"], info["timezone"], info["next_run"]
+    enabled = bool(sched and sched.enabled)
+    cron = sched.cron_expr if sched else ""
+    tz_name = sched.timezone_name if sched else ""
+    next_due = sched.next_fire_at if enabled else None
     try:
         runs = ops.list_runs(include_dry=False)
     except Exception:  # noqa: BLE001
@@ -203,13 +203,12 @@ def workflow_summaries(now: datetime | None = None) -> list[dict]:
     confirmed = sorted({r.business_date for r in runs if sales_confirmed(r)})
     expected = expected_confirmed_date(COMPANY_A, now).isoformat()
     out.append({
-        "company_key": COMPANY_A, "workflow": "company_a_daily", "name": DAILY_NAME, "enabled": enabled,
+        "company_key": COMPANY_A, "workflow": RunJob.SCOPE_COMPANY_A_DAILY, "name": WORKFLOWS[RunJob.SCOPE_COMPANY_A_DAILY].name, "enabled": enabled,
         "completed": False, "cron": cron, "timezone": tz_name, "next_due": next_due,
         "last_run_at": getattr(last, "finished_at", None), "last_business_date": getattr(last, "business_date", None),
         "outcome": getattr(last, "status", None), "expected_date": expected,
         "freshness": ("paused" if not enabled else "current" if expected in confirmed else "behind"),
-        "actions": ["run_day"] + (["pause", "resume"] if owner == OWNER_PORTAL else []),
-        "owner": owner,
+        "actions": ["run_day", "pause", "resume"],
     })
     # every other portal schedule (Goldplates sales, inventory ...)
     for s in RunSchedule.objects.exclude(scope=RunJob.SCOPE_COMPANY_A_DAILY).order_by("name"):
@@ -221,6 +220,6 @@ def workflow_summaries(now: datetime | None = None) -> list[dict]:
             "last_business_date": getattr(getattr(job, "target_date", None), "isoformat", lambda: None)(),
             "outcome": getattr(job, "status", None) or s.last_result or None, "expected_date": None,
             "freshness": "paused" if not s.enabled else "unknown",
-            "actions": ["run_now", "pause", "resume"], "owner": OWNER_PORTAL,
+            "actions": ["run_now", "pause", "resume"],
         })
     return out

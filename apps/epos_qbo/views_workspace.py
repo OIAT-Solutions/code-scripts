@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from .models import CompanyConfigRecord, RunJob
-from .services import job_runner, workspace_jobs
+from .services import workspace_jobs
 
 
 @login_required
@@ -35,7 +35,7 @@ def update(request, company_key):
         else:
             RunJob.objects.create(scope=RunJob.SCOPE_WORKSPACE_READ, company_key=company_key, requested_by=request.user,
                                   inventory_options_json={"action": action, "day": day, "mode": mode})
-            transaction.on_commit(job_runner.dispatch_next_queued_job)
+            # queued: the schedule worker starts it
             messages.success(request, "Update queued. The last good records stay on the page while it runs; reload when it finishes.")
     tab = "products" if action == "stock" else "deposits"
     suffix = f"&day={day}#deposit-details" if day else ""

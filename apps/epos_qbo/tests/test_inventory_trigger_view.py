@@ -46,7 +46,7 @@ class InventoryTriggerViewTests(TestCase):
     def test_rejects_unknown_company(self):
         self.client.login(username="op", password="pw")
         with mock.patch(
-            "apps.epos_qbo.views.dispatch_next_queued_job", return_value=(None, "queued")
+            "apps.epos_qbo.services.job_runner.dispatch_next_queued_job", return_value=(None, "queued")
         ):
             response = self.client.post(
                 reverse("epos_qbo:run-trigger-inventory"),
@@ -59,7 +59,7 @@ class InventoryTriggerViewTests(TestCase):
     def test_creates_queued_inventory_job_with_options(self):
         self.client.login(username="op", password="pw")
         with mock.patch(
-            "apps.epos_qbo.views.dispatch_next_queued_job", return_value=(None, "queued")
+            "apps.epos_qbo.services.job_runner.dispatch_next_queued_job", return_value=(None, "queued")
         ):
             response = self.client.post(
                 reverse("epos_qbo:run-trigger-inventory"),
@@ -83,7 +83,7 @@ class InventoryTriggerViewTests(TestCase):
     def test_inventory_scope_filters_are_optional(self):
         self.client.login(username="op", password="pw")
         with mock.patch(
-            "apps.epos_qbo.views.dispatch_next_queued_job", return_value=(None, "queued")
+            "apps.epos_qbo.services.job_runner.dispatch_next_queued_job", return_value=(None, "queued")
         ):
             response = self.client.post(
                 reverse("epos_qbo:run-trigger-inventory"),
@@ -99,7 +99,7 @@ class InventoryTriggerViewTests(TestCase):
     def test_quantity_preview_action_queues_preview_mode(self):
         self.client.login(username="op", password="pw")
         with mock.patch(
-            "apps.epos_qbo.views.dispatch_next_queued_job", return_value=(None, "queued")
+            "apps.epos_qbo.services.job_runner.dispatch_next_queued_job", return_value=(None, "queued")
         ):
             response = self.client.post(
                 reverse("epos_qbo:run-trigger-inventory"),
@@ -115,7 +115,7 @@ class InventoryTriggerViewTests(TestCase):
     def test_catalog_plan_action_queues_plan_mode(self):
         self.client.login(username="op", password="pw")
         with mock.patch(
-            "apps.epos_qbo.views.dispatch_next_queued_job", return_value=(None, "queued")
+            "apps.epos_qbo.services.job_runner.dispatch_next_queued_job", return_value=(None, "queued")
         ):
             response = self.client.post(
                 reverse("epos_qbo:run-trigger-inventory"),
@@ -131,7 +131,7 @@ class InventoryTriggerViewTests(TestCase):
     def test_product_filter_stores_scope_without_caps(self):
         self.client.login(username="op", password="pw")
         with mock.patch(
-            "apps.epos_qbo.views.dispatch_next_queued_job", return_value=(None, "queued")
+            "apps.epos_qbo.services.job_runner.dispatch_next_queued_job", return_value=(None, "queued")
         ):
             response = self.client.post(
                 reverse("epos_qbo:run-trigger-inventory"),

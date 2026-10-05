@@ -480,7 +480,7 @@ class InventoryReviewActionViewTests(TestCase):
                 "code_scripts.inventory_review_missing_candidates.load_qbo_base_name_keys_for_company_key",
                 return_value=({"aquafina 50cl"}, ""),
             ), mock.patch(
-                "apps.epos_qbo.views.dispatch_next_queued_job",
+                "apps.epos_qbo.services.job_runner.dispatch_next_queued_job",
                 return_value=(None, "queued"),
             ):
                 response = self.client.post(
@@ -560,7 +560,7 @@ class InventoryReviewActionViewTests(TestCase):
                 "code_scripts.inventory_review_missing_candidates.load_qbo_base_name_keys_for_company_key",
                 return_value=({"aquafina 50cl"}, ""),
             ), mock.patch(
-                "apps.epos_qbo.views.dispatch_next_queued_job",
+                "apps.epos_qbo.services.job_runner.dispatch_next_queued_job",
                 return_value=(None, "queued"),
             ):
                 response = self.client.post(
@@ -648,7 +648,7 @@ class InventoryReviewActionViewTests(TestCase):
             cfg = mock.Mock()
             cfg.slack_webhook_url = "https://hooks.slack.com/services/FAKE"
             with mock.patch(
-                "apps.epos_qbo.views.dispatch_next_queued_job",
+                "apps.epos_qbo.services.job_runner.dispatch_next_queued_job",
                 return_value=(None, "queued"),
             ), mock.patch(
                 "apps.epos_qbo.services.inventory_review_slack.load_company_config",
@@ -675,7 +675,7 @@ class InventoryReviewActionViewTests(TestCase):
             cfg = mock.Mock()
             cfg.slack_webhook_url = "https://hooks.slack.com/services/FAKE"
             with mock.patch(
-                "apps.epos_qbo.views.dispatch_next_queued_job",
+                "apps.epos_qbo.services.job_runner.dispatch_next_queued_job",
                 return_value=(None, "queued"),
             ), mock.patch(
                 "apps.epos_qbo.services.inventory_review_slack.load_company_config",
@@ -708,7 +708,7 @@ class InventoryReviewActionViewTests(TestCase):
                 "code_scripts.inventory_review_missing_candidates.load_qbo_base_name_keys_for_company_key",
                 return_value=({"aquafina 50cl"}, ""),
             ), mock.patch(
-                "apps.epos_qbo.views.dispatch_next_queued_job",
+                "apps.epos_qbo.services.job_runner.dispatch_next_queued_job",
                 return_value=(None, "queued"),
             ), mock.patch(
                 "apps.epos_qbo.services.inventory_review_slack.load_company_config",
@@ -820,7 +820,7 @@ class InventoryReviewActionViewTests(TestCase):
                 self._create_inventory_artifact(company_key="company_a", final_audit=minimal)
 
                 with mock.patch(
-                    "apps.epos_qbo.views.dispatch_next_queued_job",
+                    "apps.epos_qbo.services.job_runner.dispatch_next_queued_job",
                     return_value=(None, "queued"),
                 ):
                     self.client.post(

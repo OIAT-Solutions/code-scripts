@@ -49,7 +49,7 @@ Subcommands (run from the repo root with ``.venv/bin/python -m code_scripts.akpo
              OIAT_COMPANY_A_CATALOGUE_AUTO_CREATE=1 and OIAT_COMPANY_A_CATALOGUE_APPROVAL_REF is set;
              builds a fresh plan and applies AUTO rows only, capped by
              OIAT_COMPANY_A_CATALOGUE_AUTO_MAX_CREATES (default 25; above -> refuse, alert, exit 4).
-  scheduled  for ops_scheduler: ``apply --auto`` when automation is on, else ``plan`` + Slack alert.
+  scheduled  for daily_run: ``apply --auto`` when automation is on, else ``plan`` + Slack alert.
 
 Never: delete / inactivate / rename / patch existing QBO items, post InventoryAdjustment, set
 QtyOnHand > 0, target 15030 or LEGACY items, or touch Company B.
@@ -1427,7 +1427,7 @@ def main(argv=None) -> int:
                      help="pid=decision_sha256,... (summary.json decision_shas); every selected decision must match")
     ap_.add_argument("--json", action="store_true", help="print the apply receipt as JSON")
     ap_.add_argument("--auto", action="store_true", help=f"automated mode ({AUTO_ENV}=1 + {APPROVAL_ENV})")
-    s = sub.add_parser("scheduled", help="ops_scheduler entry: apply --auto when enabled, else plan + Slack")
+    s = sub.add_parser("scheduled", help="daily_run entry: apply --auto when enabled, else plan + Slack")
     add_plan_args(s)
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] not in {"plan", "apply", "scheduled", "-h", "--help"}:

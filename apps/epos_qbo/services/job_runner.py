@@ -498,26 +498,9 @@ def start_run_job(job: RunJob, command: list[str]) -> RunJob:
 DISPATCH_START_FAILURE_LIMIT = 5
 
 
-# Execution placement. With OIAT_JOBS_DISPATCH_IN_WORKER_ONLY=1 only the schedule worker process
-# starts queued jobs: portal pages and Inbox actions just queue, so a web restart can never kill a
-# financial run that a page happened to start. Default off (the behaviour before the consolidation).
-WORKER_ONLY_ENV = "OIAT_JOBS_DISPATCH_IN_WORKER_ONLY"
-_IS_WORKER_PROCESS = False
-
-
-def mark_worker_process() -> None:
-    global _IS_WORKER_PROCESS
-    _IS_WORKER_PROCESS = True
-
-
-def dispatch_allowed_here() -> bool:
-    worker_only = str(os.getenv(WORKER_ONLY_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
-    return _IS_WORKER_PROCESS or not worker_only
-
-
 def dispatch_next_queued_job() -> tuple[RunJob | None, str]:
-    if not dispatch_allowed_here():
-        return None, "queued_for_worker"
+    """Start the oldest queued job. Called only by the schedule worker process (each cycle and when a
+    job finishes): pages and Inbox actions just queue, so a web restart never kills a run."""
     failure_count = 0
     while failure_count < DISPATCH_START_FAILURE_LIMIT:
         with transaction.atomic():

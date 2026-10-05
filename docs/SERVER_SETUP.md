@@ -4,7 +4,7 @@
 
 ## What runs
 
-One job: `python -m code_scripts.akponora_ops.daily_run`, in the `akponora-ops` container, at **06:00 Lagos** every day. It works on the **last closed business day** (05:00 cutoff), so the 06:00 run on 3 Oct does 2 Oct. The steps run in this order:
+One job: `python -m code_scripts.akponora_ops.daily_run --date <day>`, started by the portal schedule worker (the `scheduler` container) from the portal schedule row **"Nora daily routine"** at **18:00 Lagos** every day. It works on the **last closed business day** (05:00 cutoff), bound when the job is queued, so the 18:00 run on 3 Oct does 2 Oct. The steps run in this order:
 
 | # | Step | What it does | Writes to QBO only when |
 | --- | --- | --- | --- |
@@ -18,10 +18,11 @@ One job: `python -m code_scripts.akponora_ops.daily_run`, in the `akponora-ops` 
 Rules:
 
 - A failed or held step never makes a later step post something inconsistent. If catalogue fails, bills and sales still run, and sales still fails closed on any unmapped product. If sales is held, the guard still runs.
-- It never creates Bill Payments, InventoryAdjustments or journals, and never edits or deletes existing QBO records. Deposits and bank transfers are created only by the `uf` step, under its own switches.
+- The only Bill Payments it creates are for bills the PO note marks paid (cash from Petty Cash, transfer from the matched bank; `bill_payments`). It never creates InventoryAdjustments or journals, and never edits or deletes existing QBO records. Deposits and bank transfers are created only by the `uf` step, under its own switches.
 - It holds the global run lock for the whole run, so it never overlaps a manual `run_pipeline` or portal run. If the lock is busy, it waits up to 30 minutes, then reports a failure.
-- **No double runs.** While `OIAT_COMPANY_A_DAILY_RUN_ENABLED=1`, the portal scheduler never schedules Company A (all-company runs exclude it, and Company A-only schedules are skipped). The individual `OIAT_AKPONORA_<JOB>_CRON` values are also ignored. Company B is unchanged.
-- **Exit codes:** `0` all clean, `3` something waits for review, `2` a step failed.
+- **One scheduler.** The portal schedule worker is the only scheduler and the only process that starts jobs. Pages and Inbox actions only queue a job; the worker starts it within one poll (15 s). Company A sales are never in a sales schedule: they run only inside the Daily routine (all-company runs always exclude Company A, and a Company A "Sales sync" schedule is refused). Company B is unchanged.
+- **Missed runs.** A run more than 180 minutes late (`OIAT_SCHEDULE_MISSED_GRACE_MINUTES`) is not run: it records `skipped_missed`, posts a Slack line, and is never replayed. A person runs that day from the Inbox. A day with a completed full routine is never run again by the schedule (`skipped_done`).
+- **Exit codes:** `0` all clean, `3` something waits for review, `2` a step failed. The portal records 0 and 3 as succeeded.
 - **Evidence:** `/data/ops/company_a/daily/<day>/run_<UTC time>/<step>/`, with `summary.json` (and the latest copy in `/data/ops/company_a/daily/<day>/summary.json`).
 
 ---
@@ -40,13 +41,11 @@ git log --oneline -3         # tip must be the daily-run commit
 
 ## 2. `.env` for Company A
 
-Add this block to the server `.env` (the file compose reads through `env_file`). Leave the daily-run switch **off** until the smoke test (step 5) has passed. Replace each `<…>` approval reference with the owner's chat-yes reference (date + message).
+Add this block to the server `.env` (the file compose reads through `env_file`; the `scheduler` container gets every `OIAT_COMPANY_A_*` switch from it). The Daily routine stays **paused** on the Schedules page until the smoke test (step 5) has passed. Replace each `<…>` approval reference with the owner's chat-yes reference (date + message).
 
 ```bash
 # --- Company A: unattended daily run (docs/SERVER_SETUP.md) ---
-COMPOSE_PROFILES=akponora-ops                 # `docker compose up -d` also starts akponora-ops
-OIAT_COMPANY_A_DAILY_RUN_ENABLED=0            # set to 1 in step 6, after the smoke test
-OIAT_COMPANY_A_DAILY_RUN_CRON=0 6 * * *       # Africa/Lagos (SCHEDULE_TZ)
+# On/off and time: the portal Schedules page, row "Nora daily routine" (not .env)
 OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES=30
 OIAT_AKPONORA_OPS_SLACK_WEBHOOK_URL=          # optional ops channel; empty = SLACK_WEBHOOK_URL_A
 
@@ -82,9 +81,6 @@ OIAT_COMPANY_A_UF_TOLERANCE_PCT=0.5
 OIAT_COMPANY_A_TILL_SHEET_ID=15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A
 OIAT_COMPANY_A_TILL_SHEET_SA_KEY=/data/secrets/google_service_account.json
 
-# Leave these UNSET while the daily run is on (they would be ignored anyway):
-# OIAT_AKPONORA_CATALOGUE_SYNC_CRON / OIAT_AKPONORA_BILLS_SYNC_CRON / OIAT_AKPONORA_ITEM_GUARD_CRON
-# OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS
 ```
 
 Also check that the existing keys are there: `QBO_CLIENT_ID` / `QBO_CLIENT_SECRET` (the **same Intuit app as the ops Mac**, or the copied tokens are refused), `EPOS_USERNAME_A` / `EPOS_PASSWORD_A`, `SLACK_WEBHOOK_URL_A`.
@@ -95,9 +91,11 @@ A step's automation can stay off by setting its switch to `0`. That step then pl
 
 ```bash
 docker compose build
-docker compose up -d web scheduler akponora-ops      # caddy / cloudflared as before
+docker compose up -d --remove-orphans web scheduler   # caddy / cloudflared as before
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py ensure_workflow_schedules   # creates "Nora daily routine", paused
 docker compose ps
-docker compose logs --tail=50 akponora-ops            # "No ops job configured" is expected while the switch is 0
+docker compose logs --tail=50 scheduler
 ```
 
 ## 4. Copy Company A state into `/data`
@@ -162,9 +160,9 @@ docker compose exec web python manage.py sync_companies_from_json
 
 ```bash
 Y=$(TZ=Africa/Lagos date -v-1d +%F 2>/dev/null || TZ=Africa/Lagos date -d yesterday +%F)
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.daily_run --dry-run --date $Y --slack
+docker compose exec scheduler python -m code_scripts.akponora_ops.daily_run --dry-run --date $Y --slack
 echo "exit $?"
-docker compose exec akponora-ops cat /data/ops/company_a/daily/$Y/summary.json | head -60
+docker compose exec scheduler cat /data/ops/company_a/daily/$Y/summary.json | head -60
 ```
 
 - `--dry-run` runs catalogue and bills as `plan` and sales as `run_pipeline --dry-run`, and the guard does not advance its cursor. It reads EPOS and QBO but writes nothing to QBO. Slack is sent only with `--slack`.
@@ -175,15 +173,13 @@ docker compose exec akponora-ops cat /data/ops/company_a/daily/$Y/summary.json |
 
 After a clean smoke test and the owner's chat yes:
 
-```bash
-sed -i 's/^OIAT_COMPANY_A_DAILY_RUN_ENABLED=0/OIAT_COMPANY_A_DAILY_RUN_ENABLED=1/' .env
-docker compose up -d akponora-ops scheduler web       # recreate so they read .env
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.ops_scheduler --list
-#   daily_run  cron=0 6 * * *   (any individual cron shows "ignored: daily_run on")
-docker compose logs --tail=20 akponora-ops            # "Scheduled daily_run at '0 6 * * *' (Africa/Lagos)"
-```
+1. In the portal, open **Schedules** and enable **"Nora daily routine"**.
+2. Check its next run is 18:00 Lagos.
+3. After the first run, check the Slack summary and that Home confirms the day.
 
-Do not rebuild or restart `akponora-ops` between 06:00 and about 07:30 Lagos while a run is in progress. Every step can be resumed, but a killed run leaves that day's summary incomplete. To run a day by hand: `docker compose exec akponora-ops python -m code_scripts.akponora_ops.daily_run --date <day>`.
+After any `.env` change, recreate the containers so they read it: `docker compose up -d scheduler web`.
+
+Do not rebuild or restart `scheduler` between 17:45 and 19:30 Lagos while runs are in progress. Every step can be resumed, but a killed run leaves that day's summary incomplete. To run a day by hand: the Inbox (Run daily for date), or `docker compose exec scheduler python -m code_scripts.akponora_ops.daily_run --date <day>`.
 
 ## 7. Reading the Slack summary
 
@@ -214,29 +210,29 @@ Evidence: /data/ops/company_a/daily/2026-10-02/run_050012Z
 A held sales day writes `/data/company_a_posting_hold.json`. Nothing more posts for Company A until a person clears it.
 
 ```bash
-docker compose exec akponora-ops python -m code_scripts.operations_controls show-hold
+docker compose exec scheduler python -m code_scripts.operations_controls show-hold
 # read the failed gate(s) and the sales log: /data/ops/company_a/daily/<day>/run_*/sales/log.txt
 # fix the cause (unmapped product -> catalogue review below; EPOS late data -> wait; totals -> investigate)
 # confirm in QBO what already exists for the day, then:
-docker compose exec akponora-ops python -m code_scripts.operations_controls clear-hold --approved-by "<name>" --reason "<what was fixed>"
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.daily_run --date <held day> --only sales
+docker compose exec scheduler python -m code_scripts.operations_controls clear-hold --approved-by "<name>" --reason "<what was fixed>"
+docker compose exec scheduler python -m code_scripts.akponora_ops.daily_run --date <held day> --only sales
 ```
 
-Re-run every missed day explicitly, oldest first. The 06:00 run only does yesterday.
+Re-run every missed day explicitly, oldest first. The 18:00 run only does the last closed business day.
 
 ## 9. Approving held bills, vendors and products
 
 **Near-match vendor (`HOLD_NEAR_MATCH`).** If the supplier is the existing QBO vendor, add one row to `/data/mappings/company_a/vendors.csv` (`EPOS Supplier Id, EPOS Supplier Name, QBO Vendor Id, QBO Vendor Name, Approved By`). The EPOS name must be exactly as on the PO, with `Approved By` = your name. If it really is a new vendor, create it with `vendor_admin` (`--spec`, dry-run, then `--execute`). The next run, or `daily_run --date <day> --only bills`, posts the bill.
 
 ```bash
-docker compose exec akponora-ops python -m code_scripts.scripts.akponora_cutover.vendor_admin --spec /data/ops/vendor_spec.json
-docker compose exec akponora-ops python -m code_scripts.scripts.akponora_cutover.vendor_admin --spec /data/ops/vendor_spec.json --execute
+docker compose exec scheduler python -m code_scripts.scripts.akponora_cutover.vendor_admin --spec /data/ops/vendor_spec.json
+docker compose exec scheduler python -m code_scripts.scripts.akponora_cutover.vendor_admin --spec /data/ops/vendor_spec.json --execute
 ```
 
 **Held or capped bills.** Open `<run>/bills/review.csv` and `review_lines.csv` (the `Reasons` column says why). For a bill that is correct but above the auto cap, or READY in plan-only mode, set `Approve=yes` on its row and post (chat yes):
 
 ```bash
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.bills_sync post \
+docker compose exec scheduler python -m code_scripts.akponora_ops.bills_sync post \
   --review /data/ops/company_a/daily/<day>/run_<…>/bills/review.csv \
   --approval-ref "<chat yes>" --expect-sha <payloads_sha256 from bills/summary.json>
 ```
@@ -249,16 +245,15 @@ Duplicate-PO holds, unit-cost holds and unmapped-product holds are fixed at the 
 
 | Lagos time | Job | Container | Notes |
 | --- | --- | --- | --- |
-| 06:00 daily | `daily_run` (catalogue → vendors+bills → sales → guard → stock → uf) | `akponora-ops` | The only Company A schedule |
-| 18:00 daily | Portal all-company sales (`SCHEDULE_CRON`) | `scheduler` | Company B etc.; Company A automatically excluded |
-| — | `OIAT_AKPONORA_*_CRON` individual jobs | `akponora-ops` | Leave unset while `daily_run` is on (ignored unless `OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS=1`) |
-| as needed | `daily_run --date <day> [--only …]` | `akponora-ops` | Catch-up / re-run after a hold |
+| 18:00 daily | Daily routine: `daily_run` (catalogue → vendors+bills → sales → guard → stock → uf) | `scheduler` | Portal row "Nora daily routine"; the only Company A schedule |
+| 19:00 daily | Goldplates (Company B) sales sync | `scheduler` | Its own portal schedule row |
+| as needed | `daily_run --date <day> [--only …]` | `scheduler` | The Inbox, or `docker compose exec scheduler …`. Catch-up / re-run after a hold |
 
 ## 11. Turning it off
 
-- **Everything:** `OIAT_COMPANY_A_DAILY_RUN_ENABLED=0`, then `docker compose up -d akponora-ops scheduler`. Company A then has no schedule at all, unless `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`, which puts it back into the 18:00 portal run.
+- **Everything for Company A:** pause **"Nora daily routine"** on the Schedules page. Company A then has no schedule at all.
 - **One kind of write:** set that step's switch to `0` (for example `OIAT_COMPANY_A_BILLS_AUTO_POST=0`). The step keeps planning, and its work waits for review.
-- **Emergency:** `docker compose stop akponora-ops`.
+- **Emergency:** pause the Daily routine on the Schedules page, or `docker compose stop scheduler` (this stops all schedules, Company B too).
 
 ---
 
@@ -300,7 +295,7 @@ The `uf` step's `summary.json` / `scheduled.json` and the daily Slack summary en
 *Missing* = no block on the sheet; *Incomplete* (shown when any) = block present but a CASH box / SYSTEM is blank or a box is not a number; *Waiting to deposit* = complete on the sheet but not yet `DEPOSITED` (READY, HELD for another reason, or no sales yet). The same report plus the per-day state, read-only (sheet + `days.json`, no QBO):
 
 ```bash
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits status
+docker compose exec scheduler python -m code_scripts.akponora_ops.uf_deposits status
 #   --date <day> to report up to another day, --json for machine output, --sheet-xlsx <file> offline
 ```
 
@@ -308,7 +303,7 @@ docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits
 
 The sheet-vs-receipts gate is max(`OIAT_COMPANY_A_UF_TOLERANCE` (default ₦1,000), `OIAT_COMPANY_A_UF_TOLERANCE_PCT` (default 0.5) % of the day's receipts). Both are read at the start of every run (nothing is cached between runs). Two ways to change them:
 
-- **Server `.env`** (the normal place): edit, then `docker compose up -d akponora-ops` so the container picks up the new environment.
+- **Server `.env`** (the normal place): edit, then `docker compose up -d scheduler web` so the containers pick up the new environment.
 - **No restart:** write the keys into `/data/ops/company_a/uf_deposits/settings.env` (one `KEY=VALUE` per line). It is read every run and wins over `.env`; delete the file to go back. Only the two tolerance keys are honoured there (enable / auto-post / approval / cap stay in `.env`).
 
 The tolerance used (and where it came from) is written to each plan's `summary.json`.
@@ -385,9 +380,9 @@ docker compose exec web ls -l /data/secrets
 Remove-Item "$env:USERPROFILE\Downloads\oiat-till-sheet-1234abcd.json"   # and empty the Recycle Bin
 ```
 
-(Linux/macOS: the same `docker compose cp …` with a normal path.) `/data` is shared by `web` and `akponora-ops`, so copying through `web` is enough.
+(Linux/macOS: the same `docker compose cp …` with a normal path.) `/data` is shared by `web` and `scheduler`, so copying through `web` is enough.
 
-**G. Env vars** (server `.env`, then `docker compose up -d akponora-ops`; the image must be rebuilt once for the new Python packages: `docker compose build`):
+**G. Env vars** (server `.env`, then `docker compose up -d scheduler web`; the image must be rebuilt once for the new Python packages: `docker compose build`):
 
 ```bash
 OIAT_COMPANY_A_TILL_SHEET_ID=15lvfx6q-g7JYgzY4kQZC87JKK2za8SRvuUXjqhovd3A
@@ -403,11 +398,11 @@ OIAT_COMPANY_A_UF_TOLERANCE_PCT=0.5
 **H. Smoke test (read-only: sheet + QBO GET, writes nothing to QBO)**
 
 ```bash
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits plan --date 2026-10-01 --no-slack
+docker compose exec scheduler python -m code_scripts.akponora_ops.uf_deposits plan --date 2026-10-01 --no-slack
 #   2026-10-01 READY    receipts 3211950.00 sheet 3212000.00 ...      (or HOLD + the reason)
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits plan --no-slack
+docker compose exec scheduler python -m code_scripts.akponora_ops.uf_deposits plan --no-slack
 #   every day since 25 Sep not yet DEPOSITED, up to yesterday
-docker compose exec akponora-ops python -m code_scripts.akponora_ops.uf_deposits status
+docker compose exec scheduler python -m code_scripts.akponora_ops.uf_deposits status
 #   till-sheet report + per-day state (no QBO)
 ```
 

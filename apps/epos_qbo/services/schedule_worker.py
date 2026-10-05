@@ -12,17 +12,13 @@ from django.utils import timezone
 
 from apps.epos_qbo.business_date import get_target_trading_date
 
-from ..models import RunJob, RunLock, RunSchedule, RunScheduleEvent, SchedulerWorkerHeartbeat
+from ..models import RunJob, RunSchedule, RunScheduleEvent, SchedulerWorkerHeartbeat
 from .job_runner import dispatch_next_queued_job
 from .run_reconciler import describe_run, describe_run_short, reconcile_stale_running_jobs
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORKER_POLL_SECONDS = 15
-DEFAULT_FALLBACK_CRON = "0 18 * * *"  # 6pm daily
-FALLBACK_SCHEDULE_NAME = "Legacy Env Fallback"
-
-
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -51,34 +47,9 @@ def configured_poll_seconds() -> int:
     )
 
 
-def env_fallback_enabled() -> bool:
-    return _env_flag("OIAT_SCHEDULER_ENABLE_ENV_FALLBACK", True)
-
-
 COMPANY_A_KEY = "company_a"
-
-
-def company_a_sales_automation_enabled() -> bool:
-    """Whether scheduled runs may include Company A sales (default: no, until W9)."""
-    return _env_flag("OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED", False)
-
-
-def company_a_daily_run_enabled() -> bool:
-    """When on, Company A runs only through ``code_scripts.akponora_ops.daily_run`` (scheduled by the
-    akponora-ops container), so this worker never schedules Company A sales itself."""
-    return _env_flag("OIAT_COMPANY_A_DAILY_RUN_ENABLED", False)
-
-
-def company_a_scheduled_sales_allowed() -> bool:
-    return company_a_sales_automation_enabled() and not company_a_daily_run_enabled()
-
-
-def company_a_blocked_message() -> str:
-    if company_a_daily_run_enabled():
-        return ("Company A is scheduled by the Akponora daily run (OIAT_COMPANY_A_DAILY_RUN_ENABLED=1); "
-                "this schedule does not run Company A to avoid a double run.")
-    return ("Company A sales automation is disabled until go-live; "
-            "set OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1 to allow scheduled Company A sales runs.")
+COMPANY_A_SALES_MESSAGE = ("Akponora's sales run inside its Daily routine (products, bills, sales, checks, banking); "
+                           "a separate sales schedule never includes it. Use the Daily routine schedule.")
 
 
 def _default_schedule_timezone() -> str:
@@ -89,18 +60,6 @@ def _default_schedule_timezone() -> str:
             getattr(settings, "TIME_ZONE", "UTC"),
         )
     )
-
-
-def _fallback_cron_expr() -> str:
-    value = (os.getenv("SCHEDULE_CRON") or DEFAULT_FALLBACK_CRON).strip()
-    return value or DEFAULT_FALLBACK_CRON
-
-
-def _fallback_timezone_name() -> str:
-    value = (os.getenv("SCHEDULE_TZ") or "").strip()
-    if value:
-        return value
-    return _default_schedule_timezone()
 
 
 def _create_event(
@@ -135,23 +94,6 @@ def _active_scheduled_run(schedule: RunSchedule) -> RunJob | None:
         .order_by("created_at")
         .first()
     )
-
-
-def _active_scheduled_run_exists(schedule: RunSchedule) -> bool:
-    return _active_scheduled_run(schedule) is not None
-
-
-def _active_global_run() -> tuple[bool, RunJob | None, str]:
-    """(active, blocking job if known, lock holder) for the global run check."""
-    lock = RunLock.objects.filter(active=True).select_related("owner_run_job").first()
-    if lock is not None:
-        return True, lock.owner_run_job, lock.holder or ""
-    job = RunJob.objects.filter(status=RunJob.STATUS_RUNNING).order_by("created_at").first()
-    return job is not None, job, ""
-
-
-def _active_global_run_exists() -> bool:
-    return _active_global_run()[0]
 
 
 def _skip_overlap(
@@ -205,15 +147,21 @@ def _reconcile_stale_runs(now: datetime) -> int:
 
 
 def _schedule_requires_company(schedule: RunSchedule) -> bool:
-    return schedule.scope in {RunJob.SCOPE_SINGLE, RunJob.SCOPE_INVENTORY_PIPELINE}
+    return schedule.scope == RunJob.SCOPE_SINGLE
 
 
-def _is_blocked_company_a_sales_schedule(schedule: RunSchedule) -> bool:
-    return (
-        schedule.scope == RunJob.SCOPE_SINGLE
-        and (schedule.company_key or "").strip() == COMPANY_A_KEY
-        and not company_a_scheduled_sales_allowed()
-    )
+NOT_IN_CATALOGUE_MESSAGE = "This workflow can't be scheduled (not in the workflow catalogue); delete this schedule."
+
+
+def _catalogue_refusal(schedule: RunSchedule) -> str | None:
+    """Only catalogue workflows run (services/workflows.WORKFLOWS); Akponora's sales only in its Daily routine."""
+    from .workflows import WORKFLOWS
+
+    if schedule.scope != RunJob.SCOPE_ALL and schedule.scope not in WORKFLOWS:
+        return NOT_IN_CATALOGUE_MESSAGE
+    if schedule.scope == RunJob.SCOPE_SINGLE and (schedule.company_key or "").strip() == COMPANY_A_KEY:
+        return COMPANY_A_SALES_MESSAGE
+    return None
 
 
 def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime, target_date=None) -> dict[str, Any]:
@@ -224,26 +172,16 @@ def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime, target_d
                 "stagger_seconds": 0, "continue_on_failure": False, "inventory_options_json": {},
                 "status": RunJob.STATUS_QUEUED, "scheduled_by": schedule,
                 "command_display": f"schedule:{schedule.name}"}
-    target_date = None
     inventory_options: dict[str, Any] = {}
-    if schedule.scope in {RunJob.SCOPE_SINGLE, RunJob.SCOPE_INVENTORY_PIPELINE}:
+    if schedule.scope == RunJob.SCOPE_SINGLE:
         parallel = 1
         continue_on_failure = False
     else:
         parallel = max(1, int(schedule.parallel))
         continue_on_failure = bool(schedule.continue_on_failure)
-    if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-        inventory_options = (
-            dict(schedule.inventory_options_json)
-            if isinstance(schedule.inventory_options_json, dict)
-            else {}
-        )
-    else:
-        target_date = get_target_trading_date(now=now)
-    # Company A sales stay out of automated all-company runs (system fallback and
-    # user-created schedules alike) until W9 go-live flips the opt-in flag, and always
-    # while the Akponora daily run owns Company A (no double runs).
-    if schedule.scope == RunJob.SCOPE_ALL and not company_a_scheduled_sales_allowed():
+    target_date = get_target_trading_date(now=now)
+    # Company A's sales are part of its Daily routine: an all-company sales run never includes it.
+    if schedule.scope == RunJob.SCOPE_ALL:
         inventory_options["exclude_companies"] = [COMPANY_A_KEY]
     return {
         "scope": schedule.scope,
@@ -276,98 +214,6 @@ def _initialize_missing_next_fire(schedule: RunSchedule, *, now: datetime) -> bo
             message=f"Schedule is invalid and cannot be initialized: {exc}",
         )
     return True
-
-
-def _upsert_env_fallback_schedule(*, now: datetime) -> dict[str, int]:
-    stats = {"fallback_enabled": 0, "fallback_disabled": 0}
-
-    if not env_fallback_enabled():
-        for schedule in RunSchedule.objects.filter(is_system_managed=True, enabled=True):
-            schedule.enabled = False
-            schedule.save(update_fields=["enabled", "updated_at"])
-            _create_event(
-                schedule=schedule,
-                event_type=RunScheduleEvent.TYPE_FALLBACK_DISABLED,
-                message="Schedule is disabled.",
-            )
-            stats["fallback_disabled"] += 1
-        return stats
-
-    has_enabled_user_sales_schedule = RunSchedule.objects.filter(
-        enabled=True,
-        is_system_managed=False,
-        scope__in=[RunJob.SCOPE_ALL, RunJob.SCOPE_SINGLE],
-    ).exists()
-
-    if has_enabled_user_sales_schedule:
-        for schedule in RunSchedule.objects.filter(is_system_managed=True, enabled=True):
-            schedule.enabled = False
-            schedule.save(update_fields=["enabled", "updated_at"])
-            _create_event(
-                schedule=schedule,
-                event_type=RunScheduleEvent.TYPE_FALLBACK_DISABLED,
-                message="Schedule is disabled because a sales schedule is configured.",
-            )
-            stats["fallback_disabled"] += 1
-        return stats
-
-    schedule, created = RunSchedule.objects.get_or_create(
-        name=FALLBACK_SCHEDULE_NAME,
-        is_system_managed=True,
-        defaults={
-            "enabled": True,
-            "scope": RunJob.SCOPE_ALL,
-            "company_key": None,
-            "cron_expr": _fallback_cron_expr(),
-            "timezone_name": _fallback_timezone_name(),
-            "target_date_mode": RunSchedule.TARGET_DATE_MODE_TRADING_DATE,
-            "parallel": 2,
-            "stagger_seconds": 2,
-            "continue_on_failure": False,
-        },
-    )
-
-    changed = created
-    cron_expr = _fallback_cron_expr()
-    timezone_name = _fallback_timezone_name()
-    if schedule.cron_expr != cron_expr:
-        schedule.cron_expr = cron_expr
-        changed = True
-    if schedule.timezone_name != timezone_name:
-        schedule.timezone_name = timezone_name
-        changed = True
-    if not schedule.enabled:
-        schedule.enabled = True
-        changed = True
-
-    if schedule.next_fire_at is None:
-        changed = True
-    if changed:
-        try:
-            schedule.next_fire_at = schedule.compute_next_fire_at(from_dt=now)
-            schedule.last_error = ""
-        except Exception as exc:
-            schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_INVALID
-            schedule.last_error = str(exc)
-        update_fields = [
-            "enabled",
-            "cron_expr",
-            "timezone_name",
-            "next_fire_at",
-            "last_result",
-            "last_error",
-            "updated_at",
-        ]
-        schedule.save(update_fields=update_fields)
-        _create_event(
-            schedule=schedule,
-            event_type=RunScheduleEvent.TYPE_FALLBACK_ENABLED,
-            message="Schedule enabled from environment configuration.",
-            payload={"cron_expr": schedule.cron_expr, "timezone_name": schedule.timezone_name},
-        )
-        stats["fallback_enabled"] += 1
-
-    return stats
 
 
 def enqueue_run_for_schedule(
@@ -425,8 +271,8 @@ def enqueue_run_for_schedule(
                 message="Schedule is invalid: run once time is required.",
             )
             return None, RunScheduleEvent.TYPE_SKIPPED_INVALID
-        if _is_blocked_company_a_sales_schedule(schedule):
-            message = company_a_blocked_message()
+        message = _catalogue_refusal(schedule)
+        if message:
             schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_INVALID
             schedule.last_error = message
             schedule.last_fired_at = current
@@ -440,10 +286,6 @@ def enqueue_run_for_schedule(
         own_active = _active_scheduled_run(schedule)
         if own_active is not None:
             return _skip_overlap(schedule, current=current, blocking_job=own_active)
-        if schedule.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-            global_active, blocking_job, holder = _active_global_run()
-            if global_active:
-                return _skip_overlap(schedule, current=current, blocking_job=blocking_job, holder=holder)
 
         payload = _job_payload_from_schedule(schedule, now=current, target_date=target_date)
         job = RunJob.objects.create(**payload)
@@ -482,7 +324,7 @@ def enqueue_run_for_schedule(
 
 
 def _company_a_daily_refusal(schedule: RunSchedule, *, current: datetime, target_date) -> tuple | None:
-    """Nora daily routine gates (workflows module doc): one owner; never replay a completed day."""
+    """Daily routine gates (workflows module doc): one schedule; never replay a completed day."""
     from . import workflows
 
     canonical = workflows.daily_routine_schedule()
@@ -493,10 +335,6 @@ def _company_a_daily_refusal(schedule: RunSchedule, *, current: datetime, target
         return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_INVALID,
                      f"Only one Nora daily routine schedule may run ('{canonical.name}'); this duplicate never queues. "
                      "Delete it or pause it.", current=current)
-    if not workflows.portal_owns_company_a_daily():
-        message = ("The Akponora ops scheduler owns Nora's daily routine "
-                   f"({workflows.OWNER_ENV}={workflows.company_a_daily_owner()}); this schedule does not queue it.")
-        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_NOT_OWNER, message, current=current)
     day = target_date or get_target_trading_date(now=current)
     if workflows.day_already_ran(day):
         return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_DONE,
@@ -538,8 +376,6 @@ def _process_company_a_daily(schedule: RunSchedule, *, now: datetime, due_at: da
     except Exception as exc:
         return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_INVALID, f"Schedule is invalid: {exc}", current=now)
     schedule.save(update_fields=["next_fire_at", "updated_at"])
-    if not workflows.portal_owns_company_a_daily():
-        return enqueue_run_for_schedule(schedule, now=now, source="worker")  # records skipped_not_owner
     fire = due_at or now
     day = workflows.business_date_for_fire(fire)
     if workflows.is_missed(due_at, now):
@@ -628,17 +464,12 @@ def process_schedule_cycle(*, now: datetime | None = None, max_due: int = 25) ->
         "skipped_overlap": 0,
         "skipped_invalid": 0,
         "errors": 0,
-        "fallback_enabled": 0,
-        "fallback_disabled": 0,
         "reconciled": 0,
     }
 
     # Runs left 'running' by a dead process (e.g. container restart) would make every
     # later schedule skip as "another run is active"; close them before deciding.
     stats["reconciled"] = _reconcile_stale_runs(current)
-
-    fallback_stats = _upsert_env_fallback_schedule(now=current)
-    stats.update(fallback_stats)
 
     for schedule in RunSchedule.objects.filter(enabled=True, next_fire_at__isnull=True):
         if _initialize_missing_next_fire(schedule, now=current):
@@ -672,8 +503,8 @@ def process_schedule_cycle(*, now: datetime | None = None, max_due: int = 25) ->
             elif result == RunScheduleEvent.TYPE_SKIPPED_INVALID:
                 stats["skipped_invalid"] += 1
 
-    # Start queued work every cycle: jobs queued by portal pages / the Inbox are started here when
-    # execution is worker-only (job_runner.WORKER_ONLY_ENV).
+    # The worker is the only process that starts jobs: queued work (from schedules, pages or the
+    # Inbox) starts here every cycle.
     if stats["queued"] > 0 or stats["reconciled"] > 0 or RunJob.objects.filter(status=RunJob.STATUS_QUEUED).exists():
         dispatch_next_queued_job()
 

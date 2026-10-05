@@ -60,29 +60,10 @@ services:
       STATE_ROOT: /data
       OIAT_COMPANIES_DIR: /data/code_scripts/companies
       OIAT_SCHEDULER_POLL_SECONDS: ${OIAT_SCHEDULER_POLL_SECONDS:-15}
-      OIAT_SCHEDULER_ENABLE_ENV_FALLBACK: ${OIAT_SCHEDULER_ENABLE_ENV_FALLBACK:-1}
-      # Company A remains excluded from the system fallback until W9 approval.
-      OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED: ${OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED:-0}
-      # OIAT_COMPANY_A_DAILY_RUN_ENABLED also comes from env_file (.env): when 1, this worker
-      # never schedules Company A (the akponora-ops daily run owns it; no double runs).
-      # Standing auto-approval also needs OIAT_COMPANY_A_STANDING_APPROVAL_REF (and optionally
-      # OIAT_COMPANY_A_AUTO_APPROVAL_MAX_GROSS). They come from env_file (.env) on purpose:
-      # not listed here so an empty interpolation can never blank them.
-      SCHEDULE_CRON: ${SCHEDULE_CRON:-0 18 * * *}
-      SCHEDULE_TZ: ${SCHEDULE_TZ:-Africa/Lagos}
-
-  # Company A operations (docs/SERVER_SETUP.md). Opt-in profile: set COMPOSE_PROFILES=akponora-ops
-  # in .env (or `docker compose --profile akponora-ops up -d akponora-ops`). With
-  # OIAT_COMPANY_A_DAILY_RUN_ENABLED=1 it runs the single Company A routine
-  # (`python -m code_scripts.akponora_ops.daily_run`: catalogue -> vendors+bills -> sales -> guard -> uf deposits)
-  # at OIAT_COMPANY_A_DAILY_RUN_CRON (default "0 6 * * *", SCHEDULE_TZ). Individual job crons
-  # (OIAT_AKPONORA_<JOB>_CRON) are ignored while the daily run is on. Every QBO write still needs
-  # its own approval env vars. Idle (no restart loop) when nothing is switched on.
-  akponora-ops:
-    <<: *app-common
-    profiles: ["akponora-ops"]
-    container_name: ${COMPOSE_PROJECT_NAME:-oiat}-akponora-ops
-    command: ["python", "-m", "code_scripts.akponora_ops.ops_scheduler"]
+      # The one scheduler: it decides when each workflow runs (RunSchedule rows, Schedules page) and is
+      # the only process that starts jobs, including Nora's Daily routine (daily_run). The Company A
+      # automation / approval switches (OIAT_COMPANY_A_*) come from env_file (.env) on purpose: not
+      # listed here so an empty interpolation can never blank them.
 
   caddy:
     build:

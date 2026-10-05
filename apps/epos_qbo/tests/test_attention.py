@@ -72,7 +72,7 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(record.actor, "reviewer")
         self.assertEqual(record.job.status, "queued")
         self.assertEqual(record.job.scope, RunJob.SCOPE_PORTAL_REVIEW)
-        dispatch.assert_called_once()
+        dispatch.assert_not_called()  # queued; the schedule worker starts it
 
     def test_changed_line_evidence_refuses_before_enqueue(self):
         token = self.token(attention.inbox()[0][0])

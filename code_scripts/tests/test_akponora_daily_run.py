@@ -16,9 +16,8 @@ from zoneinfo import ZoneInfo
 
 from code_scripts.akponora_ops import bills_sync as bs
 from code_scripts.akponora_ops import daily_run as dr
-from code_scripts.akponora_ops import ops_scheduler
 from code_scripts.akponora_ops import vendors as vendor_ops
-from code_scripts.tests.test_bills_sync import COKE, WATER, FakeQBO, Fixture, Resp, client, order
+from code_scripts.tests.test_bills_sync import WATER, FakeQBO, Fixture, Resp, client, order
 
 STANDING = {"OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED": "1",
             "OIAT_COMPANY_A_STANDING_APPROVAL_REF": "owner standing yes (test)"}
@@ -333,39 +332,6 @@ class LockTests(unittest.TestCase):
         after = GlobalRunLock("after")
         self.assertTrue(after.acquire().acquired)
         after.release()
-
-
-class NoDoubleSchedulingTests(unittest.TestCase):
-    def setUp(self):
-        env = mock.patch.dict(os.environ, {}, clear=False)
-        env.start()
-        self.addCleanup(env.stop)
-        for key in [k for k in os.environ if k.startswith(("OIAT_AKPONORA_", "OIAT_COMPANY_A_DAILY_RUN"))]:
-            os.environ.pop(key)
-
-    def test_daily_run_off_by_default(self):
-        self.assertEqual(ops_scheduler.JOBS["daily_run"].cron(), "")
-        self.assertNotIn("daily_run", [j.name for j in ops_scheduler.configured_jobs()])
-
-    def test_daily_run_is_the_only_job_when_enabled(self):
-        os.environ.update({"OIAT_COMPANY_A_DAILY_RUN_ENABLED": "1", "OIAT_AKPONORA_BILLS_SYNC_CRON": "0 9 * * *",
-                           "OIAT_AKPONORA_ITEM_GUARD_CRON": "0 19 * * *"})
-        jobs = ops_scheduler.configured_jobs()
-        self.assertEqual([j.name for j in jobs], ["daily_run"])
-        self.assertEqual(jobs[0].cron(), "0 6 * * *")
-        self.assertEqual(jobs[0].command()[1:], ["-m", "code_scripts.akponora_ops.daily_run"])
-        self.assertFalse(jobs[0].takes_lock)
-        os.environ["OIAT_COMPANY_A_DAILY_RUN_CRON"] = "15 6 * * *"
-        self.assertEqual(ops_scheduler.JOBS["daily_run"].cron(), "15 6 * * *")
-        os.environ["OIAT_AKPONORA_ALLOW_INDIVIDUAL_CRONS"] = "1"
-        self.assertEqual(sorted(j.name for j in ops_scheduler.configured_jobs()),
-                         ["bills_sync", "daily_run", "item_guard"])
-
-    def test_daily_run_failure_does_not_double_alert(self):
-        with mock.patch.object(ops_scheduler.subprocess, "run", return_value=SimpleNamespace(returncode=2)), \
-                mock.patch.object(ops_scheduler, "send_slack") as slack:
-            self.assertEqual(ops_scheduler.run_job(ops_scheduler.JOBS["daily_run"]), 2)
-        slack.assert_not_called()
 
 
 # ---------------------------------------------------------------- vendors inside bills_sync

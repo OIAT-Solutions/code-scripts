@@ -8,7 +8,6 @@ from django.conf import settings
 from django import forms
 
 from .models import (
-    CompanyConfigRecord,
     DashboardUserPreference,
     PortalSettings,
     RunJob,
@@ -170,11 +169,12 @@ class CompanyAdvancedForm(forms.Form):
 
 
 class RunScheduleForm(forms.ModelForm):
+    # The workflow catalogue (services/workflows.WORKFLOWS) decides what can be scheduled for which company.
     WORKFLOW_SALES = "sales"
-    WORKFLOW_INVENTORY = "inventory"
+    WORKFLOW_DAILY_ROUTINE = "daily_routine"
     WORKFLOW_CHOICES = [
-        (WORKFLOW_SALES, "Sales Sync"),
-        (WORKFLOW_INVENTORY, "Inventory Sync"),
+        (WORKFLOW_SALES, "Sales sync"),
+        (WORKFLOW_DAILY_ROUTINE, "Daily routine"),
     ]
     COMPANY_TARGET_ALL = "all"
     COMPANY_TARGET_ONE = "one"
@@ -186,16 +186,6 @@ class RunScheduleForm(forms.ModelForm):
     schedule_type = forms.ChoiceField(choices=RunSchedule.SCHEDULE_TYPE_CHOICES)
     workflow = forms.ChoiceField(choices=WORKFLOW_CHOICES)
     company_target = forms.ChoiceField(choices=COMPANY_TARGET_CHOICES)
-    category = forms.CharField(
-        max_length=255,
-        required=False,
-        help_text="Optional EPOS category filter for inventory schedules.",
-    )
-    product_filter = forms.CharField(
-        max_length=255,
-        required=False,
-        help_text="Optional EPOS product filter for inventory schedules.",
-    )
     run_once_date = forms.DateField(required=False)
     run_once_time = forms.TimeField(required=False)
 
@@ -224,9 +214,9 @@ class RunScheduleForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["scope"].choices = [
-            (RunJob.SCOPE_ALL, "Sales Sync: all eligible companies"),
-            (RunJob.SCOPE_SINGLE, "Sales Sync: one company"),
-            (RunJob.SCOPE_INVENTORY_PIPELINE, "Inventory Sync: one company"),
+            (RunJob.SCOPE_ALL, "Sales sync: all eligible companies"),
+            (RunJob.SCOPE_SINGLE, "Sales sync: one company"),
+            (RunJob.SCOPE_COMPANY_A_DAILY, "Daily routine"),
         ]
         self.fields["schedule_type"].required = False
         self.fields["workflow"].required = False
@@ -249,16 +239,6 @@ class RunScheduleForm(forms.ModelForm):
             or getattr(self.instance, "schedule_type", RunSchedule.SCHEDULE_TYPE_RECURRING)
         )
         if self.instance and self.instance.pk:
-            opts = self.instance.inventory_options_json if isinstance(self.instance.inventory_options_json, dict) else {}
-            categories = opts.get("categories") or []
-            if isinstance(categories, str):
-                category = categories
-            elif isinstance(categories, list) and categories:
-                category = str(categories[0] or "")
-            else:
-                category = ""
-            self.fields["category"].initial = category
-            self.fields["product_filter"].initial = str(opts.get("product_filter") or "")
             if self.instance.run_once_at:
                 timezone_name = self.instance.timezone_name or _default_schedule_timezone()
                 try:
@@ -270,8 +250,8 @@ class RunScheduleForm(forms.ModelForm):
 
     @classmethod
     def _workflow_from_scope(cls, scope: str | None) -> str:
-        if scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-            return cls.WORKFLOW_INVENTORY
+        if scope == RunJob.SCOPE_COMPANY_A_DAILY:
+            return cls.WORKFLOW_DAILY_ROUTINE
         return cls.WORKFLOW_SALES
 
     @classmethod
@@ -280,33 +260,14 @@ class RunScheduleForm(forms.ModelForm):
             return cls.COMPANY_TARGET_ALL
         return cls.COMPANY_TARGET_ONE
 
-    @staticmethod
-    def _config_inventory_enabled(config_json: dict | None) -> bool:
-        inventory = (config_json or {}).get("inventory") or {}
-        value = inventory.get("enable_inventory_items")
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return value == 1
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return False
-
-    @classmethod
-    def _company_inventory_enabled(cls, company_key: str) -> bool:
-        company = CompanyConfigRecord.objects.filter(company_key=company_key, is_active=True).first()
-        if company is None:
-            return False
-        return cls._config_inventory_enabled(company.config_json if isinstance(company.config_json, dict) else {})
-
     @classmethod
     def _scope_from_operator_choices(cls, workflow: str, company_target: str) -> str | None:
+        if workflow == cls.WORKFLOW_DAILY_ROUTINE:
+            return RunJob.SCOPE_COMPANY_A_DAILY
         if workflow == cls.WORKFLOW_SALES and company_target == cls.COMPANY_TARGET_ALL:
             return RunJob.SCOPE_ALL
         if workflow == cls.WORKFLOW_SALES and company_target == cls.COMPANY_TARGET_ONE:
             return RunJob.SCOPE_SINGLE
-        if workflow == cls.WORKFLOW_INVENTORY and company_target == cls.COMPANY_TARGET_ONE:
-            return RunJob.SCOPE_INVENTORY_PIPELINE
         return None
 
     def clean_cron_expr(self) -> str:
@@ -354,37 +315,39 @@ class RunScheduleForm(forms.ModelForm):
             cleaned["company_target"] = company_target
         scope = self._scope_from_operator_choices(workflow, company_target) if workflow and company_target else legacy_scope
         company_key = (cleaned.get("company_key") or "").strip()
-        category = (cleaned.get("category") or "").strip()
-        product_filter = (cleaned.get("product_filter") or "").strip()
         run_once_date = cleaned.get("run_once_date")
         run_once_time = cleaned.get("run_once_time")
-        cleaned["category"] = category
-        cleaned["product_filter"] = product_filter
         cleaned["scope"] = scope
 
-        if workflow == self.WORKFLOW_INVENTORY and company_target == self.COMPANY_TARGET_ALL:
-            self.add_error("company_target", "Inventory all-companies schedules are not supported yet.")
+        if workflow == self.WORKFLOW_DAILY_ROUTINE and not company_target:
+            cleaned["company_target"] = company_target = self.COMPANY_TARGET_ONE
+            scope = RunJob.SCOPE_COMPANY_A_DAILY
+            cleaned["scope"] = scope
+        from .services import workflows as catalogue
+
+        entry = catalogue.WORKFLOWS.get(scope) if scope else None
+        if entry is not None and scope != RunJob.SCOPE_ALL and company_key and not entry.available_for(company_key):
+            self.add_error("company_key", f"{entry.name} isn't available for this company."
+                           + (" Its sales run inside its Daily routine." if scope == RunJob.SCOPE_SINGLE else ""))
+        if entry is not None and entry.one_per_company and company_key:
+            clash = RunSchedule.objects.filter(scope=scope, company_key=company_key).exclude(pk=self.instance.pk)
+            if clash.exists():
+                self.add_error("workflow", f"This company already has a {entry.name} schedule; edit or pause that one.")
         if scope is None:
             self.add_error("workflow", "Select a supported workflow and company target.")
         if scope == RunJob.SCOPE_SINGLE and not company_key:
             self.add_error("company_key", "Company key is required for single-company schedules.")
-        if scope == RunJob.SCOPE_INVENTORY_PIPELINE and not company_key:
-            self.add_error("company_key", "Company key is required for inventory schedules.")
-        if scope == RunJob.SCOPE_INVENTORY_PIPELINE and company_key and not self._company_inventory_enabled(company_key):
-            self.add_error("company_key", "Inventory schedules require an inventory-enabled company.")
 
         if scope == RunJob.SCOPE_ALL:
             cleaned["company_key"] = None
-            cleaned["category"] = ""
-            cleaned["product_filter"] = ""
         elif scope == RunJob.SCOPE_SINGLE:
             cleaned["company_key"] = company_key
             cleaned["parallel"] = 1
             cleaned["stagger_seconds"] = 0
             cleaned["continue_on_failure"] = False
-            cleaned["category"] = ""
-            cleaned["product_filter"] = ""
-        elif scope == RunJob.SCOPE_INVENTORY_PIPELINE:
+        elif scope == RunJob.SCOPE_COMPANY_A_DAILY:
+            if not company_key:
+                self.add_error("company_key", "Choose the company for the Daily routine.")
             cleaned["company_key"] = company_key
             cleaned["parallel"] = 1
             cleaned["stagger_seconds"] = 0
@@ -418,17 +381,7 @@ class RunScheduleForm(forms.ModelForm):
 
     def save(self, commit=True):
         instance: RunSchedule = super().save(commit=False)
-        if instance.scope == RunJob.SCOPE_INVENTORY_PIPELINE:
-            opts: dict[str, object] = {}
-            category = (self.cleaned_data.get("category") or "").strip()
-            product_filter = (self.cleaned_data.get("product_filter") or "").strip()
-            if category:
-                opts["categories"] = [category]
-            if product_filter:
-                opts["product_filter"] = product_filter
-            instance.inventory_options_json = opts
-        else:
-            instance.inventory_options_json = {}
+        instance.inventory_options_json = {}
         if commit:
             instance.save()
             self.save_m2m()
