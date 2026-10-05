@@ -8,7 +8,7 @@ from ..models import CompanyConfigRecord
 from . import attention, company_a_ops as ops, experience, messages
 
 TAB_LABELS = {"sales": "Sales", "purchases": "Purchases", "products": "Products & Stock",
-              "suppliers": "Suppliers", "deposits": "Deposits", "settings": "Settings"}
+              "suppliers": "Suppliers", "deposits": "Banking", "settings": "Settings"}
 STEP_TABS = {"purchases": {"bills"}, "products": {"catalogue", "guard"},
              "suppliers": {"bills"}, "deposits": {"uf", "deposits", "uf_deposits"}}
 KIND_TABS = {"purchases": {"bill"}, "products": {"product"}, "suppliers": {"vendor"}, "deposits": {"deposit"}}

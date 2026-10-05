@@ -458,7 +458,7 @@ class DepositTests(RegisterFixtures, TestCase):
     def test_page_renders_without_any_deposit_files(self):
         response = self.client.get(self.page, {"tab": "deposits"})
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Deposits aren't switched on yet")
+        self.assertContains(response, "Banking isn't switched on yet")
         self.assertContains(response, "No deposit records yet")
         self.assertEqual(response.context["deposit_errors"], [])
         self.assertContains(response, "Not checked yet")

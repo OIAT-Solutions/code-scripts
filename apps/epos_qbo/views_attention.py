@@ -148,13 +148,17 @@ def _daily_data(request):
         raise ValueError("Choose a valid business date.")
     if not date(2026, 10, 1) <= target <= last_closed_business_date():
         raise ValueError("Choose a closed business day from 1 October 2026.")
+    from .services.company_a_ops import DAILY_STEP_CHOICES
+
     only = request.GET.get("only", "")
-    if only not in ("", "catalogue", "bills", "sales", "credit", "guard", "stock", "uf"):
+    names = dict(DAILY_STEP_CHOICES)
+    if only not in names:
         raise ValueError("Choose a supported daily step.")
     data = {"title": f"Akponora daily run · {target}", "date": target.isoformat(), "dry_run": request.GET.get("mode", "dry") != "post", "only": only}
-    title = f"{'Preview' if data['dry_run'] else 'Run'} Akponora for {target:%-d %B %Y}"
-    description = "This preview plans the selected steps and posts nothing to QuickBooks." if data["dry_run"] else "This runs the existing daily routine. Enabled steps may create products and suppliers, post unpaid bills, sales receipts and deposits through their existing approval gates."
-    return data, title, description, title.split(" Akponora")[0]
+    what = "the whole day" if not only else names[only].lower()
+    title = f"{'Preview' if data['dry_run'] else 'Run'} {what} for Akponora, {target:%-d %B %Y}"
+    description = "This preview plans the selected steps and posts nothing to QuickBooks." if data["dry_run"] else "This runs the existing daily routine. Enabled steps may create products and suppliers, post unpaid bills, sales receipts, credit invoices and banking through their existing approval gates."
+    return data, title, description, "Preview" if data["dry_run"] else "Run"
 
 
 def _list_data(request, action):

@@ -39,15 +39,20 @@ MAX_CSV_ROWS = 500
 LOG_TAIL_LINES = 60
 MAX_RUNS = 200
 
+# What a person can run from the portal ("What to run"), in the routine's order. One name per step everywhere.
+DAILY_STEP_CHOICES = [("", "Whole day"), ("catalogue", "Products"), ("bills", "Bills"), ("sales", "Sales"),
+                      ("credit", "Credit sales (invoices)"), ("guard", "Health check"), ("stock", "Stock check"),
+                      ("uf", "Banking (funds allocation)")]
+
 STEP_LABELS = {
     "catalogue": "Products",
     "bills": "Bills",
     "sales": "Sales",
     "credit": "Credit sales",
     "guard": "Health check",
-    "uf": "Deposits",
-    "deposits": "Deposits",
-    "uf_deposits": "Deposits",
+    "uf": "Banking",
+    "deposits": "Banking",
+    "uf_deposits": "Banking",
 }
 STATUS_ICONS = {"ok": "✅", "review": "⚠️", "failed": "❌", "skipped": "⏭", "disabled": "💤", "unknown": "❔"}
 OVERALL_STATUS = {"clean": "ok", "ok": "ok", "review": "review", "failed": "failed"}

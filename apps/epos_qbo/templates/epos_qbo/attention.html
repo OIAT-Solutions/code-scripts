@@ -12,17 +12,18 @@
 <div class="space-y-4">
 {% for item in items %}
 <article id="item-{{ item.key }}" class="portal-panel p-5">
-<p class="portal-eyebrow mb-2">{{ item.company }} · {% if item.kind == 'product' %}New product{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Bill{% elif item.kind == 'deposit' %}Deposit{% else %}Sales{% endif %}{% if item.date %} · {{ item.date }}{% endif %}</p>
+<p class="portal-eyebrow mb-2">{{ item.company }} · {% if item.kind == 'product' %}New product{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Bill{% elif item.kind == 'deposit' %}Banking{% else %}Sales{% endif %}{% if item.date %} · {{ item.date }}{% endif %}</p>
 <h2 class="font-semibold break-words">{{ item.title }}</h2>
 <p class="text-sm mt-2 break-words">{{ item.reason }}</p>
 {% if item.kind == 'vendor' and item.extra.check %}<p class="text-sm mt-2 {% if item.extra.check.ok %}text-emerald-800 dark:text-emerald-300{% else %}text-amber-800 dark:text-amber-300{% endif %}">{% if item.extra.check.ok %}Checked with QuickBooks: ready to approve.{% elif item.extra.check.result.problems %}QuickBooks check found a problem: {{ item.extra.check.result.problems|join:'; ' }}{% else %}The last QuickBooks check did not finish. Check again.{% endif %}</p>{% endif %}
 <div class="flex flex-wrap items-center gap-3 mt-4">
 {% if can_approve and item.preview %}<a class="btn {% if item.approve %}btn-secondary{% else %}btn-primary{% endif %}" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=preview">{% if item.extra.check %}Check again{% else %}Check with QuickBooks{% endif %}</a>{% endif %}
-{% if can_approve and item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=approve">{% if item.kind == 'hold' %}Clear hold{% elif item.kind == 'product' %}Approve product{% elif item.kind == 'vendor' %}Approve supplier{% elif item.kind == 'deposit' %}Approve deposit{% else %}Approve bill{% endif %}</a>{% endif %}
+{% if can_approve and item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=approve">{% if item.kind == 'hold' %}Clear hold{% elif item.kind == 'product' %}Approve product{% elif item.kind == 'vendor' %}Approve supplier{% elif item.kind == 'deposit' %}Approve banking{% else %}Approve bill{% endif %}</a>{% endif %}
 {% if can_approve and item.extra.repeat_ok %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=repeat_ok">Approve repeat order</a>{% endif %}
 {% if can_approve and item.extra.routine %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=routine">Approve · routine supplier</a>{% endif %}
 {% if can_approve and item.skip %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=skip">{% if item.kind == 'bill' %}Skip for this plan{% else %}Skip for now{% endif %}</a>{% endif %}
 {% if can_approve and item.exclude %}<a class="portal-link" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=exclude">{% if item.kind == 'bill' %}Handled outside, never post{% else %}Don't ask again{% endif %}</a>{% endif %}
+{% if can_run and item.kind == 'deposit' and not item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:runs' %}?run_step=uf&amp;run_date={{ item.date }}#run-a-day">Run banking for this day…</a>{% endif %}
 <a class="portal-link" href="{{ item.details_url }}">Open details</a>
 </div>
 {% if not item.approve and not item.preview %}<p class="portal-muted mt-3">{% if item.kind == 'product' %}This product can't be approved here yet. Fix it in EPOS; the next daily product check plans it again.{% else %}This can't be approved as it is. Fix the source and run a new preview first.{% endif %}</p>{% endif %}

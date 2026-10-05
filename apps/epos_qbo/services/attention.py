@@ -256,7 +256,7 @@ def deposit_items(seen, errors):
             from .deposits import reason as plain_reason
             raw = list(summary.get("reasons") or [])
             reason = plain_reason(raw[0], summary) if raw else "Till sheet and sales agree. Ready to move to the banks."
-            item = make_item("deposit", day, f"Deposits · {day}", reason, run, path.parent.name,
+            item = make_item("deposit", day, f"Banking · {day}", reason, run, path.parent.name,
                              approve=summary.get("status") == "READY" and not held_after_plan and bool(summary.get("payloads_sha256")),
                              skip=True, extra={"sha": summary.get("payloads_sha256", ""), "summary": summary})
             rebind(item, item["paths"] + [state_file])

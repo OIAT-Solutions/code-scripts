@@ -2376,6 +2376,7 @@ def runs_list(request):
         "active_run_ids": active_run_ids_list,
         "active_run_ids_json": json.dumps(active_run_ids_list),
         "company_a_recent_runs": company_a_views.safe_recent_runs(5),
+        "daily_step_choices": company_a_views.ops.DAILY_STEP_CHOICES,
     }
     context.update(_nav_context())
     context.update(

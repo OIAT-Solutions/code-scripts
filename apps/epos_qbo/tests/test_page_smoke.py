@@ -63,3 +63,37 @@ class PageSmokeTests(TestCase):
         for url in (f"/epos-qbo/runs/{job.id}/", "/epos-qbo/runs/", "/epos-qbo/", "/epos-qbo/companies/company_a/"):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200, url)
+
+
+class RunEntryPointTests(TestCase):
+    """Marvin, 6 Oct: 'Run…' must be easy to find, prefilled from context, and say why when not allowed."""
+
+    def setUp(self):
+        for key, name in (("company_a", "AKPONORA VENTURES LTD."), ("company_b", "GOLDPLATES FEASTHOUSE LTD.")):
+            CompanyConfigRecord.objects.create(company_key=key, display_name=name, is_active=True,
+                                               config_json={"company_key": key, "display_name": name, **CONFIG})
+
+    def test_run_panel_is_visible_and_prefilled(self):
+        self.client.force_login(User.objects.create_superuser("boss", "", "pw"))
+        html = self.client.get("/epos-qbo/runs/", {"run_step": "uf", "run_date": "2026-10-04"}).content.decode()
+        self.assertIn("Run something now", html)
+        self.assertIn('<option value="uf" selected>Banking (funds allocation)</option>', html)
+        self.assertIn('value="2026-10-04"', html)
+        self.assertIn("Other companies · Sales sync", html)
+        company = self.client.get("/epos-qbo/companies/company_a/", {"tab": "deposits"}).content.decode()
+        self.assertIn("?run_step=uf#run-a-day", company)
+
+    def test_without_permission_the_page_says_why(self):
+        self.client.force_login(User.objects.create_user("viewer", "", "pw"))
+        html = self.client.get("/epos-qbo/runs/").content.decode()
+        self.assertIn("Can trigger runs", html)
+        self.assertNotIn("Review run", html)
+
+    def test_confirm_title_names_the_step(self):
+        self.client.force_login(User.objects.create_superuser("boss", "", "pw"))
+        from unittest import mock as _m
+        from datetime import date as _d
+        with _m.patch("code_scripts.akponora_ops.daily_run.last_closed_business_date", return_value=_d(2026, 10, 5)):
+            html = self.client.get("/epos-qbo/attention/confirm/", {"action": "daily", "date": "2026-10-04",
+                                                                     "only": "uf", "mode": "dry"}).content.decode()
+        self.assertIn("Preview banking (funds allocation) for Akponora, 4 October 2026", html)
