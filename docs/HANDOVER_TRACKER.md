@@ -97,7 +97,26 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 - [ ] **Parked (Marvin: too frequent):** the "Funds Allocation" menu plus a server poller every 10 min. Brief kept at `BRIEF_TILL_SHEET_FUNDS_ALLOCATION_MENU.md`; don't hand it to Claude in Chrome for now.
 - [ ] **Later (Marvin):** a similar staff sheet for credit-sales invoices.
 
-### B. Goldplates invoicing (in progress)
+### B. Credit sales (in progress; includes Goldplates; Marvin's teammate: treat it as generic credit sales)
+- [x] **Sheet "Nora Mart Credit Sales"** (`1x6dB0QX9KWuF6dsqTfBOgBgZ0r4tle1kF847pOXp1nk`; service account Editor), built 5 Oct by `credit_sheet setup` (`50f8a00`+).
+  - Tabs: Read me, Invoices, Repayments, Customers, Customer prices, Products (6,143 EPOS products, server-owned).
+  - Dropdowns; auto list price (agreed customer price, else EPOS); a red row when a price differs without name + reason.
+  - 18 example lines loaded = the 9 paper invoices not in QBO (0006232 … 0006242, ₦7,126,000), not Ready, products to be picked.
+  - Transcription: `outputs/credit_sales_2026-10/paper_invoices_transcribed.csv`.
+- **Facts from the paper invoices (4 Oct):**
+  - Pre-numbered book (0006224 …). 0006224–0006231 are already in QBO as SR-20260408-0023…0028; 0006224's vegetable oil was posted as "Services".
+  - GPFH locations: CTH-HQ = Chevron HQ, IKD = Ikorodu / Ayangbure (confirmed): one customer, location on the invoice.
+  - Goldplates prices often differ from EPOS (palm oil ₦52k vs ₦75k; Titus ₦201k vs ₦130k), so use Customer prices.
+  - Some bulk items (fish cartons) may not be EPOS products.
+  - Jifa Felix: credit customer repaying by transfer into 5688464974 (₦300k 17 Sep, ₦750k 22 Sep, ₦800k 24 Sep, ₦500k 29 Sep, 2 × ₦500k 2 Oct). Repayments must never go in the till sheet.
+- [ ] **Waiting on Marvin's team:**
+  - every invoice-book page from 0006224 onwards (all customers, voided pages too) and the repayment records since 1 Sep; later, everything back to Dec 2025 for the GPFH A/R tie-out;
+  - gaps 0006225 / 0006226 / 0006233 / 0006234;
+  - how the "Paid" invoices were paid;
+  - Jifa Felix's invoices.
+- [ ] **Next (Claude):** the nightly reader. Ready rows → QBO invoices `DocNumber = paper number` (Inbox approval first); Repayments → ReceivePayment; status written back; refuse invoice numbers already in QBO; the 25–30 Sep backlog dated 30 Sep on a non-stock line (Sep COGS is already in the close). Also: a polish brief for Claude in Chrome (look only; keep tabs, headers and columns).
+
+### B-old. Goldplates invoicing (superseded by B)
 Facts and design discussed 4 Oct.
 - **Today's practice:** Nora Mart supplies GPFH (QBO customer Id 62) on paper invoices; copies go in a WhatsApp group.
   - Prices are the EPOS selling prices.

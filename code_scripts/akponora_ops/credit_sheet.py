@@ -155,10 +155,12 @@ def build_plan(meta: dict, read_values, *, products: list[list], examples: list[
     titles = list(sheets)
     # rename the default first tab instead of leaving it behind
     if "Invoices" not in sheets and titles == ["Sheet1"]:
+        if any(any(str(c).strip() for c in r) for r in read_values("'Sheet1'!A1:Z50") or []):
+            raise SystemExit("Sheet1 has content; rename or clear it first (setup only renames an empty Sheet1).")
         plan.requests.append({"updateSheetProperties": {"properties": {"sheetId": sheets["Sheet1"]["sheetId"],
                                                                        "title": "Invoices"},
                                                         "fields": "title"}})
-        sheets["Invoices"] = {**sheets.pop("Sheet1"), "title": "Invoices"}
+        sheets["Invoices"] = {**sheets.pop("Sheet1"), "title": "Invoices", "_new": True}
         plan.notes.append("renamed Sheet1 -> Invoices")
     next_id = 1000
     for i, title in enumerate(ORDER):

@@ -34,6 +34,10 @@ class CreditSheetTests(unittest.TestCase):
         dropdowns = [r["setDataValidation"]["rule"]["condition"] for r in plan.requests if "setDataValidation" in r]
         self.assertIn({"type": "ONE_OF_RANGE", "values": [{"userEnteredValue": "=Products!$A$2:$A"}]}, dropdowns)
 
+    def test_sheet1_with_content_is_not_renamed(self):
+        with self.assertRaises(SystemExit):
+            cs.build_plan(fresh_meta(), lambda rng: [["something typed"]] if "Sheet1" in rng else [], products=[])
+
     def test_rerun_keeps_people_data_and_refuses_a_hand_edited_header(self):
         meta = {"sheets": [{"properties": {"sheetId": i, "title": t}, "protectedRanges": [{}], "conditionalFormats": [{}]}
                            for i, t in enumerate(cs.ORDER)]}
