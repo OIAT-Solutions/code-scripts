@@ -152,8 +152,8 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.make_sales(amount=None)
         response=self.client.get(reverse('epos_qbo:company-a-run-detail',args=['2026-10-02','run_170000Z']))
         self.assertContains(response,'Not recorded')
-        self.assertContains(response,'Supporting details')
-        self.assertContains(response,'Supporting records and technical details')
+        self.assertContains(response,'Diagnostics')
+        self.assertContains(response,'Downloads and technical details')
         self.assertNotContains(response,'₦0.00')
 
     def test_run_detail_keeps_other_attempt_confirmation_separate(self):
@@ -169,6 +169,19 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         response=self.client.get(reverse('epos_qbo:run-detail',args=[job.id]))
         self.assertEqual(response.context['business_outcome']['label'],'Finished')
         self.assertNotContains(response,'Sales confirmed')
+
+    def test_sales_evidence_is_visible_before_diagnostics_and_excludes_preview_confirmation(self):
+        from apps.epos_qbo.models import RunArtifact
+        job = RunJob.objects.create(company_key='company_b', target_date='2026-10-02', scope=RunJob.SCOPE_SINGLE, status='succeeded')
+        RunArtifact.objects.create(company_key='company_b', target_date='2026-10-02', run_job=job,
+            source_path='fixture.json', source_hash='preview', reconcile_status='MATCH',
+            reconcile_qbo_total='100', upload_stats_json={'dry_run': True})
+        response = self.client.get(reverse('epos_qbo:run-detail', args=[job.id]))
+        record = response.context['business_evidence'][0]
+        self.assertTrue(record['preview'])
+        self.assertFalse(record['confirmed'])
+        html = response.content.decode()
+        self.assertLess(html.index('Sales evidence'), html.index('Downloads and diagnostics'))
 
     def test_company_pages_require_sign_in(self):
         self.client.logout()
