@@ -102,7 +102,9 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
   - Optional worker-only execution, so a web restart can't kill a run.
   - Home and the Inbox expect the day whose scheduled run has passed: no "missing day" before 18:00 / 19:00 Lagos.
   - 563 portal + 673 pipeline tests pass.
-- [ ] **Merge with Codex's `codex/oiat-portal-ux`** (overlap: `experience.py`, `attention.py`; Codex should show "Queued" for page actions under worker-only), then deploy (step 3, behaviour unchanged) and the cutover (step 4) with Marvin's separate yes.
+- [x] **Merged 5 Oct** into `cursor/post-akponora-qbo-writes-51f3` at `126cb9a`: scheduling authority (`e54b0cb`, after the independent review) + Codex `codex/oiat-portal-ux` `847b25f` (phase 1 slices 1–2). Conflicts were in `experience.py` / `attention.py`: kept the per-company expected date plus Codex's per-company task count. 577 portal + 674 pipeline tests pass; no pending migrations beyond 0021. Server checkout is at `126cb9a`.
+- [ ] **Deploy (behaviour unchanged):** Marvin builds; then `up -d web scheduler akponora-ops`, `migrate` (0021), `ensure_workflow_schedules` (creates the paused Nora row). The owner stays `ops_scheduler`.
+- [ ] **Cutover** (`SCHEDULING_AUTHORITY.md` step 4) with Marvin's yes: `.env` gets `OIAT_COMPANY_A_DAILY_RUN_OWNER=portal` + `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY=1`; recreate all three containers together; enable the Nora row. Recommended after one clean night on the new build.
 
 ### A2. Till sheet feedback (Marvin, 4 Oct)
 - [x] **"Banked" notes in the till sheet** (`till_sheet_marks`). Column B of each day's title row shows:
