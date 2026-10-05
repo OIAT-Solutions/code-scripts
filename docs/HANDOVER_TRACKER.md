@@ -88,6 +88,16 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
    - one supplier per PO (PO 3970 named two).
 5. [ ] **Watch negative stock in QBO** (11 → 19 → 28 items). If it keeps rising after the held bills post, deliveries are not being recorded as EPOS POs.
 
+### A3. One scheduling authority (brief `CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md`, from Codex)
+- [x] **Built locally, 5 Oct,** on branch `claude/scheduling-authority`; see [`SCHEDULING_AUTHORITY.md`](SCHEDULING_AUTHORITY.md).
+  - The portal worker becomes the single authority; Nora's routine is a `company_a_daily` RunJob running `daily_run` unchanged.
+  - One owner switch, `OIAT_COMPANY_A_DAILY_RUN_OWNER` (default `ops_scheduler` = today's behaviour).
+  - Missed runs are not auto-run; completed days are never replayed.
+  - Optional worker-only execution, so a web restart can't kill a run.
+  - Home and the Inbox expect the day whose scheduled run has passed: no "missing day" before 18:00 / 19:00 Lagos.
+  - 563 portal + 673 pipeline tests pass.
+- [ ] **Merge with Codex's `codex/oiat-portal-ux`** (overlap: `experience.py`, `attention.py`; Codex should show "Queued" for page actions under worker-only), then deploy (step 3, behaviour unchanged) and the cutover (step 4) with Marvin's separate yes.
+
 ### A2. Till sheet feedback (Marvin, 4 Oct)
 - [x] **"Banked" notes in the till sheet** (`till_sheet_marks`). Column B of each day's title row shows:
   - `✅ Banked · ₦… · <when>`;

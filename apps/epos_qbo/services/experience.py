@@ -204,9 +204,11 @@ def other_activity(company_key=""):
 
 
 def home_context(company_key="", now=None, token_health=None):
+    from .workflows import expected_confirmed_date
+
     now = now or timezone.now()
-    expected = get_target_trading_date(now)
-    window_start = expected - timedelta(days=29)
+    window_start = get_target_trading_date(now) - timedelta(days=29)
+    expected_dates = []
     companies = list(CompanyConfigRecord.objects.filter(is_active=True).order_by("display_name"))
     if company_key:
         companies = [c for c in companies if c.company_key == company_key]
@@ -215,6 +217,10 @@ def home_context(company_key="", now=None, token_health=None):
     rows, banners, total, confirmed_count, amounts = [], [], Decimal(0), 0, []
     for company in companies:
         key = company.company_key
+        # The latest day whose scheduled run should have finished: a closed day whose run is still
+        # to come today (Nora 18:00 / Goldplates 19:00 Lagos) is not reported missing.
+        expected = expected_confirmed_date(key, now)
+        expected_dates.append(expected)
         waiting = len(items) if key == "company_a" else 0
         if key == "company_a":
             start = max(window_start, date(2026, 10, 1))
@@ -281,6 +287,7 @@ def home_context(company_key="", now=None, token_health=None):
             if confirmed[expected] is not None:
                 total += confirmed[expected]
     amount_known = bool(rows) and confirmed_count == len(rows) and all(a is not None for a in amounts)
+    expected = min(expected_dates) if expected_dates else get_target_trading_date(now)
     return dict(home_rows=rows, home_banners=banners, home_checked=now, home_expected=expected,
         home_sales=money_label(total) if amount_known else "Not fully confirmed", home_confirmed_count=confirmed_count,
         home_company_total=len(rows), home_waiting=sum(r["waiting"] for r in rows),

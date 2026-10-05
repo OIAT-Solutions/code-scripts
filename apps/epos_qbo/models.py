@@ -299,6 +299,8 @@ class RunJob(models.Model):
     SCOPE_ALL = "all_companies"
     SCOPE_INVENTORY_PIPELINE = "inventory_pipeline"
     SCOPE_INVENTORY_SYNC = "inventory_sync"
+    # Nora (company_a) full daily routine: code_scripts.akponora_ops.daily_run for one closed date
+    SCOPE_COMPANY_A_DAILY = "company_a_daily"
     SCOPE_CHOICES = [
         (SCOPE_WORKSPACE_READ, "Company records update"),
         (SCOPE_PORTAL_REVIEW, "Company A review"),
@@ -306,6 +308,7 @@ class RunJob(models.Model):
         (SCOPE_ALL, "All Companies"),
         (SCOPE_INVENTORY_PIPELINE, "Inventory"),
         (SCOPE_INVENTORY_SYNC, "Inventory Sync"),
+        (SCOPE_COMPANY_A_DAILY, "Nora daily routine"),
     ]
 
     STATUS_QUEUED = "queued"
@@ -808,6 +811,9 @@ class RunScheduleEvent(models.Model):
     TYPE_FALLBACK_DISABLED = "fallback_disabled"
     TYPE_RUN_SUCCEEDED = "run_succeeded"
     TYPE_RUN_FAILED = "run_failed"
+    TYPE_SKIPPED_MISSED = "skipped_missed"
+    TYPE_SKIPPED_DONE = "skipped_done"
+    TYPE_SKIPPED_NOT_OWNER = "skipped_not_owner"
     EVENT_TYPE_CHOICES = [
         (TYPE_QUEUED, "Queued"),
         (TYPE_SKIPPED_OVERLAP, "Skipped Overlap"),
@@ -818,6 +824,9 @@ class RunScheduleEvent(models.Model):
         (TYPE_FALLBACK_DISABLED, "Fallback Disabled"),
         (TYPE_RUN_SUCCEEDED, "Run Succeeded"),
         (TYPE_RUN_FAILED, "Run Failed"),
+        (TYPE_SKIPPED_MISSED, "Skipped: missed while the worker was offline"),
+        (TYPE_SKIPPED_DONE, "Skipped: that business day already ran"),
+        (TYPE_SKIPPED_NOT_OWNER, "Skipped: another scheduler owns this workflow"),
     ]
 
     schedule = models.ForeignKey(

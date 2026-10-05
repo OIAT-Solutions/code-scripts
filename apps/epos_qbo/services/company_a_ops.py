@@ -157,7 +157,20 @@ def _local(dt: datetime | None) -> datetime | None:
 
 # --------------------------------------------------------------------------- schedule
 def schedule_info(now: datetime | None = None) -> dict:
-    """Env-driven schedule of the daily run (as the akponora-ops container sees the same env)."""
+    """Schedule of the daily run from its current owner: the portal "Nora daily routine" schedule
+    when OIAT_COMPANY_A_DAILY_RUN_OWNER=portal, else the akponora-ops env cron."""
+    from . import workflows
+
+    if workflows.portal_owns_company_a_daily():
+        s = workflows.daily_routine_schedule()
+        info = {"enabled": bool(s and s.enabled), "cron": s.cron_expr if s else "", "timezone": s.timezone_name if s else "",
+                "next_run": (s.next_fire_at.astimezone(ZoneInfo(s.timezone_name)) if s and s.enabled and s.next_fire_at else None),
+                "cron_valid": bool(s and s.cron_expr), "time_label": "", "container": "scheduler",
+                "enabled_env": workflows.OWNER_ENV, "cron_env": "portal schedule"}
+        parts = info["cron"].split()
+        if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2:] == ["*", "*", "*"]:
+            info["time_label"] = f"Daily at {int(parts[1]):02d}:{int(parts[0]):02d}"
+        return info
     enabled = _truthy(os.getenv(ENABLED_ENV))
     cron = os.getenv(CRON_ENV, "").strip() or DEFAULT_CRON
     tz_name = schedule_timezone_name()

@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.db import transaction
@@ -215,7 +216,14 @@ def _is_blocked_company_a_sales_schedule(schedule: RunSchedule) -> bool:
     )
 
 
-def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime) -> dict[str, Any]:
+def _job_payload_from_schedule(schedule: RunSchedule, *, now: datetime, target_date=None) -> dict[str, Any]:
+    if schedule.scope == RunJob.SCOPE_COMPANY_A_DAILY:
+        # One closed trading date, bound when queued (workflows.business_date_for_fire); never "today".
+        return {"scope": schedule.scope, "company_key": schedule.company_key or "company_a",
+                "target_date": target_date or get_target_trading_date(now=now), "parallel": 1,
+                "stagger_seconds": 0, "continue_on_failure": False, "inventory_options_json": {},
+                "status": RunJob.STATUS_QUEUED, "scheduled_by": schedule,
+                "command_display": f"schedule:{schedule.name}"}
     target_date = None
     inventory_options: dict[str, Any] = {}
     if schedule.scope in {RunJob.SCOPE_SINGLE, RunJob.SCOPE_INVENTORY_PIPELINE}:
@@ -367,8 +375,13 @@ def enqueue_run_for_schedule(
     *,
     now: datetime | None = None,
     source: str = "manual",
+    target_date=None,
 ) -> tuple[RunJob | None, str]:
     current = now or timezone.now()
+    if schedule.scope == RunJob.SCOPE_COMPANY_A_DAILY:
+        refused = _company_a_daily_refusal(schedule, current=current, target_date=target_date)
+        if refused:
+            return refused
     if source != "worker":
         # The worker reconciles once per cycle; manual "Run now" does it here.
         _reconcile_stale_runs(current)
@@ -432,7 +445,7 @@ def enqueue_run_for_schedule(
             if global_active:
                 return _skip_overlap(schedule, current=current, blocking_job=blocking_job, holder=holder)
 
-        payload = _job_payload_from_schedule(schedule, now=current)
+        payload = _job_payload_from_schedule(schedule, now=current, target_date=target_date)
         job = RunJob.objects.create(**payload)
         schedule.last_result = RunSchedule.LAST_RESULT_QUEUED
         schedule.last_error = ""
@@ -468,7 +481,74 @@ def enqueue_run_for_schedule(
         return job, RunScheduleEvent.TYPE_QUEUED
 
 
+def _company_a_daily_refusal(schedule: RunSchedule, *, current: datetime, target_date) -> tuple | None:
+    """Nora daily routine gates (workflows module doc): one owner; never replay a completed day."""
+    from . import workflows
+
+    canonical = workflows.daily_routine_schedule()
+    if canonical is not None and canonical.pk != schedule.pk:
+        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_INVALID,
+                     f"Only one Nora daily routine schedule may run ('{canonical.name}'); this duplicate never queues. "
+                     "Delete it or pause it.", current=current)
+    if not workflows.portal_owns_company_a_daily():
+        message = ("The Akponora ops scheduler owns Nora's daily routine "
+                   f"({workflows.OWNER_ENV}={workflows.company_a_daily_owner()}); this schedule does not queue it.")
+        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_NOT_OWNER, message, current=current)
+    day = target_date or get_target_trading_date(now=current)
+    if workflows.day_already_ran(day):
+        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_DONE,
+                     f"{day.isoformat()} already has a completed daily run; it is not run again automatically.",
+                     current=current, payload={"target_date": day.isoformat()})
+    return None
+
+
+def _skip(schedule: RunSchedule, event_type: str, message: str, *, current: datetime, payload=None):
+    schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_INVALID
+    schedule.last_error = message
+    schedule.last_fired_at = current
+    schedule.save(update_fields=["last_result", "last_error", "last_fired_at", "updated_at"])
+    _create_event(schedule=schedule, event_type=event_type, message=message, payload=payload or {})
+    return None, event_type
+
+
+def _notify_missed(schedule: RunSchedule, day, due_at: datetime) -> None:
+    try:
+        from code_scripts.akponora_ops.daily_run import send_summary_slack, short_day
+
+        local = due_at.astimezone(ZoneInfo(schedule.timezone_name or "Africa/Lagos"))
+        send_summary_slack(f":red_circle: *Nora Mart · {short_day(day.isoformat())}* · daily run missed\n\n"
+                           f":hammer_and_wrench: *OIAT* · the scheduler wasn't running at {local:%a %d %b %H:%M}, so "
+                           f"this day did not run automatically. Check, then run it from the Inbox (Run daily for date).")
+    except Exception:  # noqa: BLE001 - a notification problem never changes the schedule
+        logger.exception("missed-run notification failed")
+
+
+def _process_company_a_daily(schedule: RunSchedule, *, now: datetime, due_at: datetime | None):
+    """Due fire of Nora's daily routine: missed-run policy, then the normal enqueue with the
+    business date bound to the scheduled time."""
+    from . import workflows
+
+    try:
+        schedule.next_fire_at = schedule.compute_next_fire_at(from_dt=now)
+    except Exception as exc:
+        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_INVALID, f"Schedule is invalid: {exc}", current=now)
+    schedule.save(update_fields=["next_fire_at", "updated_at"])
+    if not workflows.portal_owns_company_a_daily():
+        return enqueue_run_for_schedule(schedule, now=now, source="worker")  # records skipped_not_owner
+    fire = due_at or now
+    day = workflows.business_date_for_fire(fire)
+    if workflows.is_missed(due_at, now):
+        _notify_missed(schedule, day, fire)
+        return _skip(schedule, RunScheduleEvent.TYPE_SKIPPED_MISSED,
+                     f"Missed: due {fire.isoformat()}, the worker was not running. {day.isoformat()} was not run "
+                     "automatically; a person runs it from the Inbox after checking.",
+                     current=now, payload={"target_date": day.isoformat(), "due_at": fire.isoformat()})
+    return enqueue_run_for_schedule(schedule, now=now, source="worker", target_date=day)
+
+
 def _process_due_schedule(schedule: RunSchedule, *, now: datetime) -> tuple[RunJob | None, str]:
+    if schedule.scope == RunJob.SCOPE_COMPANY_A_DAILY and not schedule.is_one_time:
+        return _process_company_a_daily(schedule, now=now, due_at=schedule.next_fire_at)
     if _schedule_requires_company(schedule) and not (schedule.company_key or "").strip():
         schedule.last_result = RunSchedule.LAST_RESULT_SKIPPED_INVALID
         schedule.last_error = "Company key is required for this schedule."
@@ -564,7 +644,9 @@ def process_schedule_cycle(*, now: datetime | None = None, max_due: int = 25) ->
             elif result == RunScheduleEvent.TYPE_SKIPPED_INVALID:
                 stats["skipped_invalid"] += 1
 
-    if stats["queued"] > 0 or stats["reconciled"] > 0:
+    # Start queued work every cycle: jobs queued by portal pages / the Inbox are started here when
+    # execution is worker-only (job_runner.WORKER_ONLY_ENV).
+    if stats["queued"] > 0 or stats["reconciled"] > 0 or RunJob.objects.filter(status=RunJob.STATUS_QUEUED).exists():
         dispatch_next_queued_job()
 
     _record_heartbeat(current)

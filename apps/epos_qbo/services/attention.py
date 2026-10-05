@@ -352,10 +352,13 @@ def inbox():
 
 def blockers(now=None):
     """Operational failures are red regardless of the old dashboard warning classification."""
+    from .workflows import expected_confirmed_date
+
     now = now or timezone.now()
-    expected = now.astimezone(ZoneInfo("Africa/Lagos")).date() - timedelta(days=1)
     out = []
     for company in CompanyConfigRecord.objects.filter(is_active=True):
+        # Same rule as Home: the latest day whose scheduled run should have finished by now.
+        expected = expected_confirmed_date(company.company_key, now)
         if company.company_key == "company_a":
             hold = ops.posting_hold()
             runs = [r for r in ops.list_runs() if not r.dry_run]
