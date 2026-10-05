@@ -26,7 +26,7 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
     def test_tabs_follow_company_capabilities_and_settings_permission(self):
         self.assertEqual(company_workspace.available_tabs(self.a, self.user), ['sales','purchases','products','suppliers','deposits'])
         self.assertEqual(company_workspace.available_tabs(self.b, self.user), ['sales'])
-        self.assertEqual(company_workspace.available_tabs(self.b, self.user, True), ['sales','products'])
+        self.assertEqual(company_workspace.available_tabs(self.b, self.user, True), ['sales'])  # products: Akponora only
         self.user.user_permissions.add(Permission.objects.get(codename='can_edit_companies'))
         self.user = User.objects.get(pk=self.user.pk)
         self.assertIn('settings', company_workspace.available_tabs(self.a,self.user))
@@ -107,14 +107,6 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(RunJob.objects.count(),0)
         self.assertEqual(PortalReviewAction.objects.count(),0)
 
-    def test_company_a_never_uses_generic_inventory_trigger(self):
-        self.user.is_superuser=True
-        self.user.save()
-        for tab in ('sales','products'):
-            response=self.client.get(self.url,{'tab':tab})
-            self.assertNotContains(response,reverse('epos_qbo:run-trigger-inventory'))
-            self.assertNotContains(response,reverse('epos_qbo:run-trigger'))
-
     def test_directory_business_filters_search_and_home_agree(self):
         self.make_sales()
         response=self.client.get(reverse('epos_qbo:companies-list'),{'search':'Akponora','state':'attention'})
@@ -171,7 +163,6 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertNotContains(response,'Sales confirmed')
 
     def test_sales_evidence_is_visible_before_diagnostics_and_excludes_preview_confirmation(self):
-        from apps.epos_qbo.models import RunArtifact
         job = RunJob.objects.create(company_key='company_b', target_date='2026-10-02', scope=RunJob.SCOPE_SINGLE, status='succeeded')
         RunArtifact.objects.create(company_key='company_b', target_date='2026-10-02', run_job=job,
             source_path='fixture.json', source_hash='preview', reconcile_status='MATCH',

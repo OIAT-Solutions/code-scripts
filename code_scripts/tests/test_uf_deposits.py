@@ -326,17 +326,6 @@ class SheetParsingTests(NoNetwork):
                                        "dateTimeRenderOption"} for c in svc.calls))
         self.assertEqual(ts.SCOPE, "https://www.googleapis.com/auth/spreadsheets.readonly")
 
-    def test_uf_allocation_draft_uses_the_shared_parser(self):
-        from code_scripts.scripts.akponora_cutover import uf_allocation_draft as draft
-        from openpyxl import load_workbook
-
-        path = xlsx(self.tmp / "nora.xlsx", {"Oct 2026": month_rows({"2026-10-01": DAY1})})
-        days = draft.parse_month(load_workbook(path, data_only=True, read_only=True)["Oct 2026"])
-        self.assertEqual(days[0]["date"], "2026-10-01")
-        self.assertEqual(days[0]["cash"], Decimal("200000"))
-        self.assertEqual(days[0]["pos2_transfer"], Decimal("900000"))
-        self.assertEqual(days[0]["system"], Decimal("3199500"))
-
     def test_missing_tab_and_day(self):
         g = google({"Oct 2026": block("2026-10-01", DAY1)})
         self.assertIn("no tab 'Nov 2026'", ts.find_day(g, "2026-11-01")[1])

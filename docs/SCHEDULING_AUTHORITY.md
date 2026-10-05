@@ -2,7 +2,7 @@
 
 Status (5 Oct 2026): done. The cutover below was completed on 5 Oct 2026, and the legacy scheduling stack
 was removed the same day (see "Legacy removal"). The portal schedule worker is the only scheduler. It was
-written against `docs/CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` and `docs/OIAT_PORTAL_DELIVERY_PLAN.md`.
+written against the Codex scheduling-authority brief (removed 5 Oct; in git history) and `docs/OIAT_PORTAL_DELIVERY_PLAN.md`.
 
 ## Before (5 Oct 2026)
 

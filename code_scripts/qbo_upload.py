@@ -3460,7 +3460,6 @@ def main():
     if inventory_enabled:
         print(f"\n[INFO] Items created as Inventory. QtyOnHand starts at {config.default_qty_on_hand}. QBO must allow negative inventory.")
         print("[INFO] Item hierarchy enabled: True")
-        print("[INFO] For InvStartDate issues (QBO 6270), review with: python code_scripts/scripts/qbo_inv_manager.py --company <key> list-invstart (set-invstart* is refused for company_a; see AGENTS.md)")
         try:
             mapping_cache = load_category_account_mapping(config)
             print(f"[INFO] Loaded {len(mapping_cache)} category mappings from {config.product_mapping_file}")

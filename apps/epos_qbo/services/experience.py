@@ -3,7 +3,6 @@ from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
 from django.urls import reverse
 from django.db.models import Q

@@ -18,8 +18,6 @@ def available_tabs(company, user, inventory_enabled=False):
     tabs = ["sales"]
     if company.company_key == ops.COMPANY_KEY:
         tabs += ["purchases", "products", "suppliers", "deposits"]
-    elif inventory_enabled:
-        tabs += ["products"]
     if user.has_perm("epos_qbo.can_edit_companies"):
         tabs += ["settings"]
     return tabs

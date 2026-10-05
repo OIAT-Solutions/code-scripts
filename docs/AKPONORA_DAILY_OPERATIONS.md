@@ -1,6 +1,6 @@
 # Akponora (Company A) — daily operations from October 2026
 
-**Read [`AGENTS.md`](../AGENTS.md) first.** Cutover is done (1 Oct live). This file is how the store runs day to day. Evidence of what has already been posted: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
+**Read [`AGENTS.md`](../AGENTS.md) first.** Cutover is done (1 Oct live). This file is how the store runs day to day. Sales posting contract, approvals and holds: [`AKPONORA_POSTING_CONTROLS.md`](AKPONORA_POSTING_CONTROLS.md). (The cutover log is removed 5 Oct; in git history.)
 
 **Company:** `company_a`, QBO realm `9341455406194328` (production).  
 **Identity:** EPOS Product ID → mapping → QBO item `AKP-{master}` (Inventory, asset 77) or `AKP-NS-{id}` (NonInventory). Never barcodes, never pack size from a trailing `*N`, never hand-made QBO items.
@@ -217,7 +217,7 @@ OIAT_COMPANIES_DIR=code_scripts/companies python run_pipeline.py --company compa
 # chat yes, then post (manifest or standing approval once env is set)
 ```
 
-W9 env (server `.env`, chat yes): `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`, `OIAT_COMPANY_A_STANDING_APPROVAL_REF=…`, optional gross cap. Details: [`AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](AKPONORA_OCT1_GOLIVE_RUNBOOK.md) §7.
+W9 env (server `.env`, chat yes): `OIAT_COMPANY_A_SALES_AUTOMATION_ENABLED=1`, `OIAT_COMPANY_A_STANDING_APPROVAL_REF=…`, optional gross cap. Details: [`AKPONORA_POSTING_CONTROLS.md`](AKPONORA_POSTING_CONTROLS.md), "Unattended daily operation (standing approval)".
 
 ---
 

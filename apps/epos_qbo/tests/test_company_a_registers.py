@@ -11,13 +11,12 @@ from pathlib import Path
 from unittest import mock
 
 from django.contrib.auth.models import Permission, User
-from django.core import signing
 from django.core.management import call_command, CommandError
 from django.test import Client, TestCase
 from django.urls import reverse
 
 from apps.epos_qbo.models import CompanyConfigRecord, PortalReviewAction, PortalSettingChange, RunJob
-from apps.epos_qbo.services import attention, attention_actions, deposits, products, workspace_jobs
+from apps.epos_qbo.services import attention, attention_actions, deposits, workspace_jobs
 from apps.epos_qbo.tests.test_company_a_ops import CompanyAOpsFixtureMixin, _step, _summary
 
 MAPPING_COLUMNS = ["Row ID", "EPOS Product ID", "EPOS Existing SKU", "EPOS Name", "Pipeline Status", "Review Status",

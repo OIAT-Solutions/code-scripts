@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import subprocess
-import sys
 
 import requests
 from collections import defaultdict
@@ -12,7 +11,6 @@ from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from math import ceil
 from pathlib import Path
-from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -42,7 +40,6 @@ from code_scripts.company_config import (
 from .forms import (
     CompanyAdvancedForm,
     CompanyBasicForm,
-    InventoryTriggerForm,
     PortalSettingsForm,
     RunScheduleForm,
     RunTriggerForm,
@@ -51,7 +48,6 @@ from .forms import (
 from .models import (
     CompanyConfigRecord,
     DashboardUserPreference,
-    InventoryReviewAcknowledgement,
     PortalSettings,
     QboWebhookEvent,
     RunArtifact,
@@ -69,29 +65,6 @@ from .services.config_sync import (
     validate_company_config,
 )
 from .services.job_runner import read_log_chunk, resolve_python_executable
-from .services.inventory_categories import load_inventory_categories_by_company
-from .services.inventory_review_slack import send_inventory_review_action_queued
-from .services.inventory_review import REASON_GROUPS, parse_inventory_review_csv
-from .services.inventory_review_actions import (
-    REASON_GROUP_MISSING,
-    RETRY_INTENT_CATALOG,
-    RETRY_INTENT_QUANTITY,
-    REVIEW_CREATE_MISSING_INTENT,
-    SNAPSHOT_PACK_GUARD_MESSAGE,
-    build_missing_item_creation_preview,
-    coalesce_picker_date_from_get,
-    collect_category_options,
-    filter_missing_preview_by_category,
-    get_catalog_cleanup_rows,
-    get_quantity_adjustment_rows,
-    get_review_rows_by_reason,
-    inv_start_date_floor_iso,
-    load_review_context,
-    queue_missing_item_creation_job,
-    resolve_category_scope_labels,
-    resolve_txn_date_for_review_missing_item_creation,
-    validate_inventory_start_date_for_missing_queue,
-)
 from .services.schedule_worker import enqueue_run_for_schedule, get_scheduler_status
 from .dashboard_timezone import get_dashboard_date_bounds, get_dashboard_timezone_display
 from .business_date import (
@@ -104,7 +77,6 @@ from .services.metrics import (
     compute_avg_runtime_by_target_date,
     compute_run_success_by_target_date,
     compute_sales_snapshot_by_target_date,
-    compute_sales_trend,
     extract_amount_hybrid,
     _format_currency as _metrics_format_currency,
 )
@@ -682,58 +654,6 @@ def _coerce_bool_stat(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _inventory_mode_label(mode: object, summary: dict | None = None) -> str:
-    raw_mode = str(mode or "").strip()
-    summary = summary if isinstance(summary, dict) else {}
-    return INVENTORY_MODE_LABELS.get(raw_mode, raw_mode.replace("_", " ").title() if raw_mode else "")
-
-
-def _inventory_mode_context(job: RunJob, artifacts_list: list[RunArtifact]) -> dict[str, object] | None:
-    if job.scope not in {RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC}:
-        return None
-    opts = job.inventory_options_json if isinstance(job.inventory_options_json, dict) else {}
-    summary: dict = {}
-    for artifact in artifacts_list:
-        if _is_inventory_artifact(artifact):
-            summary = _inventory_summary_from_artifact(artifact)
-            if summary:
-                break
-    mode = str(summary.get("inventory_mode") or opts.get("mode") or "").strip()
-    if not mode:
-        return None
-    return {
-        "inventory_mode": mode,
-        "mode_label": _inventory_mode_label(mode, summary),
-        "write_intent": summary.get("write_intent") or INVENTORY_MODE_WRITE_INTENT_LABELS.get(mode, ""),
-        "qbo_write_attempted": _coerce_bool_stat(summary.get("qbo_write_attempted")),
-        "qbo_write_blocked": _coerce_bool_stat(summary.get("qbo_write_blocked")),
-        "catalog_apply_enabled": _coerce_bool_stat(summary.get("catalog_apply_enabled")),
-        "quantity_apply_enabled": _coerce_bool_stat(summary.get("quantity_apply_enabled")),
-        "missing_item_create_enabled": _coerce_bool_stat(summary.get("missing_item_create_enabled")),
-    }
-
-
-def _has_non_in_sync_inventory_rows(summary: dict) -> bool:
-    counts = summary.get("final_status_counts") if isinstance(summary.get("final_status_counts"), dict) else {}
-    for status, raw_count in counts.items():
-        if str(status) == "in_sync":
-            continue
-        if _safe_int_stat({str(status): raw_count}, str(status)) > 0:
-            return True
-    return False
-
-
-def _inventory_review_acknowledgement_for_artifact(
-    artifact: RunArtifact | None,
-) -> InventoryReviewAcknowledgement | None:
-    if artifact is None:
-        return None
-    try:
-        return artifact.inventory_review_acknowledgement
-    except InventoryReviewAcknowledgement.DoesNotExist:
-        return None
-
-
 def _sales_status_for_company(
     *,
     latest_job: RunJob | None,
@@ -792,130 +712,6 @@ def _sales_status_for_company(
     }
 
 
-def _inventory_status_for_company(
-    *,
-    latest_job: RunJob | None,
-    latest_artifact: RunArtifact | None,
-) -> dict:
-    last_sync = _run_status_time(latest_job) or _artifact_status_time(latest_artifact)
-    if latest_job is None and latest_artifact is None:
-        return {
-            "label": "Not checked",
-            "severity": "unknown",
-            "last_sync": None,
-            "products_checked": 0,
-            "blocked_items": 0,
-            "updates_applied": 0,
-            "subtext": "",
-        }
-    if latest_job and latest_job.status == RunJob.STATUS_FAILED:
-        return {
-            "label": "Failed",
-            "severity": "critical",
-            "last_sync": last_sync,
-            "products_checked": 0,
-            "blocked_items": 0,
-            "updates_applied": 0,
-            "subtext": latest_job.failure_reason or "Latest inventory sync failed.",
-        }
-    if latest_job and latest_job.status == RunJob.STATUS_RUNNING:
-        return {
-            "label": "Running",
-            "severity": "warning",
-            "last_sync": last_sync,
-            "products_checked": 0,
-            "blocked_items": 0,
-            "updates_applied": 0,
-            "subtext": "Inventory sync is running.",
-        }
-    if latest_job and latest_job.status == RunJob.STATUS_QUEUED:
-        return {
-            "label": "Queued",
-            "severity": "warning",
-            "last_sync": last_sync,
-            "products_checked": 0,
-            "blocked_items": 0,
-            "updates_applied": 0,
-            "subtext": "Inventory sync is queued.",
-        }
-
-    summary = _inventory_summary_from_artifact(latest_artifact)
-    inventory_mode = str(summary.get("inventory_mode") or "").strip()
-    mode_label = _inventory_mode_label(inventory_mode, summary)
-    products_checked = _safe_int_stat(summary, "products_checked")
-    in_sync = _safe_int_stat(summary, "in_sync", _safe_int_stat(summary, "already_correct"))
-    blocked = _safe_int_stat(summary, "blocked_items")
-    still_needs_review = _safe_int_stat(summary, "still_needs_review")
-    updates = (
-        _safe_int_stat(summary, "catalog_fixes_applied")
-        + _safe_int_stat(summary, "base_items_created")
-        + _safe_int_stat(summary, "duplicate_base_items_resolved")
-        + _safe_int_stat(summary, "quantity_updates_applied")
-    )
-    needs_review = (
-        blocked > 0
-        or still_needs_review > 0
-        or _has_non_in_sync_inventory_rows(summary)
-        or (products_checked > 0 and in_sync < products_checked)
-    )
-    clean = products_checked > 0 and in_sync == products_checked and blocked == 0 and still_needs_review == 0
-    if needs_review:
-        acknowledgement = _inventory_review_acknowledgement_for_artifact(latest_artifact)
-        if acknowledgement is not None:
-            return {
-                "label": "Reviewed",
-                "severity": "healthy",
-                "last_sync": last_sync,
-                "products_checked": products_checked,
-                "blocked_items": blocked,
-                "updates_applied": updates,
-                "subtext": "Manual inventory review acknowledged.",
-                "reviewed_at": acknowledgement.reviewed_at,
-                "reviewed_by": acknowledgement.reviewed_by,
-                "inventory_review_acknowledged": True,
-            }
-        return {
-            "label": "Needs review",
-            "severity": "warning",
-            "last_sync": last_sync,
-            "products_checked": products_checked,
-            "blocked_items": blocked,
-            "updates_applied": updates,
-            "subtext": "",
-        }
-    if clean:
-        return {
-            "label": mode_label or "In sync",
-            "severity": "healthy",
-            "last_sync": last_sync,
-            "products_checked": products_checked,
-            "blocked_items": blocked,
-            "updates_applied": updates,
-            "subtext": f"{updates} updates applied" if updates > 0 else "",
-            "inventory_mode": inventory_mode,
-        }
-    return {
-        "label": "Not checked",
-        "severity": "unknown",
-        "last_sync": last_sync,
-        "products_checked": products_checked,
-        "blocked_items": blocked,
-        "updates_applied": updates,
-        "subtext": "No inventory summary found.",
-    }
-
-
-def _inventory_review_required(inventory_enabled: bool, inventory_status: dict) -> bool:
-    return bool(inventory_enabled and str(inventory_status.get("label") or "") == "Needs review")
-
-
-def _inventory_review_action_label(inventory_status: dict) -> str:
-    blocked = _safe_int_stat(inventory_status, "blocked_items")
-    if blocked > 0:
-        return f"Review {blocked} item{'s' if blocked != 1 else ''}"
-    return "Review inventory"
-
-
 def _company_card_status(
     sales_status: dict,
     inventory_status: dict,
@@ -923,20 +719,15 @@ def _company_card_status(
     *,
     inventory_enabled: bool = True,
 ) -> str:
+    # Sales and token only: the legacy inventory review was removed (5 Oct 2026).
     sales_level = str(sales_status.get("severity") or "unknown")
-    inventory_level = str(inventory_status.get("severity") or "unknown")
     token_level = str(token_info.get("severity") or "unknown")
-    severities = [
-        sales_level,
-        token_level,
-    ]
-    if inventory_enabled:
-        severities.append(inventory_level)
+    severities = [sales_level, token_level]
     if "critical" in severities:
         return "critical"
     if "warning" in severities:
         return "warning"
-    if sales_level == "unknown" or (inventory_enabled and inventory_level == "unknown"):
+    if sales_level == "unknown":
         return "unknown"
     return "healthy"
 
@@ -954,8 +745,6 @@ def _company_health_snapshot(
     cfg = company.config_json or {}
     epos = cfg.get("epos") or {}
     token_info = token_info or _company_token_health(company)
-    if inventory_enabled is None:
-        inventory_enabled = _company_inventory_enabled(company)
     run_activity = _run_activity_status(latest_job)
 
     if not epos.get("username_env_key") or not epos.get("password_env_key"):
@@ -980,16 +769,6 @@ def _company_health_snapshot(
             "reason_codes": ["LATEST_RUN_FAILED"],
             "run_activity": run_activity,
         }
-
-    if inventory_enabled and inventory_status:
-        inventory_level = str(inventory_status.get("severity") or "")
-        if inventory_level == "critical":
-            return {
-                "level": "critical",
-                "summary": inventory_status.get("subtext") or "Latest inventory run failed.",
-                "reason_codes": ["INVENTORY_FAILURE"],
-                "run_activity": run_activity,
-            }
 
     if token_info["severity"] == "warning":
         return {
@@ -1017,22 +796,6 @@ def _company_health_snapshot(
                 "run_activity": run_activity,
             }
 
-    if inventory_enabled and inventory_status:
-        inventory_level = str(inventory_status.get("severity") or "")
-        if inventory_level == "warning":
-            return {
-                "level": "warning",
-                "summary": inventory_status.get("subtext") or "Inventory needs review.",
-                "reason_codes": ["INVENTORY_NEEDS_REVIEW"],
-                "run_activity": run_activity,
-            }
-        if inventory_level == "unknown":
-            return {
-                "level": "unknown",
-                "summary": inventory_status.get("subtext") or "Inventory not checked.",
-                "reason_codes": ["INVENTORY_NOT_CHECKED"],
-                "run_activity": run_activity,
-            }
 
     if not latest_artifact:
         return {
@@ -1348,11 +1111,7 @@ def _overview_context(revenue_period: str = "7d", company_key: str | None = None
                 or []
             } if latest_sales_job else {},
         )
-        inventory_status = _inventory_status_for_company(
-            latest_job=latest_inventory_job,
-            latest_artifact=latest_inventory_artifact,
-        )
-        inventory_review_required = _inventory_review_required(inventory_enabled, inventory_status)
+        inventory_status: dict = {}  # legacy inventory review removed 5 Oct 2026
         health = _company_health_snapshot(
             company,
             latest_artifact=latest_sales_artifact,
@@ -1412,12 +1171,6 @@ def _overview_context(revenue_period: str = "7d", company_key: str | None = None
                 "inventory_enabled": inventory_enabled,
                 "capabilities": capabilities,
                 "inventory_status": inventory_status,
-                "inventory_review_required": inventory_review_required,
-                "inventory_review_label": _inventory_review_action_label(inventory_status),
-                "inventory_review_url": reverse(
-                    "epos_qbo:company_inventory_review",
-                    kwargs={"company_key": company.company_key},
-                ) if inventory_enabled else "",
                 "latest_inventory_job": latest_inventory_job,
                 "latest_inventory_artifact": latest_inventory_artifact,
                 "records_synced": latest_sales_artifact.rows_kept if latest_sales_artifact else 0,
@@ -2606,7 +2359,6 @@ def runs_list(request):
     ]
     form = RunTriggerForm(initial={"scope": RunJob.SCOPE_ALL, "date_mode": "yesterday"})
     companies = list(CompanyConfigRecord.objects.filter(is_active=True).order_by("display_name"))
-    inventory_companies = [company for company in companies if _company_inventory_enabled(company)]
     
     # Get active run IDs for polling
     active_runs = RunJob.objects.filter(
@@ -2615,16 +2367,13 @@ def runs_list(request):
     
     active_run_ids_list = [str(id) for id in active_runs]
 
-    categories_by_company = load_inventory_categories_by_company(inventory_companies)
     context = {
         "run_rows": run_rows,
         "form": form,
         "companies": companies,
-        "inventory_companies": inventory_companies,
         "default_parallel": default_parallel,
         "default_stagger_seconds": default_stagger_seconds,
         "active_run_ids": active_run_ids_list,
-        "categories_by_company": categories_by_company,
         "active_run_ids_json": json.dumps(active_run_ids_list),
         "company_a_recent_runs": company_a_views.safe_recent_runs(5),
     }
@@ -2840,8 +2589,6 @@ def run_detail(request, job_id):
         "exit_code_reference": EXIT_CODE_REFERENCE,
         "run_attention_message": _run_attention_message(job, artifacts_list),
         "run_upload_summary_message": run_upload_summary_message,
-        "inventory_review_action": _run_detail_inventory_review_action_context(job),
-        "inventory_mode_context": _inventory_mode_context(job, artifacts_list),
     }
     context.update(_nav_context())
     context.update(
@@ -2976,50 +2723,6 @@ def trigger_run(request):
         return redirect("epos_qbo:run-detail", job_id=job.id)
 
     messages.info(request, f"Run queued: {job.friendly_id}. It will start automatically.")
-    return redirect("epos_qbo:runs")
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_POST
-def trigger_inventory_run(request):
-    """Queue the unified inventory pipeline in an explicit safe mode."""
-    form = InventoryTriggerForm(request.POST)
-    if not form.is_valid():
-        messages.error(request, f"Invalid inventory trigger payload: {form.errors.get_json_data()}")
-        return redirect("epos_qbo:runs")
-
-    cleaned = form.cleaned_data
-    company_key = (cleaned.get("company_key") or "").strip()
-    if not CompanyConfigRecord.objects.filter(company_key=company_key).exists():
-        messages.error(request, "Unknown company key for inventory.")
-        return redirect("epos_qbo:runs")
-
-    mode = (cleaned.get("mode") or "audit_only").strip() or "audit_only"
-    inventory_options: dict = {"mode": mode}
-    category = (cleaned.get("category") or "").strip()
-    if category:
-        inventory_options["categories"] = [category]
-    product_filter = (cleaned.get("product_filter") or "").strip()
-    if product_filter:
-        inventory_options["product_filter"] = product_filter
-
-    job = RunJob.objects.create(
-        scope=RunJob.SCOPE_INVENTORY_PIPELINE,
-        company_key=company_key,
-        inventory_options_json=inventory_options,
-        requested_by=request.user,
-        status=RunJob.STATUS_QUEUED,
-    )
-    # queued: the schedule worker starts it (pages never start jobs)
-
-    job.refresh_from_db()
-    mode_label = _inventory_mode_label(mode) or "Inventory run"
-    if job.status == RunJob.STATUS_RUNNING:
-        messages.success(request, f"{mode_label} started: {job.friendly_id}")
-        return redirect("epos_qbo:run-detail", job_id=job.id)
-
-    messages.info(request, f"{mode_label} queued: {job.friendly_id}. It will start automatically.")
     return redirect("epos_qbo:runs")
 
 
@@ -3219,134 +2922,6 @@ def _run_detail_upload_summary_message(artifacts_list: list[RunArtifact]) -> str
     return None
 
 
-REVIEW_RETRY_INTENT_LABELS = {
-    RETRY_INTENT_CATALOG: "Catalog cleanup retry",
-    RETRY_INTENT_QUANTITY: "Quantity adjustment retry",
-}
-
-
-def _run_detail_inventory_review_action_context(job: RunJob) -> dict[str, object] | None:
-    """Template context for Inventory Review–triggered runs (retry or missing-item creation)."""
-    opts = job.inventory_options_json if isinstance(job.inventory_options_json, dict) else {}
-    rcm = opts.get("review_create_missing_items")
-    if isinstance(rcm, dict) and rcm:
-        raw_audit = str(rcm.get("source_final_audit") or "").strip()
-        source_final_audit_name = Path(raw_audit).name if raw_audit else ""
-        affected_raw = rcm.get("affected_base_names")
-        if not isinstance(affected_raw, list):
-            affected_raw = opts.get("base_names") if isinstance(opts.get("base_names"), list) else []
-        affected_base_names = [str(x).strip() for x in affected_raw if str(x).strip()]
-        preview_limit = 10
-        preview_base_names = affected_base_names[:preview_limit]
-        has_more_base_names = len(affected_base_names) > preview_limit
-        more_base_names_count = max(0, len(affected_base_names) - preview_limit)
-        try:
-            safe_count = int(rcm.get("safe_count"))
-        except (TypeError, ValueError):
-            safe_count = len(affected_base_names)
-        try:
-            blocked_count = int(rcm.get("blocked_count"))
-        except (TypeError, ValueError):
-            blocked_count = 0
-        qty_policy = str(rcm.get("create_qty_policy") or "").strip() or "initial_qty_from_epos"
-        mapping_source = str(rcm.get("mapping_source") or "").strip() or "Product.Mapping.csv"
-        try:
-            max_catalog_fixes = int(opts.get("max_catalog_fixes", 0))
-        except (TypeError, ValueError):
-            max_catalog_fixes = 0
-        try:
-            max_quantity_adjustments = int(opts.get("max_quantity_adjustments", 0))
-        except (TypeError, ValueError):
-            max_quantity_adjustments = 0
-        txn_date = str(opts.get("txn_date") or rcm.get("item_inv_start_date") or "").strip()
-        txn_date_source = str(rcm.get("txn_date_source") or "").strip()
-        category_scope_label = str(rcm.get("category_label") or "").strip() or "All categories"
-        try:
-            total_in_scope = int(rcm.get("total_candidates_in_scope"))
-        except (TypeError, ValueError):
-            total_in_scope = safe_count + blocked_count
-        missing_create_report_url = ""
-        missing_create_report_label = ""
-        for art in job.artifacts.order_by("-processed_at", "-imported_at"):
-            for link in _artifact_report_links(job, art):
-                if link.get("key") == "review_missing_create_report":
-                    missing_create_report_url = str(link.get("url") or "")
-                    missing_create_report_label = str(link.get("label") or "")
-                    break
-            if missing_create_report_url:
-                break
-        return {
-            "action_type": "create_missing",
-            "intent": str(rcm.get("intent") or REVIEW_CREATE_MISSING_INTENT),
-            "intent_label": "Missing item creation",
-            "source_artifact_id": rcm.get("source_artifact_id"),
-            "source_final_audit": raw_audit,
-            "source_final_audit_name": source_final_audit_name or "—",
-            "safe_count": safe_count,
-            "blocked_count": blocked_count,
-            "affected_base_names": affected_base_names,
-            "preview_base_names": preview_base_names,
-            "has_more_base_names": has_more_base_names,
-            "more_base_names_count": more_base_names_count,
-            "scope_label": "Safe missing QBO candidates only",
-            "category_scope_label": category_scope_label,
-            "total_candidates_in_scope": total_in_scope,
-            "mapping_source": mapping_source,
-            "create_qty_policy": qty_policy,
-            "create_qty_policy_label": "Initial QtyOnHand from EPOS expected (no separate adjustment in this run).",
-            "max_catalog_fixes": max_catalog_fixes,
-            "max_quantity_adjustments": max_quantity_adjustments,
-            "item_inv_start_date": txn_date or "—",
-            "txn_date_source": txn_date_source,
-            "missing_create_report_url": missing_create_report_url,
-            "missing_create_report_label": missing_create_report_label,
-        }
-
-    review_retry = opts.get("review_retry")
-    if not isinstance(review_retry, dict) or not review_retry:
-        return None
-    intent = str(review_retry.get("intent") or "").strip()
-    intent_label = REVIEW_RETRY_INTENT_LABELS.get(intent, intent.replace("_", " ").strip() or "Inventory review retry")
-    raw_audit = str(review_retry.get("source_final_audit") or "").strip()
-    source_final_audit_name = Path(raw_audit).name if raw_audit else ""
-    affected_raw = review_retry.get("affected_base_names")
-    if not isinstance(affected_raw, list):
-        affected_raw = opts.get("base_names") if isinstance(opts.get("base_names"), list) else []
-    affected_base_names = [str(x).strip() for x in affected_raw if str(x).strip()]
-    preview_limit = 10
-    preview_base_names = affected_base_names[:preview_limit]
-    has_more_base_names = len(affected_base_names) > preview_limit
-    more_base_names_count = max(0, len(affected_base_names) - preview_limit)
-    try:
-        affected_count = int(review_retry.get("row_count"))
-    except (TypeError, ValueError):
-        affected_count = len(affected_base_names)
-    try:
-        max_catalog_fixes = int(opts.get("max_catalog_fixes", 0))
-    except (TypeError, ValueError):
-        max_catalog_fixes = 0
-    try:
-        max_quantity_adjustments = int(opts.get("max_quantity_adjustments", 0))
-    except (TypeError, ValueError):
-        max_quantity_adjustments = 0
-    return {
-        "action_type": "retry",
-        "intent": intent,
-        "intent_label": intent_label,
-        "source_artifact_id": review_retry.get("source_artifact_id"),
-        "source_final_audit": raw_audit,
-        "source_final_audit_name": source_final_audit_name or "—",
-        "affected_count": affected_count,
-        "affected_base_names": affected_base_names,
-        "preview_base_names": preview_base_names,
-        "has_more_base_names": has_more_base_names,
-        "more_base_names_count": more_base_names_count,
-        "max_catalog_fixes": max_catalog_fixes,
-        "max_quantity_adjustments": max_quantity_adjustments,
-        "scope_label": "Selected base names only",
-    }
-
-
 def _artifact_report_path_value(artifact: RunArtifact, report_key: str) -> str:
     stats = artifact.upload_stats_json if isinstance(artifact.upload_stats_json, dict) else {}
     if report_key == "source":
@@ -3426,83 +3001,6 @@ def _resolve_artifact_report_path(artifact: RunArtifact, report_key: str) -> Pat
     return resolved
 
 
-def _latest_inventory_review_artifact(company_key: str) -> RunArtifact | None:
-    artifacts = (
-        RunArtifact.objects.filter(company_key=company_key)
-        .select_related("run_job")
-        .order_by("-processed_at", "-imported_at", "-id")
-    )
-    for artifact in artifacts:
-        if not _is_inventory_artifact(artifact):
-            continue
-        summary = _inventory_summary_from_artifact(artifact)
-        if (
-            str(summary.get("report_type") or "") == RunJob.SCOPE_INVENTORY_PIPELINE
-            or _artifact_report_path_value(artifact, "final_audit")
-            or isinstance(summary.get("final_status_counts"), dict)
-            or "products_checked" in summary
-        ):
-            return artifact
-    return None
-
-
-def _format_inventory_review_number(value) -> str:
-    try:
-        number = Decimal(str(value if value not in (None, "") else 0))
-    except Exception:
-        return str(value or "0")
-    if number == number.to_integral_value():
-        return f"{int(number):,}"
-    return f"{number:,.2f}".rstrip("0").rstrip(".")
-
-
-def _inventory_review_reason_counts(rows: list[dict]) -> list[dict]:
-    counts: dict[str, int] = defaultdict(int)
-    for row in rows:
-        slug = str(row.get("reason_group_slug") or "other")
-        counts[slug] += 1
-    return [
-        {"slug": slug, "label": label, "count": counts.get(slug, 0)}
-        for slug, label in REASON_GROUPS.items()
-        if counts.get(slug, 0) > 0
-    ]
-
-
-def _inventory_review_summary_cards(summary: dict, rows: list[dict], parsed_total_rows: int, parsed_healthy_rows: int) -> dict:
-    products_checked = _safe_int_stat(summary, "products_checked")
-    if products_checked == 0 and parsed_total_rows:
-        products_checked = parsed_total_rows
-    in_sync = _safe_int_stat(summary, "in_sync", _safe_int_stat(summary, "already_correct"))
-    if in_sync == 0 and parsed_healthy_rows:
-        in_sync = parsed_healthy_rows
-    blocked = _safe_int_stat(summary, "blocked_items")
-    if blocked == 0 and rows:
-        blocked = len(rows)
-    negative_rows = _safe_int_stat(summary, "epos_negative_rows_clamped")
-    negative_units = summary.get("epos_negative_units_clamped", 0)
-    return {
-        "products_checked": products_checked,
-        "products_checked_display": _format_inventory_review_number(products_checked),
-        "in_sync": in_sync,
-        "in_sync_display": _format_inventory_review_number(in_sync),
-        "blocked_items": blocked,
-        "blocked_items_display": _format_inventory_review_number(blocked),
-        "epos_negative_rows_clamped": negative_rows,
-        "epos_negative_rows_clamped_display": _format_inventory_review_number(negative_rows),
-        "epos_negative_units_clamped": negative_units,
-        "epos_negative_units_clamped_display": _format_inventory_review_number(negative_units),
-    }
-
-
-def _inventory_review_report_links(artifact: RunArtifact | None) -> dict[str, str]:
-    if artifact is None or artifact.run_job_id is None or artifact.run_job is None:
-        return {}
-    return {
-        link["key"]: link["url"]
-        for link in _artifact_report_links(artifact.run_job, artifact)
-    }
-
-
 def _select_day_artifact_for_uploaded_count(artifacts: list[RunArtifact]) -> RunArtifact | None:
     by_hash: dict[str, RunArtifact] = {}
     no_hash: list[RunArtifact] = []
@@ -3569,34 +3067,14 @@ def _sales_sync_display(artifact: RunArtifact | None) -> str:
     return f"{uploaded} {_receipt_word(uploaded)}{date_part}"
 
 
-def _inventory_activity_label(job: RunJob | None, artifact: RunArtifact | None) -> str:
-    summary = _inventory_summary_from_artifact(artifact)
-    opts = job.inventory_options_json if job and isinstance(job.inventory_options_json, dict) else {}
-    mode = str(summary.get("inventory_mode") or opts.get("mode") or "").strip()
-    if mode:
-        return _inventory_mode_label(mode, summary) or "Inventory run"
-    apply_stats = summary.get("apply") if isinstance(summary.get("apply"), dict) else {}
-    apply_mode = str(apply_stats.get("mode") or "").strip().lower()
-    posted = _safe_int_stat(apply_stats, "posted") if apply_stats else 0
-    updates = (
-        _safe_int_stat(summary, "catalog_fixes_applied")
-        + _safe_int_stat(summary, "base_items_created")
-        + _safe_int_stat(summary, "duplicate_base_items_resolved")
-        + _safe_int_stat(summary, "quantity_updates_applied")
-    )
-    if apply_mode == "apply" or posted > 0 or updates > 0:
-        return "Inventory sync"
-    return "Inventory audit"
-
-
 def _activity_label_for(job: RunJob | None, artifact: RunArtifact | None = None) -> str:
     if job and job.scope in {RunJob.SCOPE_SINGLE, RunJob.SCOPE_ALL}:
         return "Sales sync"
     if job and job.scope in {RunJob.SCOPE_INVENTORY_PIPELINE, RunJob.SCOPE_INVENTORY_SYNC}:
-        return _inventory_activity_label(job, artifact)
+        return "Inventory (legacy)"
     if artifact:
         if _is_inventory_artifact(artifact):
-            return _inventory_activity_label(job, artifact)
+            return "Inventory (legacy)"
         return "Sales sync"
     return "Activity"
 
@@ -3834,11 +3312,7 @@ def _enrich_company_data(
             or []
         } if latest_sales_job else {},
     )
-    inventory_status = _inventory_status_for_company(
-        latest_job=latest_inventory_job,
-        latest_artifact=latest_inventory_artifact,
-    )
-    inventory_review_required = _inventory_review_required(inventory_enabled, inventory_status)
+    inventory_status: dict = {}  # legacy inventory review removed 5 Oct 2026
 
     health = _company_health_snapshot(
         company,
@@ -3927,12 +3401,6 @@ def _enrich_company_data(
         "inventory_enabled": inventory_enabled,
         "sales_status": sales_status,
         "inventory_status": inventory_status,
-        "inventory_review_required": inventory_review_required,
-        "inventory_review_label": _inventory_review_action_label(inventory_status),
-        "inventory_review_url": reverse(
-            "epos_qbo:company_inventory_review",
-            kwargs={"company_key": company.company_key},
-        ) if inventory_enabled else "",
         "records_24h": records_24h,
         "last_activity_at": last_activity_at,
         "last_run_display": _format_last_run_time(last_activity_at),
@@ -4231,558 +3699,6 @@ def companies_list(request):
     if request.headers.get("HX-Request"):
         return render(request, "components/company_directory.html", context)
     return render(request, "epos_qbo/companies.html", context)
-
-
-@login_required
-def company_inventory_review(request, company_key):
-    company = get_object_or_404(CompanyConfigRecord, company_key=company_key)
-    inventory_enabled = _company_inventory_enabled(company)
-
-    artifact = None
-    summary: dict = {}
-    rows: list[dict] = []
-    parsed_total_rows = 0
-    parsed_healthy_rows = 0
-    parse_error = ""
-    empty_message = ""
-    final_audit_raw = ""
-    final_audit_filename = ""
-
-    if not inventory_enabled:
-        status_label = "No inventory review found"
-        status_color = "slate"
-        empty_message = "Inventory review is not enabled for this company."
-    else:
-        artifact = _latest_inventory_review_artifact(company.company_key)
-        if artifact is None:
-            status_label = "No inventory review found"
-            status_color = "slate"
-            empty_message = "No inventory review is currently required for this company."
-        else:
-            summary = _inventory_summary_from_artifact(artifact)
-            acknowledgement = _inventory_review_acknowledgement_for_artifact(artifact)
-            final_audit_raw = _artifact_report_path_value(artifact, "final_audit")
-            if not final_audit_raw:
-                empty_message = "No final inventory audit was found for the latest inventory run."
-            else:
-                try:
-                    final_audit_path = _resolve_artifact_report_path(artifact, "final_audit")
-                except Http404:
-                    empty_message = (
-                        "The final audit artifact exists in the database but the source file could not be found."
-                    )
-                else:
-                    final_audit_filename = final_audit_path.name
-                    parsed = parse_inventory_review_csv(final_audit_path)
-                    rows = parsed.rows
-                    parsed_total_rows = parsed.total_rows
-                    parsed_healthy_rows = parsed.healthy_rows
-                    parse_error = parsed.error
-                    if not rows and not parse_error:
-                        empty_message = "No inventory review is currently required for this company."
-                    elif not rows and parse_error:
-                        empty_message = "The final audit CSV could not be parsed."
-
-            summary_cards = _inventory_review_summary_cards(
-                summary,
-                rows,
-                parsed_total_rows,
-                parsed_healthy_rows,
-            )
-            if rows or summary_cards["blocked_items"] > 0 or _has_non_in_sync_inventory_rows(summary):
-                if acknowledgement is not None:
-                    status_label = "Reviewed"
-                    status_color = "emerald"
-                else:
-                    status_label = "Needs review"
-                    status_color = "amber"
-            else:
-                status_label = "Healthy"
-                status_color = "emerald"
-
-    if not inventory_enabled or artifact is None:
-        summary_cards = _inventory_review_summary_cards(summary, rows, parsed_total_rows, parsed_healthy_rows)
-        acknowledgement = None
-
-    report_links = _inventory_review_report_links(artifact)
-    run = artifact.run_job if artifact and artifact.run_job_id else None
-    latest_run_time = _run_status_time(run) or _artifact_status_time(artifact)
-    run_label = run.friendly_id if run else (Path(str(artifact.source_path)).name if artifact else "")
-    run_title = run.friendly_title if run else "Inventory report"
-    has_negative_summary = bool(
-        summary_cards["epos_negative_rows_clamped"] > 0
-        or str(summary_cards["epos_negative_units_clamped_display"]) not in {"", "0"}
-    )
-
-    actions = {
-        "available": False,
-        "catalog_cleanup_count": 0,
-        "quantity_adjustment_count": 0,
-        "missing_count": 0,
-        "retry_catalog_cleanup_url": "",
-        "retry_catalog_cleanup_confirm_url": "",
-        "retry_quantity_adjustments_url": "",
-        "retry_quantity_adjustments_confirm_url": "",
-        "missing_preview_url": "",
-    }
-    if inventory_enabled and rows:
-        actions = {
-            "available": True,
-            "catalog_cleanup_count": len(get_catalog_cleanup_rows(rows)),
-            "quantity_adjustment_count": len(get_quantity_adjustment_rows(rows)),
-            "missing_count": len(get_review_rows_by_reason(rows, REASON_GROUP_MISSING)),
-            "retry_catalog_cleanup_url": "",
-            "retry_catalog_cleanup_confirm_url": "",
-            "retry_quantity_adjustments_url": "",
-            "retry_quantity_adjustments_confirm_url": "",
-            "missing_preview_url": reverse(
-                "epos_qbo:company_inventory_missing_preview",
-                kwargs={"company_key": company.company_key},
-            ),
-        }
-
-    context = {
-        "company": company,
-        "inventory_enabled": inventory_enabled,
-        "review": {
-            "artifact": artifact,
-            "run": run,
-            "run_label": run_label,
-            "run_title": run_title,
-            "run_detail_url": reverse("epos_qbo:run-detail", kwargs={"job_id": run.id}) if run else "",
-            "final_audit_download_url": report_links.get("final_audit", ""),
-            "final_audit_raw": final_audit_raw,
-            "final_audit_filename": final_audit_filename,
-            "latest_run_time": latest_run_time,
-            "status_label": status_label,
-            "status_color": status_color,
-            "summary": summary_cards,
-            "rows": rows,
-            "row_count": len(rows),
-            "reason_counts": _inventory_review_reason_counts(rows),
-            "empty_message": empty_message,
-            "parse_error": parse_error,
-            "has_negative_summary": has_negative_summary,
-            "actions": actions,
-            "acknowledgement": acknowledgement,
-            "is_acknowledged": acknowledgement is not None,
-            "acknowledge_url": reverse(
-                "epos_qbo:company_inventory_review_mark_reviewed",
-                kwargs={"company_key": company.company_key},
-            ) if artifact else "",
-        },
-    }
-    context.update(_nav_context())
-    context.update(
-        _breadcrumb_context(
-            [
-                {"label": "Dashboard", "url": reverse("epos_qbo:overview")},
-                {"label": "Companies", "url": reverse("epos_qbo:companies-list")},
-                {
-                    "label": company.display_name,
-                    "url": reverse("epos_qbo:company-detail", kwargs={"company_key": company.company_key}),
-                },
-                {"label": "Inventory Review", "url": None},
-            ],
-            back_url=reverse("epos_qbo:company-detail", kwargs={"company_key": company.company_key}),
-            back_label=company.display_name,
-        )
-    )
-    return render(request, "epos_qbo/company_inventory_review.html", context)
-
-
-def _inventory_review_acknowledgement_snapshot(summary: dict) -> dict:
-    counts = summary.get("final_status_counts") if isinstance(summary.get("final_status_counts"), dict) else {}
-    return {
-        "products_checked": _safe_int_stat(summary, "products_checked"),
-        "in_sync": _safe_int_stat(summary, "in_sync", _safe_int_stat(summary, "already_correct")),
-        "blocked_items": _safe_int_stat(summary, "blocked_items"),
-        "still_needs_review": _safe_int_stat(summary, "still_needs_review"),
-        "inventory_mode": str(summary.get("inventory_mode") or "").strip(),
-        "final_status_counts": counts,
-    }
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_POST
-def company_inventory_review_mark_reviewed(request, company_key):
-    company = get_object_or_404(CompanyConfigRecord, company_key=company_key)
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    if not _company_inventory_enabled(company):
-        messages.error(request, "Inventory is not enabled for this company.")
-        return redirect("epos_qbo:company-detail", company_key=company.company_key)
-
-    artifact = _latest_inventory_review_artifact(company.company_key)
-    if artifact is None:
-        messages.error(request, "No inventory final audit is available for this company yet.")
-        return redirect(review_url)
-
-    posted_artifact_id = str(request.POST.get("artifact_id") or "").strip()
-    if posted_artifact_id and posted_artifact_id != str(artifact.id):
-        messages.error(request, "The inventory review changed. Refresh the page and review the latest audit before marking it reviewed.")
-        return redirect(review_url)
-
-    summary = _inventory_summary_from_artifact(artifact)
-    InventoryReviewAcknowledgement.objects.update_or_create(
-        artifact=artifact,
-        defaults={
-            "company_key": company.company_key,
-            "run_job": artifact.run_job if artifact.run_job_id else None,
-            "reviewed_by": request.user,
-            "reviewed_at": timezone.now(),
-            "summary_json": _inventory_review_acknowledgement_snapshot(summary),
-        },
-    )
-    messages.success(
-        request,
-        "Items have been marked reviewed.",
-    )
-    return redirect(review_url)
-
-
-def _inventory_review_action_context(request, company_key: str):
-    company = get_object_or_404(CompanyConfigRecord, company_key=company_key)
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    if not _company_inventory_enabled(company):
-        messages.error(request, "Inventory is not enabled for this company.")
-        return company, None, redirect("epos_qbo:company-detail", company_key=company.company_key)
-
-    artifact = _latest_inventory_review_artifact(company.company_key)
-    if artifact is None:
-        messages.error(request, "No inventory final audit is available for this company yet.")
-        return company, None, redirect(review_url)
-
-    context = load_review_context(
-        company=company,
-        artifact=artifact,
-        final_audit_path_resolver=_resolve_artifact_report_path,
-    )
-    if context is None:
-        messages.error(
-            request,
-            "The final audit artifact exists in the database but the source file could not be found.",
-        )
-        return company, None, redirect(review_url)
-    if context.parse_result.error and not context.rows:
-        messages.error(request, "The final audit CSV could not be parsed.")
-        return company, None, redirect(review_url)
-    return company, context, None
-
-
-def _inventory_retry_confirm_context(
-    *,
-    company,
-    context,
-    action_title: str,
-    action_label: str,
-    inventory_mode: str,
-    warning_text: str,
-    rows: list[dict],
-    preview_limit: int = 25,
-) -> dict:
-    run = context.artifact.run_job if context.artifact and context.artifact.run_job_id else None
-    run_label = run.friendly_id if run else ""
-    return {
-        "company": company,
-        "action_title": action_title,
-        "action_label": action_label,
-        "inventory_mode": inventory_mode,
-        "inventory_mode_label": _inventory_mode_label(inventory_mode),
-        "inventory_write_intent": INVENTORY_MODE_WRITE_INTENT_LABELS.get(inventory_mode, ""),
-        "inventory_safe_apply_copy": INVENTORY_SAFE_APPLY_COPY,
-        "warning_text": warning_text,
-        "row_count": len(rows),
-        "rows": rows,
-        "preview_rows": rows[:preview_limit],
-        "preview_limit": int(preview_limit),
-        "final_audit_filename": context.final_audit_path.name,
-        "source_run_label": run_label,
-    }
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_GET
-def company_inventory_retry_catalog_cleanup_confirm(request, company_key):
-    company, _context, error_redirect = _inventory_review_action_context(request, company_key)
-    if error_redirect is not None:
-        return error_redirect
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    messages.info(
-        request,
-        "Catalog apply has been removed. Use the review counts and manual QBO starting-value correction workflow.",
-    )
-    return redirect(review_url)
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_GET
-def company_inventory_retry_quantity_adjustments_confirm(request, company_key):
-    company, _context, error_redirect = _inventory_review_action_context(request, company_key)
-    if error_redirect is not None:
-        return error_redirect
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    messages.info(
-        request,
-        "Quantity apply has been removed. Use QBO Adjust starting value for reviewed quantity mismatches.",
-    )
-    return redirect(review_url)
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_POST
-def company_inventory_retry_catalog_cleanup(request, company_key):
-    company, _context, error_redirect = _inventory_review_action_context(request, company_key)
-    if error_redirect is not None:
-        return error_redirect
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    messages.info(
-        request,
-        "Catalog apply has been removed. Use the review counts and manual QBO starting-value correction workflow.",
-    )
-    return redirect(review_url)
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_POST
-def company_inventory_retry_quantity_adjustments(request, company_key):
-    company, _context, error_redirect = _inventory_review_action_context(request, company_key)
-    if error_redirect is not None:
-        return error_redirect
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    messages.info(
-        request,
-        "Quantity apply has been removed. Use QBO Adjust starting value for reviewed quantity mismatches.",
-    )
-    return redirect(review_url)
-
-
-def _inventory_missing_preview_url(
-    company_key: str, *, category: str | None = None, txn_date: str | None = None
-) -> str:
-    base = reverse(
-        "epos_qbo:company_inventory_missing_preview",
-        kwargs={"company_key": company_key},
-    )
-    params: dict[str, str] = {}
-    if category:
-        params["category"] = category
-    if txn_date:
-        params["txn_date"] = txn_date
-    if params:
-        return f"{base}?{urlencode(params)}"
-    return base
-
-
-def _missing_preview_date_input_bounds(*, company_key: str) -> tuple[str, str | None]:
-    """Return (max_date_iso_today_in_business_tz, min_date_iso_from_company_floor_or_None)."""
-
-    tz = get_business_timezone()
-    now = timezone.now()
-    if timezone.is_naive(now):
-        now = timezone.make_aware(now)
-    today_iso = now.astimezone(tz).date().isoformat()
-    return today_iso, inv_start_date_floor_iso(company_key)
-
-
-@login_required
-@require_GET
-def company_inventory_missing_preview(request, company_key):
-    company, context, error_redirect = _inventory_review_action_context(request, company_key)
-    if error_redirect is not None:
-        return error_redirect
-
-    preview_full = build_missing_item_creation_preview(context=context)
-    category_param = str(request.GET.get("category") or "").strip()
-    preview = filter_missing_preview_by_category(preview_full, category_param)
-
-    resolved_iso, txn_date_source = resolve_txn_date_for_review_missing_item_creation(
-        company_key=company.company_key, artifact=context.artifact
-    )
-    picker_date = coalesce_picker_date_from_get(
-        company_key=company.company_key,
-        get_value=request.GET.get("txn_date"),
-        resolved_iso=resolved_iso,
-    )
-    category_options = collect_category_options(preview_full.rows)
-    _, queue_category_label = resolve_category_scope_labels(
-        preview_full=preview_full,
-        category_scope=category_param,
-    )
-    missing_item_queue_allowed = not str(preview.qbo_base_names_error or "").strip()
-    date_max_iso, date_min_iso = _missing_preview_date_input_bounds(company_key=company.company_key)
-
-    review_url = reverse(
-        "epos_qbo:company_inventory_review",
-        kwargs={"company_key": company.company_key},
-    )
-    confirm_post_url = reverse(
-        "epos_qbo:company_inventory_missing_create",
-        kwargs={"company_key": company.company_key},
-    )
-    category_filter_url = reverse(
-        "epos_qbo:company_inventory_missing_preview",
-        kwargs={"company_key": company.company_key},
-    )
-
-    template_context = {
-        "company": company,
-        "preview": preview,
-        "preview_full": preview_full,
-        "review_url": review_url,
-        "final_audit_filename": context.final_audit_path.name,
-        "resolved_item_inv_start_date": resolved_iso,
-        "item_inv_start_date": picker_date,
-        "picker_date": picker_date,
-        "txn_date_source": txn_date_source,
-        "missing_item_queue_allowed": missing_item_queue_allowed,
-        "snapshot_pack_guard_message": SNAPSHOT_PACK_GUARD_MESSAGE,
-        "confirm_post_url": confirm_post_url,
-        "category_options": category_options,
-        "selected_category": category_param,
-        "queue_category_label": queue_category_label,
-        "date_input_max": date_max_iso,
-        "date_input_min": date_min_iso,
-        "category_filter_url": category_filter_url,
-    }
-    template_context.update(_nav_context())
-    template_context.update(
-        _breadcrumb_context(
-            [
-                {"label": "Dashboard", "url": reverse("epos_qbo:overview")},
-                {"label": "Companies", "url": reverse("epos_qbo:companies-list")},
-                {
-                    "label": company.display_name,
-                    "url": reverse(
-                        "epos_qbo:company-detail",
-                        kwargs={"company_key": company.company_key},
-                    ),
-                },
-                {"label": "Inventory Review", "url": review_url},
-                {"label": "Missing QuickBooks Items", "url": None},
-            ],
-            back_url=review_url,
-            back_label="Inventory Review",
-        )
-    )
-    return render(
-        request,
-        "epos_qbo/company_inventory_missing_preview.html",
-        template_context,
-    )
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_GET
-def company_inventory_missing_create_confirm(request, company_key):
-    """Compatibility URL: confirmation now happens on the Missing Preview page."""
-
-    target = reverse(
-        "epos_qbo:company_inventory_missing_preview",
-        kwargs={"company_key": company_key},
-    )
-    if request.GET:
-        return redirect(f"{target}?{request.GET.urlencode()}")
-    return redirect(target)
-
-
-@login_required
-@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
-@require_POST
-def company_inventory_missing_create(request, company_key):
-    company, context, error_redirect = _inventory_review_action_context(request, company_key)
-    if error_redirect is not None:
-        return error_redirect
-    missing_preview_url = reverse(
-        "epos_qbo:company_inventory_missing_preview",
-        kwargs={"company_key": company.company_key},
-    )
-
-    preview_full = build_missing_item_creation_preview(context=context)
-    category_param = str(request.POST.get("category_scope") or "").strip()
-    preview_scoped = filter_missing_preview_by_category(preview_full, category_param)
-
-    resolved_iso, resolved_src = resolve_txn_date_for_review_missing_item_creation(
-        company_key=company.company_key, artifact=context.artifact
-    )
-    txn_date, date_err, txn_src = validate_inventory_start_date_for_missing_queue(
-        company_key=company.company_key,
-        posted=request.POST.get("inventory_start_date"),
-        resolved_iso=resolved_iso,
-        resolved_source=resolved_src,
-    )
-
-    posted_date_raw = str(request.POST.get("inventory_start_date") or "").strip()
-    redirect_back = _inventory_missing_preview_url(
-        company.company_key,
-        category=category_param or None,
-        txn_date=posted_date_raw or None,
-    )
-
-    if date_err:
-        messages.error(request, date_err)
-        return redirect(redirect_back)
-
-    if str(preview_full.qbo_base_names_error or "").strip():
-        messages.error(request, SNAPSHOT_PACK_GUARD_MESSAGE)
-        return redirect(redirect_back)
-
-    cat_key, cat_label = resolve_category_scope_labels(
-        preview_full=preview_full,
-        category_scope=category_param,
-    )
-
-    job = queue_missing_item_creation_job(
-        company=company,
-        artifact=context.artifact,
-        final_audit_path=context.final_audit_path,
-        preview=preview_scoped,
-        requested_by=request.user,
-        txn_date=txn_date,
-        txn_date_source=txn_src,
-        category_filter_key=cat_key,
-        category_label=cat_label,
-    )
-    if job is None:
-        messages.warning(
-            request,
-            "No safe missing-item candidates to queue in the selected scope. Refresh the preview and try again if the audit changed.",
-        )
-        return redirect(redirect_back)
-
-    # queued: the schedule worker starts it (pages never start jobs)
-    send_inventory_review_action_queued(company=company, job=job, request=request)
-    scope_note = ""
-    if cat_label != "All categories":
-        scope_note = f" ({cat_label})"
-    messages.success(
-        request,
-        f"Missing item creation queued for {preview_scoped.safe_count} safe candidate(s){scope_note} using InvStartDate {txn_date}.",
-    )
-    return redirect("epos_qbo:run-detail", job_id=job.id)
 
 
 @login_required

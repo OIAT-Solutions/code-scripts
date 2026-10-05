@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-10-04 ~19:15 New York by Claude.
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
-Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
+Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: cutover log (removed 5 Oct; in git history).
 
 ---
 
@@ -65,11 +65,11 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 
 ## 3. Current focus (Marvin's order, one at a time)
 
-**Portal UX slice 2 (Codex, 5 Oct, local only):** unified schedule overview with Active/Paused/History, execution timestamps separated from business dates, sales evidence before diagnostics, collapsible successful steps and grouped Akponora downloads. See `PORTAL_UX_SLICE2_CHECKPOINT.md`. Existing schedule mutation controls remain guarded in a labeled disclosure. No server or accounting changes.
+**Portal UX slice 2 (Codex, 5 Oct, local only):** unified schedule overview with Active/Paused/History, execution timestamps separated from business dates, sales evidence before diagnostics, collapsible successful steps and grouped Akponora downloads. Checkpoint `PORTAL_UX_SLICE2_CHECKPOINT.md` (removed 5 Oct; in git history). Existing schedule mutation controls remain guarded in a labeled disclosure. No server or accounting changes.
 
-**Schedules follow-up (Codex, 5 Oct, local only):** removed backend ownership explanations from the main schedule interface and simplified the disclosure to Schedule settings. Browser review and 45 relevant tests passed. `CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` is ready for Marvin to relay to Claude for a separate, tested scheduling-authority consolidation. Production activation remains a separate approval.
+**Schedules follow-up (Codex, 5 Oct, local only):** removed backend ownership explanations from the main schedule interface and simplified the disclosure to Schedule settings. Browser review and 45 relevant tests passed. `CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` (removed 5 Oct; in git history) was ready for Marvin to relay to Claude for a separate, tested scheduling-authority consolidation. Production activation remains a separate approval.
 
-**Local portal UX work (Codex, 5 Oct):** Marvin requested an agency/client-workspace plan and authorized local previews. See `OIAT_PORTAL_DELIVERY_PLAN.md` (also copied to the operations-console repo). Branch `codex/oiat-portal-ux`, managed worktree `/Users/marvinmokolo/.codex/worktrees/oiat-portal-ux/code-scripts`. First slice corrects trading-date blockers, incomplete-sheet comparisons and deposit activity counts, and improves Home/company wording. Preview uses synthetic state at `/private/tmp/oiat-portal-ux-preview` and loopback `http://127.0.0.1:8014`. No accounting-engine changes or deployment. This does not replace the financial work below. Validation/checkpoint details: `PORTAL_UX_PHASE1_CHECKPOINT.md`.
+**Local portal UX work (Codex, 5 Oct):** Marvin requested an agency/client-workspace plan and authorized local previews. See `OIAT_PORTAL_DELIVERY_PLAN.md` (also copied to the operations-console repo). Branch `codex/oiat-portal-ux`, managed worktree `/Users/marvinmokolo/.codex/worktrees/oiat-portal-ux/code-scripts`. First slice corrects trading-date blockers, incomplete-sheet comparisons and deposit activity counts, and improves Home/company wording. Preview uses synthetic state at `/private/tmp/oiat-portal-ux-preview` and loopback `http://127.0.0.1:8014`. No accounting-engine changes or deployment. This does not replace the financial work below. Validation/checkpoint details: `PORTAL_UX_PHASE1_CHECKPOINT.md` (removed 5 Oct; in git history).
 
 1. **Goldplates invoicing**, now (§4 B).
 2. **Bank reconciliation**, next (§4 C), which includes the ₦200.6M unpaid-bills backlog.
@@ -94,7 +94,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
    - one supplier per PO (PO 3970 named two).
 5. [ ] **Watch negative stock in QBO** (11 → 19 → 28 items). If it keeps rising after the held bills post, deliveries are not being recorded as EPOS POs.
 
-### A3. One scheduling authority (brief `CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md`, from Codex)
+### A3. One scheduling authority (brief `CLAUDE_SCHEDULING_AUTHORITY_BRIEF.md` from Codex, removed 5 Oct; in git history)
 - [x] **Built locally, 5 Oct,** on branch `claude/scheduling-authority`; see [`SCHEDULING_AUTHORITY.md`](SCHEDULING_AUTHORITY.md).
   - The portal worker becomes the single authority; Nora's routine is a `company_a_daily` RunJob running `daily_run` unchanged.
   - One owner switch, `OIAT_COMPANY_A_DAILY_RUN_OWNER` (default `ops_scheduler` = today's behaviour).
@@ -109,7 +109,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
   - "Add schedule" offers the workflow catalogue: **Daily routine** (Akponora only, one per company) and **Sales sync** (every other company).
   - Migration `0022_remove_legacy_schedules` deletes the fallback row and the inventory schedules.
   - Deploy: build; `docker compose up -d --remove-orphans`; `docker compose exec web python manage.py migrate`. Then delete from `.env`: `OIAT_COMPANY_A_DAILY_RUN_ENABLED`, `OIAT_COMPANY_A_DAILY_RUN_CRON`, `OIAT_COMPANY_A_DAILY_RUN_OWNER`, `OIAT_JOBS_DISPATCH_IN_WORKER_ONLY`, `COMPOSE_PROFILES=akponora-ops`, `SCHEDULE_CRON`, `SCHEDULE_TZ`, `OIAT_SCHEDULER_ENABLE_ENV_FALLBACK`.
-  - Separate decision: the legacy inventory tools themselves (`inventory_pipeline` / `inventory_sync` jobs and their portal pages).
+  - The legacy inventory tools themselves (`inventory_pipeline` / `inventory_sync`, `qbo_inv_manager`, pack-variant/remediation scripts, the Inventory Review pages): **removed 5 Oct** (in git history).
 
 ### A2. Till sheet feedback (Marvin, 4 Oct)
 - [x] **"Banked" notes in the till sheet** (`till_sheet_marks`). Column B of each day's title row shows:
@@ -127,9 +127,9 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
   - The BookKeeping export already carries `Customer Full Name`, `Customer ID` and `Tender`.
 - **Pipeline change needed before credit sales go live:** credit-tender rows → one QBO Invoice per customer per day (not a SalesReceipt into Undeposited Funds), via a customer mapping file (EPOS customer → QBO customer; unknown = hold + Inbox); "pay on account" → ReceivePayment if EPOS exports it. Get **one test credit sale and one test repayment** first and read that day's export.
 - **Backlog** (paper invoices 0006232–0006242, ₦7.13M, outside EPOS): post once from the transcription; 25–30 Sep dated 30 Sep (non-stock line).
-- **The "Nora Mart Credit Sales" sheet + `credit_sheet.py`: parked.** Keep it only if it helps finish the backlog products; otherwise remove both.
+- **The "Nora Mart Credit Sales" sheet + `credit_sheet.py`: dropped 5 Oct.** `credit_sheet.py` removed from the code (in git history); credit sales will use the EPOS credit tender. The Google Sheet itself still exists until someone deletes it.
 
-- [x] **Sheet "Nora Mart Credit Sales"** (`1x6dB0QX9KWuF6dsqTfBOgBgZ0r4tle1kF847pOXp1nk`; service account Editor), built 5 Oct by `credit_sheet setup` (`50f8a00`+).
+- [x] **Sheet "Nora Mart Credit Sales"** (`1x6dB0QX9KWuF6dsqTfBOgBgZ0r4tle1kF847pOXp1nk`; service account Editor), built 5 Oct by `credit_sheet setup` (`50f8a00`+; script removed 5 Oct, in git history).
   - Tabs: Read me, Invoices, Repayments, Customers, Customer prices, Products (6,143 EPOS products, server-owned).
   - Dropdowns; auto list price (agreed customer price, else EPOS); a red row when a price differs without name + reason.
   - 18 example lines loaded = the 9 paper invoices not in QBO (0006232 … 0006242, ₦7,126,000), not Ready, products to be picked.

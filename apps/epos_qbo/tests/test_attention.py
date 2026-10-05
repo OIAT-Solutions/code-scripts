@@ -1,12 +1,11 @@
 """Inbox safety, exact approvals and operational failure visibility."""
-import csv
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
 
-from django.contrib.auth.models import User, Permission
+from django.contrib.auth.models import User
 from django.core import signing
 from django.test import Client
 from django.urls import reverse

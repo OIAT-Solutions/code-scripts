@@ -126,6 +126,6 @@ Never treat checkout revision as proof of running image revision. Do not rename 
 
 - Detailed UX audit exists at `outputs/portal_ux_review_2026-10-04/REVIEW.md` in the primary local checkout (gitignored review evidence).
 - Isolated worktree: `/Users/marvinmokolo/.codex/worktrees/oiat-portal-ux/code-scripts`.
-- Phase 1 first slice is complete locally: consistent trading-date blockers, missing-sheet comparisons, deposit counts and initial copy changes. All 542 portal tests passed; Home and Deposits were checked in the synthetic browser preview. See `PORTAL_UX_PHASE1_CHECKPOINT.md`.
-- Phase 1 slice 2 adds a unified schedule overview and evidence-first run details, grouped downloads and collapsible successful steps. See `PORTAL_UX_SLICE2_CHECKPOINT.md` for validation. Later capability/task/stock work and agency phases remain planned.
+- Phase 1 first slice is complete locally: consistent trading-date blockers, missing-sheet comparisons, deposit counts and initial copy changes. All 542 portal tests passed; Home and Deposits were checked in the synthetic browser preview. Checkpoint notes (removed 5 Oct; in git history).
+- Phase 1 slice 2 adds a unified schedule overview and evidence-first run details, grouped downloads and collapsible successful steps. Merged into `claude/integration-20261005` on 5 Oct; checkpoint notes (removed 5 Oct; in git history). Later capability/task/stock work and agency phases remain planned.
 - No production writes, deployments, DNS changes or new client-facing portals are authorized by this plan alone.

@@ -1,6 +1,6 @@
 # Akponora (Company A) roadmap and checklist
 
-One place for everything outstanding. Tick items off here (`[x]`) and add the date. Rules live in [`AGENTS.md`](../AGENTS.md); history in [`AKPONORA_CUTOVER_LOG.md`](AKPONORA_CUTOVER_LOG.md).
+One place for everything outstanding. Tick items off here (`[x]`) and add the date. Rules live in [`AGENTS.md`](../AGENTS.md); cutover history (removed 5 Oct; in git history).
 
 Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff** (store).
 
@@ -63,11 +63,11 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | Done | Item | Owner |
 | --- | --- | --- |
 | [ ] | **Products & Stock page** (portal, replaces the old inventory review page): EPOS product ↔ mapping ↔ new QBO item, EPOS vs QBO qty, negative stock, catalogue-sync queue | Agent |
-| [ ] | **Legacy retirement tool (W10)** from `qbo_pack_variant_cleanup` + `qbo_inventory_remediation`: retire `LEGACY —` items in small approved batches (check qty/value → zero to `300150` → inactivate) | Agent (each batch needs Marvin's yes) |
-| [ ] | **Correct-a-posted-day tool** from `qbo_delete_sales_receipts`: void + re-post a day through the pipeline, with hold/approval and an audit record | Agent |
-| [ ] | **Customer invoices on new items** from the old invoice importer (EPOS ID/SKU match, stock-out check, proper numbering) | Agent |
-| [ ] | **Manual bill import** inside `bills_sync` for purchases outside EPOS POs (from the old bill importer) | Agent |
-| [ ] | `qbo_inv_manager`: keep only read-only item checks; drop start-date editing for Company A | Agent |
+| [ ] | **Legacy retirement tool (W10)** (old `qbo_pack_variant_cleanup` / `qbo_inventory_remediation`: removed 5 Oct; in git history): retire `LEGACY —` items in small approved batches (check qty/value → zero to `300150` → inactivate) | Agent (each batch needs Marvin's yes) |
+| [ ] | **Correct-a-posted-day tool** (old `qbo_delete_sales_receipts`: removed 5 Oct; in git history): void + re-post a day through the pipeline, with hold/approval and an audit record | Agent |
+| [ ] | **Customer invoices on new items** (old invoice importer: removed 5 Oct; in git history; EPOS ID/SKU match, stock-out check, proper numbering) | Agent |
+| [ ] | **Manual bill import** inside `bills_sync` for purchases outside EPOS POs (old bill importer: removed 5 Oct; in git history) | Agent |
+| [x] 2026-10-05 | `qbo_inv_manager`: removed with the rest of the legacy inventory stack (in git history) | Agent |
 | [ ] | Remove each temporary safety guard once its tool is refactored | Agent |
 | [x] | **Portal phase 1 (read-only)**: Company A daily run on Schedules, Company A daily-runs list + run detail (steps, review items, log tails, evidence viewer), Overview card, Holds & alerts panel | Agent |
 | [ ] | **Portal phase 2 — Review & Approvals inbox**: approve / skip held bills, new vendors, new products (catalogue review) and deposits, each with who/why audit; clear the posting hold with approver + reason (archives the hold file as `clear-hold` does); "Run now" for the daily run (whole run or `--only` steps, dry-run first) | Agent |
@@ -84,6 +84,7 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | Optional: read-only token endpoint on the server (1-hour access tokens, never the refresh token) if laptops need production lookups | Agent |
 | [ ] | Public ingress for QBO webhooks (portal is tailnet-only) so webhook item lookups work | Marvin / Team |
 | [x] | Repo clean-up phase 2 (3 Oct, Claude): root shims, old scheduler pair and `akponora_canonical_catalog.py` deleted; `uf_reverse_and_allocate` archived; finished docs archived. Journal templates kept (tested, used by `post_journal`). `.env.example` completeness still open | Claude |
+| [x] 2026-10-05 | Repo clean-up phase 3: legacy inventory stack and Inventory Review pages, `credit_sheet`, `ops_scheduler` / `akponora-ops`, env fallback scheduler, one-off cutover scripts, `docs/archive/`, finished briefs/runbooks/checkpoints removed (in git history). Posting contract kept as `docs/AKPONORA_POSTING_CONTROLS.md` | Claude |
 | [ ] | Merge PR #62 to `master` after the first clean week | Marvin |
 
 | [ ] | Portal redesign phases 2–3 (brief: `docs/CODEX_BRIEF_PORTAL_REDESIGN.md`) | Codex |

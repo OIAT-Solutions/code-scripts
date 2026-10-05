@@ -5,14 +5,12 @@
 | Need | Read |
 | --- | --- |
 | **Handover tracker: where things are right now, what's in progress, next steps** | [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md) |
-| Tonight/tomorrow, step by step with commands | [`docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md`](docs/AKPONORA_OCT1_GOLIVE_RUNBOOK.md) |
-| What has already been posted, and when | [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md) |
-| Code contract, posting controls, incident response | [`docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md`](docs/AKPONORA_CANONICAL_CUTOVER_RUNBOOK.md), [`docs/AKPONORA_OPERATIONS_CONTROLS.md`](docs/AKPONORA_OPERATIONS_CONTROLS.md) |
+| What was posted during the cutover, and when | Cutover log, go-live runbook and freeze note removed 5 Oct 2026 (in git history); key IDs are in Status below |
+| Code contract, posting controls, incident response | [`docs/AKPONORA_POSTING_CONTROLS.md`](docs/AKPONORA_POSTING_CONTROLS.md) |
 | Daily running from October: catalogue sync, bills from POs, item guard | [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md) |
 | Server: the one scheduled Company A routine (`daily_run`), env, holds, approvals | [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
 | Operator tools (EPOS pulls, mapping, renames, creates, journals) | [`code_scripts/scripts/akponora_cutover/README.md`](code_scripts/scripts/akponora_cutover/README.md) |
-| Bookkeeper rules | [`docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md`](docs/AKPONORA_BOOKKEEPER_FREEZE_NOTE_18_Sep_2026.md) |
-| Background (Jan–Sep recovery) | `docs/archive/AKPONORA_COGS_RECOVERY_PLAN.md` (historical; superseded where it conflicts) |
+| Bookkeeper rules | Non-negotiable 10 and the W0 row in Status below |
 | Everything outstanding (checklist) | [`docs/AKPONORA_ROADMAP.md`](docs/AKPONORA_ROADMAP.md) |
 
 **Company:** AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `9341455406194328`, production).
@@ -24,7 +22,7 @@
 ## Non-negotiables
 
 1. **Never delete** QBO products or historical sales receipts.
-2. **Never bulk-inactivate** legacy Inventory items: inactivation zeros qty and posts value to COGS/Shrinkage. `qbo_inv_manager.py inactivate-all` is forbidden on Company A.
+2. **Never bulk-inactivate** legacy Inventory items: inactivation zeros qty and posts value to COGS/Shrinkage. (The old `qbo_inv_manager.py` that could do it was removed 5 Oct 2026.)
 3. **Never patch QtyOnHand** on legacy items "to match EPOS". **Never post `InventoryAdjustment`** on the sales/sync path. After go-live the only allowed legacy adjustment is qty → 0 offset to `300150` (W10, per-batch dry-run + chat yes).
 4. **Never import a catalogue onto existing QBO names**, and never create items with default qty (January's importer used qty 10).
 5. **Product identity = EPOS Product ID**, then SKU, then approved unique exact name. **Never barcodes.** Never infer pack size from a trailing `*N`. Use the approved sale multiplier (= what EPOS deducts).
@@ -58,7 +56,7 @@
 
 ## Status (2 Oct 2026) — LIVE
 
-The cutover is done. Details and receipts: [`docs/AKPONORA_CUTOVER_LOG.md`](docs/AKPONORA_CUTOVER_LOG.md). Day-to-day running: [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md).
+The cutover is done (the cutover log was removed 5 Oct 2026; in git history). Day-to-day running: [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md).
 
 | ID | What | Status |
 | --- | --- | --- |
@@ -73,7 +71,7 @@ The cutover is done. Details and receipts: [`docs/AKPONORA_CUTOVER_LOG.md`](docs
 | W9 | Company A daily automation on the server | **On since 3 Oct 2026.** `code_scripts/akponora_ops/daily_run.py`, run by the portal schedule worker (`scheduler` container, "Nora daily routine" schedule) at 18:00 Lagos: products → bills → sales → item check → stock → Undeposited Funds deposits. Status: [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md); setup: [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
 | W10 | Safe legacy inactivation | After W9 is stable |
 
-### Being built now (2 Oct) — `code_scripts/akponora_ops/`
+### Daily tools — `code_scripts/akponora_ops/`
 
 | Job | What | Writes |
 | --- | --- | --- |
@@ -94,13 +92,13 @@ Open items:
 - 492 final NonInventory products. The owner may later turn frozen food, eggs and rice into tracked EPOS masters (one master per family in grams/each, children deduct); any such EPOS change requires a fresh pull and map rebuild before posting.
 - Pack multipliers are no longer inferred from blank `VolumeOfSale`: all 2,212 non-owner products were checked against EPOS Master Products evidence. Five name-suffix and 14 cost-ratio disagreements remain flagged for review, but the map follows EPOS and the 1 Oct stock proof is 100% for comparable families.
 - Staff questions: Ernest's 19 Sep stock adds (deliveries or recounts?), and duplicate POs `3828`/`3829`/`3855`/`3861`.
-- Undeposited Funds is ₦0 through 24 Sep. Receipts posted from 25 Sep on land in `100900` and need depositing by the same till-sheet method (`akponora_cutover/uf_*`).
+- Undeposited Funds is ₦0 through 24 Sep. Receipts posted from 25 Sep on land in `100900` and need depositing by the same till-sheet method (`akponora_ops/uf_deposits`, daily routine step `uf`).
 
 ---
 
 ## Accounting rules
 
-- **Through September (periodic):** `opening stock + purchases − closing count = COGS`. The September close is one journal set (see runbook):
+- **Through September (periodic):** `opening stock + purchases − closing count = COGS`. The September close is one journal set (done; JE 76552–76554):
   - IA `77` to the 30 Sep EPOS value;
   - zero every 120xxx sub-account into the matching 200xxx (this clears the GPFH invoice COGS);
   - a GRNI accrual for unbilled September POs: post-16-Sep receipts to COGS, pre-reset receipts against `300150`, ex-tax; possible-duplicate POs excluded.
@@ -114,7 +112,6 @@ Open items:
 
 | Trap | Guard |
 | --- | --- |
-| Importer default QtyOnHand 10 | `qbo_inv_manager.py` default 0; live Company A import disabled |
 | Sales upload creating Inventory | `create_inventory_item` refused for Company A / conversion mode |
 | `auto_fix_wrong_type_items` | Must stay `false` for Company A |
 | Conversion flag off | Recreates legacy FIFO COGS. Never set false |

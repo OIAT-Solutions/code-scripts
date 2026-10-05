@@ -1,6 +1,5 @@
 
 {% load static %}
-{{ categories_by_company|json_script:"inventory-categories-by-company" }}
 <script>
     function runTriggerForm() {
         return {
@@ -15,20 +14,6 @@
                     return `This will run for ${scopeText} using one specific target date.`;
                 }
                 return `This will run for ${scopeText} across a date range.`;
-            },
-        };
-    }
-
-    function inventoryForm() {
-        const dataEl = document.getElementById("inventory-categories-by-company");
-        return {
-            companyKey: "",
-            category: "",
-            categoriesByCompany: dataEl ? JSON.parse(dataEl.textContent) : {},
-            get availableCategories() {
-                if (!this.companyKey) return [];
-                const list = this.categoriesByCompany[this.companyKey];
-                return Array.isArray(list) ? list : [];
             },
         };
     }

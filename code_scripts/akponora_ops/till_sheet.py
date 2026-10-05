@@ -22,7 +22,7 @@ Each day is a block in columns A:B::
 ``parse_rows`` turns the A:B rows of one tab into a list of day dicts. It is fed either by the
 Google Sheets API (``GoogleSheetSource``, read-only service account) or by an ``.xlsx``
 download (``XlsxSheetSource``); both give the same rows, so both give the same days. The
-26 Sep 2026 allocation (``akponora_cutover/uf_allocation_draft``) uses the same parser.
+26 Sep 2026 allocation (removed one-off tool, in git history) used the same parser.
 
 No HTTP happens at import time; the Google client libraries are imported only when a live
 read is made.

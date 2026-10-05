@@ -2,7 +2,7 @@
 
 Realm 9341455406194328 (production). Moves each business day's Company A SalesReceipts out of
 Undeposited Funds (``100900``, QBO Id 72) into the banks the till sheet says the money went to,
-by the method used on 26 Sep 2026 for 1 Jan-24 Sep (``akponora_cutover/archive/uf_reverse_and_allocate``):
+by the method used on 26 Sep 2026 for 1 Jan-24 Sep (``uf_reverse_and_allocate``, removed 5 Oct 2026; in git history):
 "deposits follow the receipts; the mix follows the sheet".
 
 Days are independent (owner, 3 Oct 2026). Every run looks at each business day from the floor
