@@ -17,6 +17,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 from .models import PortalReviewAction, RunJob
 from .services import attention, attention_actions
 from .views_company_a import _shell_context
+from .views_workspace import recheck_running
 
 SALT = "company-a-review-confirmation"
 ITEM_ACTIONS = {"approve", "skip", "exclude", "preview", "routine", "repeat_ok"}
@@ -60,7 +61,8 @@ def inbox(request):
     for record in recent:
         record.action_label = ACTION_LABELS.get(record.action, record.action.title())
     context.update(items=items, errors=errors, blockers=attention.blockers(), recent_actions=recent,
-                   can_approve=permission(request.user, "approve"), can_run=permission(request.user, "daily"))
+                   can_approve=permission(request.user, "approve"), can_run=permission(request.user, "daily"),
+                   can_refresh=request.user.has_perm("epos_qbo.can_trigger_runs"), rechecking=recheck_running())
     return render(request, "epos_qbo/attention.html", context)
 
 

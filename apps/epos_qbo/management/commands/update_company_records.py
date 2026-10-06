@@ -36,7 +36,8 @@ class Command(BaseCommand):
         elif code:
             raise CommandError("The update did not finish. The previous records stay on the page. See the log above.")
         else:
-            self.stdout.write("Stock check saved." if action == "stock" else "Deposit plan saved. Nothing was banked.")
+            self.stdout.write({"stock": "Stock check saved.", "recheck": "Bills and banking re-checked. Nothing was posted."}
+                              .get(action, "Deposit plan saved. Nothing was banked."))
 
     def deposit_status(self, job, cmd):
         folder = records.read_root() / str(job.id)

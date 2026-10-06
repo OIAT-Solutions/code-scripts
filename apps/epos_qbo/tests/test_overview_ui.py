@@ -824,7 +824,7 @@ class OverviewUITemplateTests(TestCase):
         html = response.content.decode("utf-8")
         self.assertIn("Confirmed sales", html)
         self.assertIn("Companies", html)
-        self.assertIn("Days not confirmed", html)
+        self.assertNotIn("Days not confirmed", html)
         self.assertNotIn("Live Log", html)
         self.assertNotIn("Run Reliability", html)
 
@@ -922,6 +922,6 @@ class OverviewUITemplateTests(TestCase):
         html = response.content.decode("utf-8")
         self.assertIn("Confirmed sales", html)
         self.assertIn("Open tasks", html)
-        self.assertIn("Days not confirmed", html)
+        self.assertNotIn("Days not confirmed", html)
         self.assertNotIn("Avg Runtime", html)
         self.assertNotIn("Metrics are based on Target Date:", html)

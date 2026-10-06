@@ -52,6 +52,7 @@ def _targets(state_root: Path) -> list[tuple[Path, int, str]]:
         (ops / "exports", WORKING_DAYS, "files"),
         (ops / "outputs", WORKING_DAYS, "files"),
         (state_root / "ops" / "company_a" / "daily", EVIDENCE_DAYS, "day_dirs"),  # daily-run evidence
+        (state_root / "ops" / "company_a" / "portal_reads", WORKING_DAYS, "files"),  # portal re-checks / re-plans
     ]
 
 

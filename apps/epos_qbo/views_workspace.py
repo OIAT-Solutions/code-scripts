@@ -42,6 +42,31 @@ def update(request, company_key):
     return redirect(reverse("epos_qbo:company-detail", args=[company_key]) + "?tab=" + tab + suffix)
 
 
+def recheck_running() -> bool:
+    return RunJob.objects.filter(scope=RunJob.SCOPE_WORKSPACE_READ, company_key="company_a",
+                                 status__in=[RunJob.STATUS_QUEUED, RunJob.STATUS_RUNNING],
+                                 inventory_options_json__action="recheck").exists()
+
+
+@login_required
+@permission_required("epos_qbo.can_trigger_runs", raise_exception=True)
+@require_POST
+def attention_refresh(request):
+    """Needs your attention -> Refresh: queue a read-only re-check of bills and banking (posts nothing)."""
+    company = CompanyConfigRecord.objects.filter(company_key="company_a", is_active=True).first()
+    if company is not None:
+        with transaction.atomic():
+            CompanyConfigRecord.objects.select_for_update().get(pk=company.pk)
+            if recheck_running():
+                messages.info(request, "Already checking. Reload this page in a few minutes.")
+            else:
+                RunJob.objects.create(scope=RunJob.SCOPE_WORKSPACE_READ, company_key="company_a", requested_by=request.user,
+                                      inventory_options_json={"action": "recheck", "day": "", "mode": ""})
+                messages.success(request, "Checking bills and banking again. Nothing is posted. "
+                                          "Reload this page in a few minutes to see the result.")
+    return redirect(reverse("epos_qbo:attention"))
+
+
 @login_required
 @permission_required("epos_qbo.can_manage_portal_settings", raise_exception=True)
 @require_POST

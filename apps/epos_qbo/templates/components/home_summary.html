@@ -4,10 +4,9 @@
 <div role="alert" class="rounded-xl border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20 p-5 flex flex-wrap items-center justify-between gap-4">
 <div class="min-w-0 flex-1"><p class="font-semibold text-red-900 dark:text-red-100">{{ banner.company }} needs attention</p><p class="text-sm leading-relaxed text-red-800 dark:text-red-200 mt-1">{{ banner.reason }}</p></div><a href="{{ banner.url }}" class="btn btn-danger">{{ banner.action_label }}</a>
 </div>{% endfor %}
-<div class="grid gap-4 sm:grid-cols-3">
+<div class="grid gap-4 sm:grid-cols-2">
 <section class="portal-panel p-6"><p class="text-sm text-slate-500 dark:text-slate-400">Confirmed sales</p><p class="text-2xl font-semibold tracking-tight mt-3 tabular-nums">{{ home_sales }}</p><p class="portal-muted mt-2">For {{ home_expected|date:"j F Y" }} · {{ home_confirmed_count }} of {{ home_company_total }} companies confirmed</p></section>
 <section class="portal-panel p-6"><p class="text-sm text-slate-500 dark:text-slate-400">Open tasks</p><p class="text-2xl font-semibold tracking-tight mt-3">{{ home_waiting }}</p><p class="portal-muted mt-2">Recorded review tasks for the companies shown</p><a href="{% url 'epos_qbo:attention' %}" class="portal-link inline-block mt-3">View tasks →</a></section>
-<section class="portal-panel p-6"><p class="text-sm text-slate-500 dark:text-slate-400">Days not confirmed</p><p class="text-2xl font-semibold tracking-tight mt-3">{{ home_missing }}</p><p class="portal-muted mt-2">Across the companies shown · checked over the last 30 days, or since 1 October for Akponora</p></section>
 </div>
 <section class="portal-panel overflow-hidden">
 <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex flex-wrap justify-between gap-3"><div><h2 class="text-lg font-semibold tracking-tight">Companies</h2><p class="portal-muted mt-1">Sales, tasks and upcoming work.</p></div><p class="portal-muted">Checked {% timezone "Africa/Lagos" %}{{ home_checked|date:"j F, H:i" }}{% endtimezone %} · Lagos time</p></div>

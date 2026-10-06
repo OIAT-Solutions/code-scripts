@@ -10,6 +10,7 @@ urlpatterns = [
     path("admin/", views_experience.admin_home, name="admin-home"),
     path("attention/", views_attention.inbox, name="attention"),
     path("attention/confirm/", views_attention.confirm, name="attention-confirm"),
+    path("attention/refresh/", views_workspace.attention_refresh, name="attention-refresh"),
     path("", views.overview, name="overview-root"),
     path("dashboard/", views.overview, name="overview"),
     path("dashboard/panels/", views.overview_panels, name="overview-panels"),

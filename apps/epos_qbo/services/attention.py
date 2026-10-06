@@ -74,7 +74,9 @@ def make_item(kind, identity, title, reason, run=None, relative="", approve=Fals
         paths = [folder / n for n in ("summary.json", "review.csv", "review_lines.csv", "plan.json", "payloads.jsonl", "results.csv", "apply_receipt.json", "post_summary.json")]
         paths += list(folder.glob("post_*.json"))
         item["paths"] = paths
-        item["details_url"] = reverse("epos_qbo:company-a-run-detail", args=[run.business_date, run.run_id])
+        item["details_url"] = (reverse("epos_qbo:company-detail", args=["company_a"]) + "?tab=purchases"
+                               if run.run_id == "run_portal_plan" else
+                               reverse("epos_qbo:company-a-run-detail", args=[run.business_date, run.run_id]))
     else:
         item["paths"] = [ops.posting_hold_path()]
         item["details_url"] = reverse("epos_qbo:company-a-runs")
@@ -268,6 +270,20 @@ def deposit_items(seen, errors):
 
 
 # ----------------------------------------------------------------------------- inbox
+def bill_plans(runs):
+    """(run, bills folder) newest first: daily-run plans and portal re-checks (``portal_reads/<job>/bills``)."""
+    found = [(run, run.path / "bills") for run in runs if not run.dry_run and (run.path / "bills/summary.json").is_file()]
+    root = ops.ops_root() / "portal_reads"
+    for summary in sorted(root.glob("*/bills/summary.json"))[-50:] if root.is_dir() else []:
+        folder = summary.parent
+        window = document(summary).get("window") or [""]
+        day = str(window[-1])
+        found.append((ops.Run(business_date=day if ops.DATE_RE.fullmatch(day) else "", run_id="run_portal_plan",
+                              path=folder.parent, dry_run=False, status="review"), folder))
+    return sorted(found, key=lambda rf: (rf[1] / "summary.json").stat().st_mtime, reverse=True)
+
+
+# ----------------------------------------------------------------------------- inbox
 def inbox():
     items, errors, seen = [], [], set()
     try:
@@ -299,12 +315,9 @@ def inbox():
             done_bills.update(r.get("PO") for r in rows(run.path / "bills/results.csv") if r.get("status") in {"POSTED", "ADOPTED", "RESOLVED"})
         except (OSError, ValueError, csv.Error):
             errors.append(f"Bill results for {run.business_date} could not be read; review the daily run.")
-    for run in runs:
-        if run.dry_run:
-            continue
+    for run, folder in bill_plans(runs):
         try:
-            # Each identity is shown from its newest plan, even when resolved.
-            folder = run.path / "bills"
+            # Each identity is shown from its newest plan (daily run or portal re-check), even when resolved.
             if (folder / "summary.json").is_file():
                 summary = document(folder / "summary.json")
                 done = {r.get("PO") for r in rows(folder / "results.csv") if r.get("status") in {"POSTED", "ADOPTED", "RESOLVED"}}
@@ -335,14 +348,21 @@ def inbox():
                                "repeat_ok": bool(row.get("Status") == "HOLD" and row.get("Reasons")
                                                  and all(r.strip().startswith("possible duplicate receipt")
                                                          for r in (row.get("Reasons") or "").split(" | ")))}))
-                for vendor in summary.get("vendor_actions", []):
-                    identity = str(vendor.get("supplier_id") or vendor.get("epos_name"))
-                    if ("vendor", identity) in seen:
-                        continue
-                    seen.add(("vendor", identity))
-                    item = vendor_item(run, vendor, mapped_vendors, excluded["vendor"])
-                    if item:
-                        items.append(item)
+        except (OSError, ValueError, KeyError, TypeError, csv.Error, ops.EvidenceError) as exc:
+            errors.append(f"Evidence for {run.business_date} could not be read. Open the daily run details. ({type(exc).__name__})")
+    for run in runs:
+        if run.dry_run:
+            continue
+        try:
+            summary = document(run.path / "bills/summary.json") if (run.path / "bills/summary.json").is_file() else {}
+            for vendor in summary.get("vendor_actions", []):
+                identity = str(vendor.get("supplier_id") or vendor.get("epos_name"))
+                if ("vendor", identity) in seen:
+                    continue
+                seen.add(("vendor", identity))
+                item = vendor_item(run, vendor, mapped_vendors, excluded["vendor"])
+                if item:
+                    items.append(item)
             folder = run.path / "catalogue"
             if (folder / "summary.json").is_file() and (folder / "plan.json").is_file():
                 items += product_items(run, folder, seen, mapped_products, excluded["product"], errors)

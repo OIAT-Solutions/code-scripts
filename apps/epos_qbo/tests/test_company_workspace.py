@@ -24,7 +24,7 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         return self.make_run(day, stamp, _summary(day, dry=dry, steps=[_step('sales', counts={'mode':'post','reconcile_status':'MATCH','qbo_total':amount})]))
 
     def test_tabs_follow_company_capabilities_and_settings_permission(self):
-        self.assertEqual(company_workspace.available_tabs(self.a, self.user), ['sales','purchases','products','suppliers','deposits'])
+        self.assertEqual(company_workspace.available_tabs(self.a, self.user), ['sales','purchases','products','deposits'])
         self.assertEqual(company_workspace.available_tabs(self.b, self.user), ['sales'])
         self.assertEqual(company_workspace.available_tabs(self.b, self.user, True), ['sales'])  # products: Akponora only
         self.user.user_permissions.add(Permission.objects.get(codename='can_edit_companies'))
@@ -79,26 +79,9 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertNotContains(response,'Bills posted: <strong>0')
         self.assertContains(self.client.get(reverse('epos_qbo:attention')),'id="item-'+decisions[0]['key']+'"')
 
-    def test_bill_hold_does_not_create_a_supplier_outcome(self):
-        self.make_run('2026-10-02','run_170000Z',_summary('2026-10-02',steps=[_step('bills',status='review',counts={'hold':1})]))
-        response=self.client.get(self.url,{'tab':'suppliers'})
-        self.assertEqual(response.context['company_step_activity'],[])
-
-    def test_bill_review_does_not_mark_completed_supplier_results_as_failed(self):
-        self.make_run('2026-10-02','run_170000Z',_summary('2026-10-02',steps=[_step('bills',status='review',counts={'hold':1,'vendors_created':1,'vendors_held':0})]))
-        response=self.client.get(self.url,{'tab':'suppliers'})
-        self.assertEqual(response.context['company_step_activity'][0]['label'],'Supplier results recorded')
-
-    def test_preview_step_never_displays_posted_bill_or_supplier_counts(self):
-        self.make_run('2026-10-02','run_170000Z_dry',_summary('2026-10-02',dry=True,steps=[_step('bills',counts={'posted':7,'vendors_created':8})]))
-        for tab in ('purchases','suppliers'):
-            response=self.client.get(self.url,{'tab':tab})
-            self.assertEqual(response.context['company_step_activity'][0]['facts'],[])
-            self.assertContains(response,'Nothing was posted')
-
     def test_all_workspace_reads_are_get_only_and_do_not_dispatch_tools(self):
         with mock.patch('apps.epos_qbo.services.job_runner.dispatch_next_queued_job') as dispatch, mock.patch('apps.epos_qbo.services.attention_actions.execute') as execute:
-            for tab in ('sales','purchases','products','suppliers','deposits'):
+            for tab in ('sales','purchases','products','deposits'):
                 self.assertEqual(self.client.get(self.url,{'tab':tab}).status_code,200)
             self.assertEqual(self.client.post(self.url).status_code,405)
             self.assertEqual(self.client.post(reverse('epos_qbo:companies-list')).status_code,405)
@@ -125,14 +108,12 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(len(response.context['company_sales_page']),2)
         self.assertContains(response,'tab=sales&amp;page=1')
 
-    def test_deposit_activity_shows_counts_instead_of_record_lists(self):
+    def test_banking_tab_has_no_recent_work_list(self):
         self.make_run('2026-10-02', 'run_170000Z', _summary('2026-10-02', steps=[
             _step('uf', counts={'deposited': [{'day': '2026-09-25', 'by_bank': {'77': '100'}}],
                                 'held': [{'day': '2026-09-26'}, {'day': '2026-09-27'}]})]))
         response = self.client.get(self.url, {'tab': 'deposits'})
-        facts = dict(response.context['company_step_activity'][0]['facts'])
-        self.assertEqual(facts['Days deposited'], 1)
-        self.assertEqual(facts['Days needing review'], 2)
+        self.assertNotContains(response, 'Recent work')
         self.assertNotContains(response, "'by_bank'")
 
     def test_unknown_step_does_not_look_finished(self):

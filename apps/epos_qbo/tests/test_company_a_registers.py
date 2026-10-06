@@ -5,6 +5,7 @@ Every tool call is mocked; nothing here reaches QuickBooks, EPOS or Google.
 import ast
 import csv
 import json
+import os
 import re
 from datetime import date
 from pathlib import Path
@@ -378,7 +379,7 @@ class SupplierTests(RegisterFixtures, TestCase):
         self.assertEqual(self.client.post(self.confirm, {"token": token, "reason": "r", "confirmed": "yes", "choice": "link:10"}).status_code, 302)
         self.assertEqual(PortalReviewAction.objects.get().payload["choice"], {"mode": "link", "link_to": "10"})
 
-    def test_supplier_dont_ask_again_and_tab(self):
+    def test_supplier_dont_ask_again(self):
         item = self.item("vendor")
         with mock.patch("apps.epos_qbo.services.attention_actions.subprocess.call", return_value=0) as call:
             attention_actions.execute(self.record(item, "exclude"))
@@ -387,18 +388,6 @@ class SupplierTests(RegisterFixtures, TestCase):
         self.assertEqual(cmd[cmd.index("--key") + 1], "Coca Cola Nig")
         self.write_exclusion("vendor", "COCA COLA")  # stored normalized, as the tool does
         self.assertFalse(any(i["kind"] == "vendor" for i in attention.inbox()[0]))
-        response = self.client.get(self.page, {"tab": "suppliers"})
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Nestle Nigeria")
-        self.assertContains(response, "Supplier · COCA COLA")
-        self.assertContains(response, "action=unexclude&amp;kind=vendor&amp;ex=COCA%20COLA")
-
-    def test_suppliers_tab_lists_held_supplier_actions(self):
-        response = self.client.get(self.page, {"tab": "suppliers"})
-        self.assertContains(response, "Check with QuickBooks")
-        self.assertContains(response, "Coca Cola Nig")
-        response = self.client.get(self.page, {"tab": "suppliers", "q": "nestle"})
-        self.assertEqual(len(response.context["supplier_page"].object_list), 1)
 
     def test_ask_again_removes_through_the_tool(self):
         self.write_exclusion("bill", "PO-9")
@@ -431,6 +420,42 @@ DAY_SUMMARY = {"day": "2026-10-01", "status": "READY", "state": "READY", "reason
 REVIEW = ("Day,Bank No,QBO Account Id,Kind,Sheet Lines,Sheet Amount,Target,Deposited,Receipts,Deposit DocNumbers,Transfer Out,Transfer In,Final,Final - Target,Status\n"
           "2026-10-01,4000850527,77,card,1,60000.00,60000.00,0,5,,1500.00,0,0,0,NEW\n"
           "2026-10-01,1000,78,cash,1,40000.00,40000.00,0,3,,0,1500.00,0,0,NEW\n")
+
+
+class RefreshTests(RegisterFixtures, TestCase):
+    """Needs your attention -> Refresh: a read-only re-check whose newer plan replaces stale reasons."""
+    def setUp(self):
+        super().setUp()
+        self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02"), files={
+            "bills/summary.json": json.dumps({"payloads_sha256": "old", "window": ["2026-10-01", "2026-10-02"]}),
+            "bills/review.csv": "PO,EPOS Supplier,Status,Reasons,Warnings,Approve\n"
+                                "3976,UNCLE SAMS,HOLD,vendors.csv name differs - re-approve the row,,\n"})
+
+    def test_refresh_queues_one_read_only_recheck(self):
+        url = reverse("epos_qbo:attention-refresh")
+        self.assertRedirects(self.client.post(url), reverse("epos_qbo:attention"), fetch_redirect_response=False)
+        self.client.post(url)
+        jobs = RunJob.objects.filter(scope=RunJob.SCOPE_WORKSPACE_READ)
+        self.assertEqual(jobs.count(), 1)
+        self.assertEqual(jobs[0].inventory_options_json["action"], "recheck")
+        cmd = workspace_jobs.command("recheck", jobs[0].id)
+        self.assertEqual(cmd[1:3], ["-m", "code_scripts.akponora_ops.recheck"])
+        self.assertContains(self.client.get(reverse("epos_qbo:attention")), "Checking")
+        self.assertEqual(self.client.get(url).status_code, 405)
+
+    def test_newer_recheck_plan_replaces_the_stale_hold(self):
+        self.assertIn("re-approve the row", self.item("bill", "3976")["reason"])
+        folder = self.tmp / "ops/company_a/portal_reads/77/bills"
+        folder.mkdir(parents=True)
+        (folder / "summary.json").write_text(json.dumps({"payloads_sha256": "new", "window": ["2026-10-01", "2026-10-02"]}))
+        (folder / "review.csv").write_text("PO,EPOS Supplier,Status,Reasons,Warnings,Approve\n3976,UNCLE SAMS,READY,,,\n")
+        later = (self.tmp / "ops/company_a/daily").stat().st_mtime + 60
+        os.utime(folder / "summary.json", (later, later))
+        item = self.item("bill", "3976")
+        self.assertEqual(item["extra"]["sha"], "new")
+        self.assertTrue(item["approve"])
+        self.assertIn("tab=purchases", item["details_url"])
+        self.assertEqual(attention_actions._folder(item), folder.resolve())
 
 
 class DepositTests(RegisterFixtures, TestCase):
@@ -580,7 +605,7 @@ class DepositTests(RegisterFixtures, TestCase):
 # --------------------------------------------------------------------------- no QuickBooks from views
 class NoQuickBooksFromViewsTests(RegisterFixtures, TestCase):
     MODULES = ("views_attention.py", "views_workspace.py", "services/products.py", "services/deposits.py",
-               "services/suppliers.py", "services/exclusions.py", "services/workspace_jobs.py")
+               "services/exclusions.py", "services/workspace_jobs.py")
 
     def test_view_and_register_modules_never_reference_quickbooks_clients(self):
         root = Path(attention.__file__).resolve().parents[1]
