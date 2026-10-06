@@ -134,7 +134,7 @@ def collect(folder, from_date, through_date, *, reader=None):
     if start < date(2026, 10, 1) or not 0 <= (end - start).days < 7:
         raise ValueError("Capture windows must be from October onward and at most seven days")
     if reader is None:
-        from code_scripts.scripts.akponora_cutover.stock_bridge import scrape_adjustments
+        from code_scripts.akponora_ops.epos_adjustments import scrape_adjustments
         reader = scrape_adjustments
     raw = folder / datetime.now(timezone.utc).strftime("capture_%Y%m%dT%H%M%S_%fZ")
     raw.mkdir(parents=True, exist_ok=False)

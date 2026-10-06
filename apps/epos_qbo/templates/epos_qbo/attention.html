@@ -16,6 +16,7 @@
 <h2 class="font-semibold break-words">{{ item.title }}</h2>
 <p class="text-sm mt-2 break-words">{{ item.reason }}</p>
 {% if item.kind == 'stock_movement' %}<p class="portal-muted mt-2">EPOS {{ item.extra.event.transfer_id }} · {{ item.extra.event.occurred_at_epos }} · {{ item.extra.event.staff }} · Quantity change: {{ item.extra.event.canonical_qty_change|default_if_none:'Needs unit review' }}</p>{% endif %}
+{% if item.kind == 'stock_movement' %}<p class="text-sm mt-2">Delivery: check the supplier invoice and PO before recording a bill. Count correction or loss: verify the count and use a separately approved stock correction. Do not record the same delivery twice.</p>{% for hold in item.extra.event.holds %}<p class="text-sm mt-2 text-amber-800 dark:text-amber-300">{{ hold }}</p>{% endfor %}{% endif %}
 {% if item.kind == 'vendor' and item.extra.check %}<p class="text-sm mt-2 {% if item.extra.check.ok %}text-emerald-800 dark:text-emerald-300{% else %}text-amber-800 dark:text-amber-300{% endif %}">{% if item.extra.check.ok %}Checked with QuickBooks: ready to approve.{% elif item.extra.check.result.problems %}QuickBooks check found a problem: {{ item.extra.check.result.problems|join:'; ' }}{% else %}The last QuickBooks check did not finish. Check again.{% endif %}</p>{% endif %}
 <div class="flex flex-wrap items-center gap-3 mt-4">
 {% if can_approve and item.kind == 'stock_movement' %}

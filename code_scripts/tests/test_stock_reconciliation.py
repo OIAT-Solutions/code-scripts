@@ -28,6 +28,7 @@ class ReconciliationTests(unittest.TestCase):
         r = investigate(self.snapshot, self.opening, self.exclusion)
         self.assertEqual(r["summary"]["GAP_EQUALS_EXCLUDED_OPENING"], 1)
         self.assertFalse(r["financial_writes"])
+        self.assertIn("deliberately left out", r["rows"][0]["accounting_notes"][0])
 
     def test_pending_purchase_kept_alongside_opening_and_timing(self):
         self.row["likely_timing"] = True
@@ -96,6 +97,10 @@ class ReconciliationTests(unittest.TestCase):
 
 
 class MovementTests(unittest.TestCase):
+    def test_live_reader_is_available_in_active_package(self):
+        from code_scripts.akponora_ops.epos_adjustments import scrape_adjustments
+        self.assertTrue(callable(scrape_adjustments))
+
     def setUp(self):
         self.catalogue = {"1": {"Name": "Master", "IsStockTracked": True, "VolumeOfSale": 12}}
         self.mapping = [{"EPOS Product ID": "1", "Review Status": "Approved", "Target QBO SKU": "AKP-1",

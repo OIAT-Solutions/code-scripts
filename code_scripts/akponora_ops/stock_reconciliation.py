@@ -42,6 +42,23 @@ def unique(rows, field):
     return indexed
 
 
+def accounting_notes(clues):
+    notes = []
+    if "DELIBERATELY_EXCLUDED_OPENING_REQUIRES_EVIDENCE" in clues:
+        notes.append("This stock was deliberately left out at opening. An equal gap does not prove it was owned, usable stock. Keep it separate from October count variance; verify the opening quantity and original cost before any entry.")
+    if "UNPOSTED_PURCHASE_CANDIDATE" in clues:
+        notes.append("A purchase may still be missing. Check the supplier invoice and received PO, then record a genuine delivery as a bill. Do not also add that delivery through a stock adjustment.")
+    if "CAPTURED_EPOS_ADJUSTMENTS_REQUIRE_CLASSIFICATION" in clues:
+        notes.append("EPOS records a stock change. Ask whether it was a delivery, a corrected count or a loss. The stock-take label alone does not answer that question.")
+    if "NEGATIVE_EPOS_REQUIRES_COUNT" in clues:
+        notes.append("A negative balance is not a physical count. Check deliveries, pack deductions and the shelf count; do not use a negative number as the stock target.")
+    if "TIMING_HINT_NOT_QUANTITY_PROOF" in clues:
+        notes.append("Sales and stock were read at different times. Reconcile both systems to the same cutoff before treating this gap as a gain or loss.")
+    if not notes:
+        notes.append("Check the count and transaction history at one cutoff. Post only a supported difference, not the full live gap.")
+    return notes
+
+
 def investigate(snapshot, register, exclusions, bills=(), bill_lines=(), movements=None):
     if snapshot.get("company") != COMPANY:
         raise ValueError("Only company_a stock evidence is supported")
@@ -111,7 +128,8 @@ def investigate(snapshot, register, exclusions, bills=(), bill_lines=(), movemen
             "epos_adjustment_qty_through_posted_day": str(adjustment_qty),
             "epos_adjustment_refs": [e["transfer_id"] for e in adjustments],
             "pending_purchases": receipts, "clues": clues,
-            "next_step": "Review purchase and stock-movement history at a common cutoff; no adjustment authorised."})
+            "accounting_notes": accounting_notes(clues),
+            "next_step": "Reconcile transactions and verify the count at one cutoff before posting a correction."})
     result.sort(key=lambda r: ("NEGATIVE_QBO" not in r["clues"], r["sku"]))
     counts = Counter(c for r in result for c in r["clues"])
     body = {"schema_version": 1, "company": COMPANY, "snapshot_at": snapshot.get("generated_at"),
