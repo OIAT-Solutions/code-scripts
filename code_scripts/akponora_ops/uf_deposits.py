@@ -747,6 +747,11 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     if abs(diff) > tol:
         reasons.append(f"sheet total {naira(e['sheet_total'])} vs receipts {naira(e['receipts_total'])}: "
                        f"difference {naira(diff)} is over the tolerance {naira(tol)}")
+    elif diff > 0 and not rec["pending"] and not (
+            (acct := overage_account(ctx, s)) and fixed_overage_items(ctx, day, acct)):
+        # every receipt was banked before overage booking existed (sheet scaled to sales): leave that day as it was
+        warns.append(f"sheet total {naira(e['sheet_total'])} vs receipts {naira(e['receipts_total'])} "
+                     f"(within {naira(tol)}); banked before overage booking, banks follow the receipts")
     elif diff > 0:
         overage_acct = overage_account(ctx, s)
         if overage_acct is None:

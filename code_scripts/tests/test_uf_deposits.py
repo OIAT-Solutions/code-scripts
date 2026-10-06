@@ -549,6 +549,17 @@ class PostTests(NoNetwork):
         self.assertEqual(d["status"], ufd.READY, d["reasons"])
         return Path(d["dir"]), d["payloads_sha256"]
 
+    def test_day_banked_before_overage_booking_stays_done(self):
+        # 30 Sep - 3 Oct 2026: banked by the old rule (sheet N500 over, banks scaled to the receipts, no overage line)
+        fake = FakeQBO(DAY1_RECEIPTS)
+        old_allocate = ufd.allocate
+        with mock.patch.object(ufd, "allocate", lambda *a, overage=0: old_allocate(*a)):
+            day_dir, sha = self.ready_day(fake)
+        ufd.post_day(day_dir, client=client(fake, True), approval_ref="yes", expect_sha=sha)
+        d = self.plan(fake, google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.DONE, d["reasons"])
+        self.assertFalse(any(not ln.get("LinkedTxn") for dep in fake.deposits.values() for ln in dep["Line"]))
+
     def test_post_deposits_then_transfers_mv65_verified_and_rerun_is_idempotent(self):
         fake = FakeQBO(DAY1_RECEIPTS)
         day_dir, sha = self.ready_day(fake)
