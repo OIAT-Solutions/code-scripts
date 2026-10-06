@@ -315,15 +315,21 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(e["3969"]["status"], "READY")
         self.assertEqual(e["3969"]["warnings"], [])  # posts automatically
         self.assertEqual([r["po"] for r in summary["routine_repeats"]], ["3969"])
-        # a large repeat from a routine supplier still holds
+        # 6 Oct 2026 (Marvin): a routine supplier's large repeat (the weekly 40-loaf order) is noted, not held
         big = ("100", "COKE CAN*24", 600, 600, 4800.0, 5160.0)
-        _, _, e, _ = self.f.plan([order(3980, [big], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
-                                  order(3981, [big], received="2026-10-02T10:00:00", supplier="UNCLE SAM'S BAKERY")])
-        self.assertEqual(e["3981"]["status"], "HOLD")
-        rx.add("repeat_ok", "3981", reason="confirmed real order", added_by="owner", path=path)
-        _, _, e, _ = self.f.plan([order(3980, [big], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
-                                  order(3981, [big], received="2026-10-02T10:00:00", supplier="UNCLE SAM'S BAKERY")])
+        orders_big = [order(3980, [big], received="2026-10-01T10:00:00", supplier="UNCLE SAM'S BAKERY"),
+                      order(3981, [big], received="2026-10-02T10:00:00", supplier="UNCLE SAM'S BAKERY")]
+        _, summary, e, _ = self.f.plan(orders_big)
         self.assertEqual(e["3981"]["status"], "READY", e["3981"]["reasons"])
+        self.assertIn("3981", [r["po"] for r in summary["routine_repeats"]])
+        # ... while any other supplier's large repeat still holds until a person confirms it
+        other = [order(3982, [big], received="2026-10-01T10:00:00", supplier="NIGERIAN BOTTLING COMPANY"),
+                 order(3983, [big], received="2026-10-02T10:00:00", supplier="NIGERIAN BOTTLING COMPANY")]
+        _, _, e, _ = self.f.plan(other)
+        self.assertEqual(e["3983"]["status"], "HOLD")
+        rx.add("repeat_ok", "3983", reason="confirmed real order", added_by="owner", path=path)
+        _, _, e, _ = self.f.plan(other)
+        self.assertEqual(e["3983"]["status"], "READY", e["3983"]["reasons"])
 
     def test_receipt_on_non_master_child_holds(self):
         _, _, e, _ = self.f.plan([order(3977, [("101", "COKE CAN", 24, 24, 200.0, 215.0)])])

@@ -39,7 +39,7 @@ BUTTONS = {
     ("approve", "product"): "Approve product", ("approve", "vendor"): "Approve supplier",
     ("approve", "bill"): "Approve bill", ("approve", "deposit"): "Approve deposit", ("approve", "hold"): "Clear hold",
     ("preview", "vendor"): "Check with QuickBooks", ("skip", "bill"): "Skip for this plan",
-    ("routine", "bill"): "Approve · routine supplier", ("repeat_ok", "bill"): "Approve repeat order", ("exclude", "bill"): "Handled outside, never post",
+    ("routine", "bill"): "Approve and mark supplier as routine", ("repeat_ok", "bill"): "Approve this order", ("exclude", "bill"): "Handled outside, never post",
 }
 
 

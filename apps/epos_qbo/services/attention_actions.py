@@ -175,6 +175,9 @@ def execute(action_record):
         rc = subprocess.call(exclusion_command("routine_repeat", supplier, ref, reason or "routine repeat orders"))
         if rc != 0:
             return rc
+        if item["extra"]["row"].get("Status") == "HOLD":
+            # A held repeat: confirmed as a real order; it posts in the next daily run (like Approve repeat order).
+            return subprocess.call(exclusion_command("repeat_ok", item["identity"], ref, reason or "routine supplier"))
         action = "approve"  # then post this bill exactly like Approve bill (the record keeps "routine")
     if not item.get(action):
         raise ValueError("This action is no longer available for this item. Refresh the inbox.")

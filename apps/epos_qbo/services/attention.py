@@ -325,9 +325,12 @@ def inbox():
                         approve=row.get("Status") == "READY" and bool(summary.get("payloads_sha256")), skip=True, exclude=True,
                         extra={"row": row, "sha": summary.get("payloads_sha256", ""),
                                # Approve + add the supplier to the routine repeat orders list
-                               "routine": bool(row.get("Status") == "READY" and summary.get("payloads_sha256")
-                                               and "possible duplicate" in (row.get("Warnings") or "")
-                                               and (row.get("EPOS Supplier") or "").strip()),
+                               "routine": bool((row.get("EPOS Supplier") or "").strip() and (
+                                   (row.get("Status") == "READY" and summary.get("payloads_sha256")
+                                    and "possible duplicate" in (row.get("Warnings") or ""))
+                                   or (row.get("Status") == "HOLD" and row.get("Reasons")
+                                       and all(r.strip().startswith("possible duplicate receipt")
+                                               for r in (row.get("Reasons") or "").split(" | "))))),
                                # A held repeat over the threshold: a person can confirm it is a real order
                                "repeat_ok": bool(row.get("Status") == "HOLD" and row.get("Reasons")
                                                  and all(r.strip().startswith("possible duplicate receipt")

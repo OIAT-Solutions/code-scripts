@@ -804,13 +804,14 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
         if holds and exclusions is not None and exclusions.describe("repeat_ok", po["ref"]):
             e["routine_repeat"] = holds  # confirmed a real order in the portal: noted, not held
             holds = []
-        reasons += holds
         routine = (exclusions.describe("routine_repeat", po["supplier"])
-                   if dwarns and exclusions is not None and clean(po["supplier"]) else "")
+                   if (holds or dwarns) and exclusions is not None and clean(po["supplier"]) else "")
         if routine:
-            # A routine supplier (owner's "routine repeat orders" list): the repeat is noted, not blocking.
-            e["routine_repeat"] = dwarns
+            # A routine supplier (owner's "routine repeat orders" list, e.g. Uncle Sam's weekly bread): a repeat
+            # of any size is noted, not held (Marvin, 6 Oct 2026).
+            e["routine_repeat"] = holds + dwarns
         else:
+            reasons += holds
             warns += dwarns
         if reasons:
             e["status"] = "HOLD"

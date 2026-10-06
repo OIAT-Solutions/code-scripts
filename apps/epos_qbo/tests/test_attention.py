@@ -214,7 +214,7 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertTrue(bill["extra"]["routine"])
         self.assertFalse(next(i for i in items if i["identity"] == "124")["extra"]["routine"])
         page = self.client.get(reverse("epos_qbo:attention"))
-        self.assertContains(page, "Approve · routine supplier")
+        self.assertContains(page, "Approve and mark supplier as routine")
         self.assertContains(page, "Handled outside, never post")
         response = self.client.get(self.url, {"key": bill["key"], "action": "routine"})
         self.assertEqual(response.status_code, 200)
@@ -243,7 +243,7 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         held = next(i for i in items if i["identity"] == "3976")
         self.assertTrue(held["extra"]["repeat_ok"])
         self.assertFalse(next(i for i in items if i["identity"] == "124")["extra"]["repeat_ok"])
-        self.assertContains(self.client.get(reverse("epos_qbo:attention")), "Approve repeat order")
+        self.assertContains(self.client.get(reverse("epos_qbo:attention")), "Approve this order")
         self.assertContains(self.client.get(self.url, {"key": held["key"], "action": "repeat_ok"}), "real, separate order")
         job = RunJob.objects.create(scope=RunJob.SCOPE_PORTAL_REVIEW, status=RunJob.STATUS_RUNNING)
         record = PortalReviewAction.objects.create(job=job, actor="reviewer", action="repeat_ok", reason="daily bread",
@@ -254,6 +254,16 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(cmd[cmd.index("--kind") + 1], "repeat_ok")
         self.assertEqual(cmd[cmd.index("--key") + 1], "3976")
         self.assertEqual(call.call_count, 1)  # no bill is posted from the portal: the next run posts it
+        # 6 Oct 2026: a held repeat can also mark the supplier as routine (this PO + all its future repeats)
+        self.assertTrue(held["extra"]["routine"])
+        self.assertNotContains(self.client.get(reverse("epos_qbo:attention")), "This can&#x27;t be approved as it is")
+        job2 = RunJob.objects.create(scope=RunJob.SCOPE_PORTAL_REVIEW, status=RunJob.STATUS_RUNNING)
+        record = PortalReviewAction.objects.create(job=job2, actor="reviewer", action="routine", reason="weekly bread",
+                                                   confirmation_id="rep2", payload={"key": held["key"], "snapshot": held["snapshot"]})
+        with mock.patch("apps.epos_qbo.services.attention_actions.subprocess.call", return_value=0) as call:
+            self.assertEqual(attention_actions.execute(record), 0)
+        kinds = [c[0][0][c[0][0].index("--kind") + 1] for c in call.call_args_list]
+        self.assertEqual(kinds, ["routine_repeat", "repeat_ok"])  # still no bill posted from the portal
 
     def test_banners_use_the_same_confirmation_rule_as_home(self):
         from apps.epos_qbo.models import RunArtifact
