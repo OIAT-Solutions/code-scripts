@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views, views_company_a, views_attention, views_experience, views_workspace, webhooks
+from . import views, views_run, views_company_a, views_attention, views_experience, views_workspace, webhooks
 
 app_name = "epos_qbo"
 
@@ -36,6 +36,7 @@ urlpatterns = [
         name="company-a-evidence",
     ),
     path("logs/", views_experience.daily_activity, name="logs"),
+    path("runs/review/", views_run.run_review, name="run-review"),
     path("schedules/", views.schedules_page, name="schedules"),
     path("schedules/status/", views.schedule_status_api, name="schedule-status"),
     path("schedules/create", views.schedule_create, name="schedule-create"),

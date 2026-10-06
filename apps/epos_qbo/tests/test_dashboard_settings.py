@@ -82,20 +82,6 @@ class DashboardSettingsTests(TestCase):
         self.assertEqual(posted.cleaned_data["parallel"], 4)
         self.assertEqual(posted.cleaned_data["stagger_seconds"], 9)
 
-    @override_settings(
-        OIAT_DASHBOARD_DEFAULT_PARALLEL=5,
-        OIAT_DASHBOARD_DEFAULT_STAGGER_SECONDS=6,
-    )
-    def test_runs_page_renders_settings_defaults(self):
-        perm = Permission.objects.get(codename="can_trigger_runs")
-        self.user.user_permissions.add(perm)
-
-        response = self.client.get(reverse("epos_qbo:runs"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn('name="parallel" min="1" value="5"', html)
-        self.assertIn('name="stagger_seconds" min="0" value="6"', html)
-
     @override_settings(OIAT_DASHBOARD_STALE_HOURS_WARNING=2)
     def test_stale_hours_warning_respects_setting(self):
         run = RunJob.objects.create(

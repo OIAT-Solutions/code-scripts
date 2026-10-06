@@ -18,6 +18,6 @@
 <label class="block text-sm font-medium">Reason: what you checked <span class="font-normal text-slate-500">(required, short)</span><textarea required name="reason" rows="2" maxlength="{{ reason_max }}" class="portal-input mt-2"></textarea></label>
 <p class="portal-muted">Recorded automatically as: <strong>{{ approval_preview }}</strong> (the time is set when you confirm).</p>
 <label class="flex items-start gap-3 text-sm"><input required type="checkbox" name="confirmed" value="yes" class="mt-1"><span>I checked the facts above and want to go ahead.</span></label>
-<div class="flex flex-wrap gap-3"><button type="submit" class="btn btn-primary">{{ button }}</button><a class="btn btn-secondary" href="{% url 'epos_qbo:attention' %}">Cancel</a></div>
+<div class="flex flex-wrap gap-3"><button type="submit" class="btn btn-primary">{{ button }}</button><a class="btn btn-secondary" href="{% if action == 'daily' %}{% url 'epos_qbo:runs' %}{% else %}{% url 'epos_qbo:attention' %}{% endif %}">Cancel</a></div>
 </form></div>
 {% endblock %}

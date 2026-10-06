@@ -2376,7 +2376,6 @@ def runs_list(request):
         "active_run_ids": active_run_ids_list,
         "active_run_ids_json": json.dumps(active_run_ids_list),
         "company_a_recent_runs": company_a_views.safe_recent_runs(5),
-        "daily_step_choices": company_a_views.ops.DAILY_STEP_CHOICES,
     }
     context.update(_nav_context())
     context.update(
@@ -2414,6 +2413,8 @@ def runs_list(request):
         daily_query=urlencode(filters), daily_filter_error=filter_error, daily_status_filter=status_filter, other_activity=other_activity(selected))
     context["breadcrumbs"] = [{"label": "Home", "url": reverse("epos_qbo:overview")}, {"label": "Daily runs", "url": None}]
     context["back_label"] = "Home"
+    from .views_run import dialog_context
+    context.update(dialog_context(request))
     return render(request, "epos_qbo/runs.html", context)
 
 
