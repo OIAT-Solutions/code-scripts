@@ -74,7 +74,13 @@ def is_goldplates(name: str) -> bool:
 def customer_key(row: dict) -> str:
     if is_goldplates(row.get("Customer Full Name")):
         return GOLDPLATES_QBO
-    return str(row.get("Customer ID") or "").strip() or "NOID-" + norm_name(row.get("Customer Full Name")).replace(" ", "")[:12]
+    return epos_id(row.get("Customer ID")) or "NOID-" + norm_name(row.get("Customer Full Name")).replace(" ", "")[:12]
+
+
+def epos_id(value) -> str:
+    """EPOS customer id as EPOS shows it: '389764', never the float spelling '389764.0' (5 Oct 2026 run)."""
+    text = str(value or "").strip()
+    return re.sub(r"^(\d+)\.0+$", r"\1", text)
 
 
 def doc_number(day: str, key: str) -> str:
@@ -86,7 +92,8 @@ def load_mapping(path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     with path.open(newline="", encoding="utf-8") as fh:
-        return {r["epos_customer_id"]: r for r in csv.DictReader(fh) if r.get("epos_customer_id")}
+        return {epos_id(r["epos_customer_id"]): {**r, "epos_customer_id": epos_id(r["epos_customer_id"])}
+                for r in csv.DictReader(fh) if r.get("epos_customer_id")}
 
 
 def save_mapping(path: Path, mapping: dict[str, dict]) -> None:
@@ -221,6 +228,9 @@ def run(out: Path, *, business_day: str, client, write_client=None, dry_run: boo
                    "sales": len(set(rows["Date/Time"])), "times": sorted({t[-8:-3] for t in rows["Date/Time"]})}
             try:
                 existing = client.query_all(f"select Id, TotalAmt from Invoice where DocNumber = '{doc}'", "Invoice")
+                if not existing and not key.startswith(("NOID-", GOLDPLATES_QBO)):  # posted under the float id spelling
+                    existing = client.query_all(f"select Id, TotalAmt from Invoice where DocNumber = '{doc_number(day, key + '.0')}'",
+                                                "Invoice")
                 lines, gross = invoice_lines(rows.drop(columns=["_key"]), day, config, registry)
                 epos_total = money(pd.to_numeric(rows["TOTAL Sales"], errors="coerce").fillna(0).sum())
                 inv.update(total=str(gross), lines=len(lines))

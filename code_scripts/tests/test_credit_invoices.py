@@ -134,6 +134,23 @@ class InvoiceTests(Base):
         self.assertEqual(len(self.qbo.posts), posts)
         self.assertTrue(all(i["status"] == ci.EXISTS for i in r["invoices"]))
 
+    def test_float_customer_ids_are_read_as_epos_shows_them(self):
+        self.assertEqual(ci.customer_key({"Customer ID": "389764.0", "Customer Full Name": "Mrs VERA AKPOREHA"}), "389764")
+        self.assertEqual(ci.customer_key({"Customer ID": " 390601 ", "Customer Full Name": "x"}), "390601")
+
+    def test_invoice_posted_under_the_float_id_is_not_posted_again(self):
+        orig = self.qbo.query_all
+
+        def query_all(sql, entity):
+            if entity == "Invoice" and "CR261005-389764.0'" in sql:
+                return [{"Id": "80642", "TotalAmt": 1}]
+            return orig(sql, entity)
+        self.qbo.query_all = query_all
+        r = self.run_ci(self.qbo)
+        by_doc = {i["doc"]: i for i in r["invoices"]}
+        self.assertEqual(by_doc["CR261005-389764"]["status"], ci.EXISTS)
+        self.assertFalse(any(b.get("DocNumber") == "CR261005-389764" for p, b in self.qbo.posts if p == "/invoice"))
+
     def test_plan_mode_posts_nothing(self):
         r = self.run_ci(self.qbo, post=False)
         self.assertEqual(self.qbo.posts, [])
