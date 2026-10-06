@@ -91,6 +91,34 @@ class FakeRunner:
 
 
 class DailyRunTests(unittest.TestCase):
+    def test_stock_movement_capture_opt_in_and_incomplete_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for enabled, incomplete in ((False, False), (True, False), (True, True)):
+                with self.subTest(enabled=enabled, incomplete=incomplete):
+                    calls = []
+                    def runner(cmd, *, log_path, env):
+                        calls.append(cmd)
+                        out = _out(cmd)
+                        if "stock_snapshot" in " ".join(cmd):
+                            report = {"sources": {"catalogue": {"path": "/fixture/catalogue"},
+                                                   "mapping": {"path": "/fixture/mapping"}}}
+                        else:
+                            report = {"events": [{"event_id": "test"}],
+                                      "errors": ["missing details"] if incomplete else []}
+                            self.assertIn("--capture-live", cmd)
+                            self.assertEqual(cmd[cmd.index("--from-date") + 1], "2026-10-03")
+                            self.assertEqual(cmd[cmd.index("--through-date") + 1], "2026-10-05")
+                        (out / "summary.json").write_text(json.dumps(report))
+                        return 0
+                    with mock.patch.object(dr, "_company_slack_env_key", return_value="SLACK_TEST"):
+                        run = dr.DailyRun("2026-10-05", root=Path(folder), runner=runner,
+                            env={"OIAT_COMPANY_A_STOCK_MOVEMENTS_ENABLED": "1" if enabled else "0"})
+                        result = dr.StepResult(name="stock", out=str(run.step_dir("stock")))
+                        run.step_stock(result)
+                    self.assertEqual(len(calls), 2 if enabled else 1)
+                    self.assertEqual(result.status, dr.FAILED if incomplete else dr.REVIEW if enabled else dr.OK)
+                    self.assertEqual(result.exit_code, 2 if incomplete else 0)
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

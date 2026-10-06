@@ -405,11 +405,38 @@ class DailyRun:
                       "latest": summary.get("latest", "")}
         if rc == 0:
             res.status = OK
+            if truthy(self.base_env.get("OIAT_COMPANY_A_STOCK_MOVEMENTS_ENABLED")):
+                self.stock_movement_review(res, summary)
         else:
             res.status = FAILED
             res.detail = (f"stock_snapshot exited {rc}"
                           + (f" ({summary['error'][:200]})" if summary.get("error") else "")
                           + f"; see {out / 'log.txt'}")
+
+    def stock_movement_review(self, res: StepResult, snapshot_summary: dict) -> None:
+        """Opt-in view-only detection. Activation needs owner approval; default is off."""
+        sources = snapshot_summary.get("sources") or {}
+        catalogue = (sources.get("catalogue") or {}).get("path")
+        mapping = (sources.get("mapping") or {}).get("path")
+        if not catalogue or not mapping:
+            res.status, res.detail = FAILED, "Stock movement check needs the stock snapshot's catalogue and mapping sources."
+            res.exit_code = 2
+            return
+        out = self.step_dir("movements")
+        start = max(date(2026, 10, 1), date.fromisoformat(self.date) - timedelta(days=2)).isoformat()
+        rc = self.run_step("movements", [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
+            "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
+            "--mapping", str(mapping), "--from-date", start, "--through-date", self.date, "--out", str(out)], out)
+        report = read_json(out / "summary.json", {}) or {}
+        events = report.get("events") or []
+        res.counts["movement_events"] = len(events)
+        res.counts["movement_capture_errors"] = len(report.get("errors") or [])
+        if rc != 0 or report.get("errors") or not report:
+            res.status, res.detail = FAILED, f"EPOS stock-movement capture incomplete; see {out / 'summary.json'}"
+            res.exit_code = rc or 2
+        elif events:
+            res.status = REVIEW
+            res.review.append(f"{len(events)} EPOS stock adjustment(s) need classification; no stock corrections posted.")
 
     def step_uf(self, res: StepResult) -> None:
         """Undeposited Funds deposits from the till sheet (uf_deposits ``scheduled``, in-process)."""

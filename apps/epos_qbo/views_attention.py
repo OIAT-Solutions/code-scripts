@@ -20,9 +20,10 @@ from .views_company_a import _shell_context
 from .views_workspace import recheck_running
 
 SALT = "company-a-review-confirmation"
-ITEM_ACTIONS = {"approve", "skip", "exclude", "preview", "routine", "repeat_ok"}
+ITEM_ACTIONS = {"approve", "skip", "exclude", "preview", "routine", "repeat_ok", "delivery", "recount", "loss"}
 REASON_MAX = 300
 ACTION_LABELS = {"approve": "Approved", "skip": "Skipped", "exclude": "Don't ask again", "unexclude": "Ask again",
+                 "delivery": "Recorded as delivery", "recount": "Recorded as count correction", "loss": "Recorded as loss",
                  "routine": "Approved as routine supplier", "repeat_ok": "Confirmed real repeat order",
                  "preview": "QuickBooks check", "daily": "Daily run"}
 
@@ -37,6 +38,8 @@ EXCLUDE_TEXT = {
                       "under ₦50,000 posts automatically and is only noted; a larger repeat still waits for you.",
 }
 BUTTONS = {
+    ("delivery", "stock_movement"): "Record as delivery", ("recount", "stock_movement"): "Record as count correction",
+    ("loss", "stock_movement"): "Record as loss",
     ("approve", "product"): "Approve product", ("approve", "vendor"): "Approve supplier",
     ("approve", "bill"): "Approve bill", ("approve", "deposit"): "Approve deposit", ("approve", "hold"): "Clear hold",
     ("preview", "vendor"): "Check with QuickBooks", ("skip", "bill"): "Skip for this plan",
@@ -69,7 +72,13 @@ def inbox(request):
 def item_facts(item):
     """Plain facts shown before confirming, so nobody has to open a file to decide."""
     extra, facts = item["extra"], []
-    if item["kind"] == "product":
+    if item["kind"] == "stock_movement":
+        event = extra["event"]
+        facts += [("EPOS adjustment", event["transfer_id"]), ("Recorded by", event["staff"]),
+                  ("EPOS display date", event["occurred_at_epos"]), ("Product", event["name"]),
+                  ("Quantity change in canonical units", str(event["canonical_qty_change"])),
+                  ("EPOS reason", event["epos_reason"])]
+    elif item["kind"] == "product":
         target = extra.get("target") or {}
         facts += [("EPOS product", f"{extra.get('name')} (EPOS {extra.get('pid')})"),
                   ("QuickBooks item", f"{target.get('name', '')} {('(' + target['sku'] + ')') if target.get('sku') else ''}".strip() or "Not set")]
@@ -115,6 +124,10 @@ def describe_check(check):
 
 def describe(action, item):
     kind = item["kind"]
+    if kind == "stock_movement":
+        return ("Record your explanation of this EPOS adjustment. Include the invoice, count sheet or loss record "
+                "reference in the reason. This records a classification only; it does not create a bill or "
+                "change stock in either system. The item remains open for the accounting follow-up.")
     if action == "exclude":
         return EXCLUDE_TEXT[kind]
     if action == "skip":
@@ -207,6 +220,8 @@ def confirm(request):
             data = {"key": item["key"], "snapshot": item["snapshot"], "title": item["title"], "kind": item["kind"],
                     "identity": item["identity"], "business_date": item["date"], "run_id": item["run"].run_id if item["run"] else "",
                     "relative": item["relative"], "tool_sha": item["extra"].get("sha", "")}
+            if item["kind"] == "stock_movement":
+                data["movement_sha"] = item["extra"]["event"]["evidence_sha256"]
             label = BUTTONS.get((action, item["kind"])) or ("Don't ask again" if action == "exclude" else "Skip for now" if action == "skip" else "Confirm")
             title, description, button, facts = f"{label} · {item['title']}", describe(action, item), label, item_facts(item)
     except ValueError as exc:

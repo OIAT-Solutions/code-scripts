@@ -98,4 +98,4 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | [ ] | 1–16 Sep cost of sales sits in equity via the 16 Sep reset; optional reclass to P&L | Accountant |
 | [ ] | July/August GPFH invoice COGS (~₦26.6M possibly overstated); review | Accountant |
 | [ ] | VAT on purchases: GRNI was accrued ex-tax; check the treatment when real bills arrive | Accountant |
-| [ ] | Month-end from October: QBO FIFO is primary; post only the verified variance between QBO item quantities/value and the EPOS count | Agent + Accountant |
+| [ ] | Count corrections from October: evidence investigation, movement capture and portal classification built locally 6 Oct (off; 106 tests). Count drafts cannot post. Remaining: PO matching, follow-up closure, sandbox-tested FIFO posting, signed count approval and deployment. See `AKPONORA_STOCK_RECONCILIATION.md` | Agent + Accountant |

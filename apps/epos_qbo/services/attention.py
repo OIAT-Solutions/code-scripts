@@ -284,6 +284,49 @@ def bill_plans(runs):
 
 
 # ----------------------------------------------------------------------------- inbox
+def stock_movement_items(runs, errors):
+    """Read captured movements only. Classification never authorises stock writes."""
+    reports = [(run, run.path / "movements/summary.json") for run in runs
+               if not run.dry_run and (run.path / "movements/summary.json").is_file()]
+    for path in (ops.ops_root() / "portal_reads").glob("*/movements/summary.json"):
+        reports.append((ops.Run(business_date="", run_id="run_portal_plan", path=path.parent.parent,
+                                dry_run=False, status="review"), path))
+    records = PortalReviewAction.objects.filter(action__in=("delivery", "recount", "loss"),
+        job__status=RunJob.STATUS_SUCCEEDED, finished_at__isnull=False).order_by("-created_at")
+    classified = {}
+    for record in records:
+        marker = (record.payload.get("identity"), record.payload.get("movement_sha"))
+        classified.setdefault(marker, record)
+    items, seen = [], set()
+    for run, path in sorted(reports, key=lambda pair: pair[1].stat().st_mtime, reverse=True):
+        try:
+            report = document(path)
+            if report.get("company") != "company_a":
+                raise ValueError("Wrong stock-movement company")
+            if report.get("errors"):
+                errors.append("EPOS stock-movement capture is incomplete. Review its report before correcting stock.")
+            for event in report.get("events", []):
+                identity = event["event_id"]
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                record = classified.get((identity, event["evidence_sha256"]))
+                reason = event["review_reason"]
+                if record:
+                    followup = {"delivery": "Purchase evidence and a bill are still required.",
+                        "recount": "A verified count and a separately approved correction are still required.",
+                        "loss": "Loss evidence and a separately approved correction are still required."}[record.action]
+                    reason = f"Recorded as {record.action} by {record.actor}. {followup}"
+                item = make_item("stock_movement", identity, f"Stock adjustment · {event['name']}",
+                    reason, run, "movements", extra={"event": event, "classification": record.action if record else ""})
+                item.update(delivery=True, recount=True, loss=True)
+                item["details_url"] = reverse("epos_qbo:company-detail", args=["company_a"]) + "?tab=products"
+                items.append(item)
+        except (OSError, ValueError, KeyError, TypeError, ops.EvidenceError):
+            errors.append("EPOS stock-movement evidence could not be read safely.")
+    return items
+
+
 def inbox():
     items, errors, seen = [], [], set()
     try:
@@ -307,6 +350,7 @@ def inbox():
         mapped_products, mapped_vendors = set(), []
         errors.append("The product or supplier lists could not be read. Review items may be out of date.")
     runs = ops.list_runs()
+    items += stock_movement_items(runs, errors)
     done_bills = set()
     for run in runs:
         if run.dry_run:

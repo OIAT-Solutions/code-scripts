@@ -164,6 +164,15 @@ def execute(action_record):
         return subprocess.call(exclusion_command("product", data["exclusion_key"], ref, reason))
     item = current_item(data["key"], data["snapshot"])
     action = action_record.action
+    if item["kind"] == "stock_movement":
+        if action not in {"delivery", "recount", "loss"} or not item.get(action):
+            raise ValueError("Choose a supported stock-movement classification")
+        if data.get("movement_sha") != item["extra"]["event"]["evidence_sha256"]:
+            raise ReviewChanged("The stock movement changed. Review it again.")
+        # PortalReviewAction is the audit record. No financial tool is called.
+        print(json.dumps({"status": "classified", "event_id": item["identity"], "classification": action,
+                          "financial_writes": False, "accounting_followup_required": True}))
+        return 0
     if action == "repeat_ok":
         if item["kind"] != "bill" or not item["extra"].get("repeat_ok"):
             raise ValueError("This action is no longer available for this item. Refresh the inbox.")

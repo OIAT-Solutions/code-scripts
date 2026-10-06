@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-04 ~19:15 New York by Claude.
+**Last updated:** 2026-10-06 by Codex (local stock-reconciliation milestone; no deployment).
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: cutover log (removed 5 Oct; in git history).
 
@@ -35,6 +35,10 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 ---
 
 ## 2. Live state (production), as of 4 Oct 2026
+
+**6 Oct read-only refresh:** deployed branch HEAD verified as `c3a3d19`. Stock review compares sales posted through 5 Oct with EPOS read on 6 Oct; it is not a same-cutoff physical count. Live EPOS pack deductions for Coke 6-pack and Colgate single still show 12. No settings or financial records were changed. Evidence is ignored under `outputs/stock_recovery_2026-10-06/` in the stock-reconciliation worktree.
+
+**Local milestone (6 Oct):** isolated worktree `/Users/marvinmokolo/.codex/worktrees/akponora-stock-reconciliation/code-scripts`, based on `c3a3d19`: offline opening/bill/movement investigation, read-only movement capture, opt-in daily hook (off), and signed portal classification. Draft count plans cannot post. 106 tests pass. See [stock reconciliation](AKPONORA_STOCK_RECONCILIATION.md). Still required: PO matching and follow-up closure, sandbox-tested QBO quantity/FIFO adapter, signed count approval, and production deployment/activation approval. Commit recorded in this worktree's Git history.
 
 **Company A: AKPONORA / NORA MINI MART (`company_a`, realm 9341455406194328)**
 - **New items:** live since 1 Oct on 3,938 Inventory `AKP-` and 492 NonInventory `AKP-NS-` items; all legacy items are `LEGACY —`. September is closed. FIFO COGS works.
