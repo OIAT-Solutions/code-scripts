@@ -170,12 +170,14 @@ class FakeQBO:
         self.accounts = accounts or {i: {"Id": i, "AcctNum": n, "AccountType": "Bank", "Active": True,
                                          "CurrentBalance": 0} for n, i in BANK.items()}
         self.accounts["72"] = {"Id": "72", "AcctNum": "100900", "AccountType": "Other Current Asset", "Active": True}
+        self.accounts["800"] = {"Id": "800", "Name": "800100 - Till Overage", "FullyQualifiedName": "800100 - Till Overage",
+                                "AccountType": "Other Income", "Active": True}
         self.calls = []
         self.next_id = 90000
         self.fail_post = set()
 
     def uf_balance(self):
-        linked = {ln["LinkedTxn"][0]["TxnId"] for d in self.deposits.values() for ln in d["Line"]}
+        linked = {ln["LinkedTxn"][0]["TxnId"] for d in self.deposits.values() for ln in d["Line"] if ln.get("LinkedTxn")}
         return round(sum(r["TotalAmt"] for r in self.receipts.values() if r["Id"] not in linked), 2)
 
     def request(self, method, url, params=None, headers=None, data=None, timeout=None):
@@ -199,7 +201,7 @@ class FakeQBO:
                    "TotalAmt": round(sum(ln["Amount"] for ln in body["Line"]), 2)}
             dep.pop("DocNumber", None)  # like the live company (3 Oct 2026): Deposits keep no DocNumber
             self.deposits[dep["Id"]] = dep
-            for ln in body["Line"]:
+            for ln in (ln for ln in body["Line"] if ln.get("LinkedTxn")):
                 rec = self.receipts[ln["LinkedTxn"][0]["TxnId"]]
                 rec.setdefault("LinkedTxn", []).append({"TxnId": dep["Id"], "TxnType": "Deposit"})
             return Resp(200, {"Deposit": dep})
@@ -233,6 +235,8 @@ class FakeQBO:
             lo, hi = re.findall(r"TxnDate [<>]= '([^']*)'", sql)
             return {"Transfer": page([t for t in self.transfers.values() if lo <= t["TxnDate"] <= hi])}
         if "from Account" in sql:
+            if "Active = true" in sql:
+                return {"Account": page([dict(a) for a in self.accounts.values() if a.get("Active")])}
             ids = re.findall(r"'([^']*)'", sql)
             rows = [dict(self.accounts[i]) for i in ids if i in self.accounts]
             for r in rows:
@@ -389,6 +393,22 @@ class GateTests(NoNetwork):
                       **{ufd.TOL_ENV: "100", ufd.TOL_PCT_ENV: "0.001"})["days"][0]
         self.assertEqual(d["status"], ufd.HOLD)
 
+    def test_sheet_over_sales_holds_when_overage_account_is_missing(self):
+        sheet = google({"Oct 2026": block("2026-10-01", DAY1)})
+        fake = FakeQBO(DAY1_RECEIPTS)
+        del fake.accounts["800"]
+        d = self.plan(fake, sheet, ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.HOLD)
+        self.assertTrue(any("overage account '800100 - Till Overage' is not in QBO" in r for r in d["reasons"]), d["reasons"])
+
+    def test_sales_over_sheet_still_scales_and_books_no_overage(self):
+        receipts = DAY1_RECEIPTS + [sr(509, "2026-10-01", 1000.0, "Cash")]  # receipts 3,200,500 vs sheet 3,200,000
+        d = self.plan(FakeQBO(receipts), google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.READY, d["reasons"])
+        day = json.loads((Path(d["dir"]) / "summary.json").read_text())
+        self.assertEqual(Decimal(day.get("overage") or 0), 0)
+        self.assertEqual(sum(Decimal(v) for v in day["final_by_bank"].values()), Decimal(day["receipts_total"]))
+
     def test_blank_or_unfinished_day_holds_alone_and_later_day_is_ready(self):
         rows = month_rows({"2026-09-25": {}, "2026-09-26": {**DAY1, "system": 3199500}})
         receipts = [sr(701, "2026-09-25", 1000.0, "Cash")] + [
@@ -471,7 +491,7 @@ class AllocationTests(NoNetwork):
         self.assertEqual(sum(t.values()), Decimal("100.00"))
         self.assertEqual(sorted(t.values()), [Decimal("33.33"), Decimal("33.33"), Decimal("33.34")])
 
-    def test_day_plan_each_bank_equals_scaled_sheet_and_receipts_linked_once(self):
+    def test_day_plan_each_bank_equals_sheet_overage_booked_and_receipts_linked_once(self):
         summary = self.plan(FakeQBO(DAY1_RECEIPTS), google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])
         d = summary["days"][0]
         self.assertEqual(d["status"], ufd.READY, d["reasons"])
@@ -480,25 +500,30 @@ class AllocationTests(NoNetwork):
         total = Decimal(day["receipts_total"])
         self.assertEqual(total, Decimal("3199500.00"))
         sheet = {k: Decimal(v) for k, v in day["sheet_by_bank"].items()}
-        for no, final in day["final_by_bank"].items():
+        for no, final in day["final_by_bank"].items():  # till sheet over sales: every bank matches the sheet exactly
             self.assertEqual(Decimal(final), Decimal(day["target_by_bank"][no]))
-            self.assertLessEqual(abs(Decimal(final) - sheet[no] * total / sum(sheet.values())), Decimal("0.05"))
-        self.assertEqual(sum(Decimal(v) for v in day["final_by_bank"].values()), total)
+            self.assertEqual(Decimal(final), sheet[no])
+        self.assertEqual(Decimal(day["overage"]), sum(sheet.values()) - total)
         payloads = [json.loads(x) for x in (day_dir / "payloads.jsonl").read_text().splitlines()]
+        over = [ln for p in payloads if p["kind"] == "deposit" for ln in p["payload"]["Line"] if not ln.get("LinkedTxn")]
+        self.assertEqual(len(over), 1)
+        self.assertEqual(Decimal(str(over[0]["Amount"])), sum(sheet.values()) - total)
+        self.assertEqual(over[0]["DepositLineDetail"]["AccountRef"], {"value": "800"})
+        self.assertTrue(over[0]["Description"].startswith("Till overage 2026-10-01: till sheet over EPOS sales ("))
         linked = Counter(ln["LinkedTxn"][0]["TxnId"] for p in payloads if p["kind"] == "deposit"
-                         for ln in p["payload"]["Line"])
+                         for ln in p["payload"]["Line"] if ln.get("LinkedTxn"))
         self.assertEqual(linked, Counter({"501": 1, "502": 1, "503": 1, "504": 1}))
         for p in payloads:
             self.assertTrue(p["payload"]["PrivateNote"].startswith(
                 "UF deposit 2026-10-01 from till sheet; approval <APPROVAL_REF>"))
             if p["kind"] == "deposit":
-                self.assertTrue(all(ln["LinkedTxn"][0] == {"TxnId": ln["LinkedTxn"][0]["TxnId"],
+                self.assertTrue(all(not ln.get("LinkedTxn") or ln["LinkedTxn"][0] == {"TxnId": ln["LinkedTxn"][0]["TxnId"],
                                                            "TxnType": "SalesReceipt", "TxnLineId": "0"}
                                     for ln in p["payload"]["Line"]))
                 self.assertRegex(p["key"], r"^UF261001\d{6}$")
         # tenders respected: cash receipt -> 100100, card -> a card bank, transfer -> a transfer bank
         dep_bank = {ln["LinkedTxn"][0]["TxnId"]: NUMBER[p["payload"]["DepositToAccountRef"]["value"]]
-                    for p in payloads if p["kind"] == "deposit" for ln in p["payload"]["Line"]}
+                    for p in payloads if p["kind"] == "deposit" for ln in p["payload"]["Line"] if ln.get("LinkedTxn")}
         self.assertEqual(dep_bank["501"], "100100")
         self.assertIn(dep_bank["502"], {"100301", "100207", "100206", "100201"})
         self.assertIn(dep_bank["503"], {"100205", "100202"})
@@ -682,7 +707,8 @@ class ScheduledTests(NoNetwork):
         # idempotency: earlier deposits untouched, every receipt linked exactly once
         for k, v in deposits_before.items():
             self.assertEqual(fake.deposits[k], v)
-        linked = Counter(ln["LinkedTxn"][0]["TxnId"] for d in fake.deposits.values() for ln in d["Line"])
+        linked = Counter(ln["LinkedTxn"][0]["TxnId"] for d in fake.deposits.values() for ln in d["Line"]
+                         if ln.get("LinkedTxn"))
         self.assertEqual(set(linked.values()), {1})
         self.assertEqual(len(linked), 12)
         self.assertEqual(Decimal(res["uf_balance"]), 0)
@@ -748,7 +774,8 @@ class ScheduledTests(NoNetwork):
         fake.fail_post.clear()
         res = self.scheduled(fake, source, **AUTO)  # resumes: nothing re-linked
         self.assertEqual([d["status"] for d in res["days"]], [ufd.DEPOSITED, ufd.DEPOSITED])
-        linked = Counter(ln["LinkedTxn"][0]["TxnId"] for d in fake.deposits.values() for ln in d["Line"])
+        linked = Counter(ln["LinkedTxn"][0]["TxnId"] for d in fake.deposits.values() for ln in d["Line"]
+                         if ln.get("LinkedTxn"))
         self.assertEqual(set(linked.values()), {1})
 
     def test_dry_run_never_posts_or_writes_state(self):
@@ -867,7 +894,8 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(self.day_states()["2026-10-01"], ufd.DEPOSITED)
         self.assertEqual(self.day_states()["2026-10-02"], ufd.WAITING_SHEET)
         human = self.slack[-1]
-        self.assertIn("*Banking:* ₦3,199,500 banked for 1 Oct", human)
+        self.assertIn("*Banking:* ₦3,200,000 banked for 1 Oct", human)
+        self.assertIn("₦500 more on the till sheet than sales (1 Oct), booked to Till Overage", human)
         self.assertIn("*Store* · complete the till sales breakdown for 2 Oct", human)
         self.assertIn("₦3,199,500 still in Undeposited Funds", human)
 

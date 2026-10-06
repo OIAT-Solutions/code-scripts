@@ -105,6 +105,11 @@ ENABLED_ENV = "OIAT_COMPANY_A_UF_DEPOSIT_ENABLED"
 AUTO_ENV = "OIAT_COMPANY_A_UF_AUTO_POST"
 REF_ENV = "OIAT_COMPANY_A_UF_APPROVAL_REF"
 TOL_ENV = "OIAT_COMPANY_A_UF_TOLERANCE"
+# Owner decision (Marvin, 6 Oct 2026): when the till sheet is MORE than the day's sales (within the tolerance),
+# every bank is deposited to match the sheet to the kobo and the extra is credited to this Other Income account.
+OVERAGE_ENV = "OIAT_COMPANY_A_UF_OVERAGE_ACCOUNT"
+OVERAGE_ACCOUNT_DEFAULT = "800100 - Till Overage"
+OVERAGE_ID = "OVERAGE"
 TOL_PCT_ENV = "OIAT_COMPANY_A_UF_TOLERANCE_PCT"
 CAP_ENV = "OIAT_COMPANY_A_UF_AUTO_MAX_DAY_TOTAL"
 KEY_ENV = "OIAT_COMPANY_A_TILL_SHEET_SA_KEY"
@@ -272,6 +277,7 @@ def settings(env=None) -> dict:
         "tol_pct": _dec(env, TOL_PCT_ENV, "0.5"),
         "tol_source": f"{overrides_path()}" if over else "environment",
         "cap": _dec(env, CAP_ENV, "15000000"),
+        "overage_account": clean(env.get(OVERAGE_ENV)) or OVERAGE_ACCOUNT_DEFAULT,
         "sheet_id": clean(env.get(SHEET_ENV)) or till_sheet.DEFAULT_SHEET_ID,
         "key_path": clean(env.get(KEY_ENV)),
         "accounts_path": clean(env.get(ACCOUNTS_ENV)),
@@ -597,12 +603,16 @@ def scale_targets(sheet: dict, total: Decimal, banks: dict) -> dict:
     return out
 
 
-def allocate(pending: list[dict], fixed: list[dict], sheet: dict, banks: dict) -> dict:
+def allocate(pending: list[dict], fixed: list[dict], sheet: dict, banks: dict, overage: Decimal = Decimal(0)) -> dict:
     """Assign whole receipts to banks by tender and sheet share, then the true-up transfers.
 
     Returns {targets, assigned {receipt id: bank id}, deposited {bank: amount}, transfers [{from, to,
     amount}], final {bank: amount}}. ``final`` equals ``targets`` for every bank."""
     number = lambda b: banks.get(b, {}).get("number", b)  # noqa: E731
+    if overage > 0:
+        # the till sheet is over the sales: place the extra like one more receipt, so every bank ends on its
+        # sheet amount; its deposit line is credited to the overage account (build_actions)
+        pending = list(pending) + [{"id": OVERAGE_ID, "amount": overage, "kinds": sorted({b["kind"] for b in banks.values()})}]
     total = sum((r["amount"] for r in pending + fixed), Decimal(0))
     targets = scale_targets(sheet, total, banks)
     remaining = {b: targets.get(b, Decimal(0)) for b in banks}
@@ -612,7 +622,8 @@ def allocate(pending: list[dict], fixed: list[dict], sheet: dict, banks: dict) -
         deposited[r["bank_id"]] += r["amount"]
     order = sorted(banks, key=number)
     assigned = {}
-    for r in sorted(pending, key=lambda x: (len(x["kinds"]) != 1, -x["amount"], int(x["id"] or 0))):
+    for r in sorted(pending, key=lambda x: (x["id"] == OVERAGE_ID, len(x["kinds"]) != 1, -x["amount"],
+                                         0 if x["id"] == OVERAGE_ID else int(x["id"] or 0))):
         pool = [b for b in order if banks[b]["kind"] in r["kinds"]] or list(order)
         live = [b for b in pool if remaining[b] > 0] or pool
         fits = [b for b in live if remaining[b] >= r["amount"]]
@@ -641,7 +652,7 @@ def allocate(pending: list[dict], fixed: list[dict], sheet: dict, banks: dict) -
     for t in transfers:
         final[t["from"]] -= t["amount"]
         final[t["to"]] += t["amount"]
-    return {"total": total, "targets": targets, "assigned": assigned, "deposited": dict(deposited),
+    return {"total": total, "targets": targets, "assigned": assigned, "deposited": dict(deposited), "overage": overage,
             "transfers": transfers, "final": {b: v for b, v in final.items() if v or b in targets}}
 
 
@@ -661,6 +672,7 @@ def fetch_context(client: QBOClient, days: list[str], banks: dict) -> dict:
                                  + ")").get("Account"))
     prefs = client.get_json("/preferences").get("Preferences", {})
     return {"receipts": by_day, "deposits": deposits, "transfers": transfers,
+            "overage_accounts": client.query_all("select * from Account where Active = true", "Account"),
             "accounts": {clean(a.get("Id")): a for a in accts},
             "book_close": clean((prefs.get("AccountingInfoPrefs") or {}).get("BookCloseDate"))}
 
@@ -731,9 +743,21 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     e["sheet_total"] = sum(sheet_by_bank.values(), Decimal(0))
     diff = e["sheet_total"] - e["receipts_total"]
     tol = tolerance(e["receipts_total"], s)
+    overage, overage_acct = Decimal(0), None
     if abs(diff) > tol:
         reasons.append(f"sheet total {naira(e['sheet_total'])} vs receipts {naira(e['receipts_total'])}: "
                        f"difference {naira(diff)} is over the tolerance {naira(tol)}")
+    elif diff > 0:
+        overage_acct = overage_account(ctx, s)
+        if overage_acct is None:
+            reasons.append(f"till sheet is {naira(diff)} over the receipts but the overage account "
+                           f"'{s.get('overage_account', OVERAGE_ACCOUNT_DEFAULT)}' is not in QBO")
+        else:
+            overage = diff - fixed_overage(ctx, day, overage_acct)
+            e["overage"] = diff
+            warns.append(f"till sheet {naira(e['sheet_total'])} is {naira(diff)} over the receipts "
+                         f"{naira(e['receipts_total'])} (within {naira(tol)}); banks follow the sheet, "
+                         f"{naira(diff)} to {overage_acct.get('Name')}")
     elif diff:
         warns.append(f"sheet total {naira(e['sheet_total'])} vs receipts {naira(e['receipts_total'])} "
                      f"(difference {naira(diff)}, within {naira(tol)}); deposits follow the receipts")
@@ -753,9 +777,10 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     if reasons:
         e["status"] = HOLD
         return e
-    alloc = allocate(rec["pending"], rec["fixed"], sheet_by_bank, banks)
+    fixed = rec["fixed"] + (fixed_overage_items(ctx, day, overage_acct) if overage_acct else [])
+    alloc = allocate(rec["pending"], fixed, sheet_by_bank, banks, overage=overage)
     e["alloc"] = alloc
-    e["actions"], conflicts = build_actions(day, rec, alloc, banks, ctx)
+    e["actions"], conflicts = build_actions(day, rec, alloc, banks, ctx, overage_acct=overage_acct)
     if conflicts:
         e["status"] = HOLD
         reasons += conflicts
@@ -766,12 +791,48 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     return e
 
 
-def build_actions(day: str, rec: dict, alloc: dict, banks: dict, ctx: dict) -> tuple[list, list]:
+def overage_account(ctx: dict, s: dict) -> dict | None:
+    want = clean(s.get("overage_account") or OVERAGE_ACCOUNT_DEFAULT)
+    hits = [a for a in ctx.get("overage_accounts") or [] if want in (clean(a.get("Name")), clean(a.get("FullyQualifiedName")))]
+    return hits[0] if len(hits) == 1 else None
+
+
+def fixed_overage_items(ctx: dict, day: str, acct: dict) -> list[dict]:
+    """Overage lines already in this tool's deposits for ``day`` (a re-run must not book them again)."""
+    out = []
+    for dep in ctx.get("deposits") or []:
+        if not is_own_deposit_doc(deposit_key(dep), day):
+            continue
+        for line in dep.get("Line") or []:
+            ref = ((line.get("DepositLineDetail") or {}).get("AccountRef") or {}).get("value")
+            if clean(ref) == clean(acct.get("Id")) and not line.get("LinkedTxn"):
+                out.append({"id": f"{OVERAGE_ID}-{clean(dep.get('Id'))}", "amount": r2(D(line.get("Amount"), Decimal(0))),
+                            "bank_id": clean((dep.get("DepositToAccountRef") or {}).get("value")),
+                            "deposit_doc": deposit_key(dep), "deposit_id": clean(dep.get("Id")), "overage": True})
+    return out
+
+
+def fixed_overage(ctx: dict, day: str, acct: dict) -> Decimal:
+    return sum((i["amount"] for i in fixed_overage_items(ctx, day, acct)), Decimal(0))
+
+
+def overage_note(day: str, bank: dict) -> str:
+    """What the overage line says in QBO: the sales day and the till sheet lines that fed this bank."""
+    tills = ", ".join(sorted(set(bank.get("lines") or []))) or bank["number"]
+    return f"Till overage {day}: till sheet over EPOS sales ({tills})"[:4000]
+
+
+def build_actions(day: str, rec: dict, alloc: dict, banks: dict, ctx: dict, overage_acct: dict | None = None) -> tuple[list, list]:
     actions, conflicts = [], []
     existing_docs = {deposit_key(d): d for d in ctx["deposits"] if deposit_key(d)}
     by_bank_new = defaultdict(list)
     pending = {r["id"]: r for r in rec["pending"]}
+    overage_by_bank = {}
     for rid, bank in alloc["assigned"].items():
+        if rid == OVERAGE_ID:
+            overage_by_bank[bank] = alloc["overage"]
+            by_bank_new.setdefault(bank, [])
+            continue
         by_bank_new[bank].append(pending[rid])
     for r in rec["fixed"]:
         actions.append({"kind": "deposit", "key": r["deposit_doc"], "state": "EXISTS", "bank_id": r["bank_id"],
@@ -782,14 +843,21 @@ def build_actions(day: str, rec: dict, alloc: dict, banks: dict, ctx: dict) -> t
         while doc in existing_docs:
             n += 1
             doc = deposit_doc(day, banks[bank]["number"], n)
-        amount = sum((r["amount"] for r in group), Decimal(0))
+        extra = overage_by_bank.get(bank, Decimal(0))
+        amount = sum((r["amount"] for r in group), Decimal(0)) + extra
+        lines = [{"Amount": float(r["amount"]),
+                  "LinkedTxn": [{"TxnId": r["id"], "TxnType": "SalesReceipt", "TxnLineId": "0"}]} for r in group]
+        if extra:
+            lines.append({"Amount": float(extra), "DetailType": "DepositLineDetail",
+                          "Description": overage_note(day, banks[bank]),
+                          "DepositLineDetail": {"AccountRef": {"value": clean(overage_acct["Id"])}}})
         payload = {
             "DepositToAccountRef": {"value": bank},
             "TxnDate": day, "DocNumber": doc,
             "PrivateNote": (f"{note_head(day)} | {doc} -> {banks[bank]['number']} | {len(group)} receipt(s) "
-                            f"{naira(amount)} | created by {TOOL}"),
-            "Line": [{"Amount": float(r["amount"]),
-                      "LinkedTxn": [{"TxnId": r["id"], "TxnType": "SalesReceipt", "TxnLineId": "0"}]} for r in group],
+                            f"{naira(amount - extra)}" + (f" + overage {naira(extra)}" if extra else "")
+                            + f" | created by {TOOL}"),
+            "Line": lines,
         }
         actions.append({"kind": "deposit", "key": doc, "state": "NEW", "bank_id": bank,
                         "receipt_ids": [r["id"] for r in group], "receipt_docs": [r["doc"] for r in group],
@@ -893,6 +961,7 @@ def day_summary(e: dict, banks: dict) -> dict:
         "target_by_bank": {num(b): money(v) for b, v in sorted(alloc.get("targets", {}).items(), key=lambda kv: num(kv[0]))},
         "final_by_bank": {num(b): money(v) for b, v in sorted(alloc.get("final", {}).items(), key=lambda kv: num(kv[0]))
                           if v},
+        "overage": money(e.get("overage", 0)),
         "deposits_new": sum(1 for a in e["actions"] if a["kind"] == "deposit" and a["state"] == "NEW"),
         "transfers_new": sum(1 for a in e["actions"] if a["kind"] == "transfer" and a["state"] == "NEW"),
         "existing": [f"{a['kind']} {a['key']} (QBO {a.get('qbo_id')})" for a in e["actions"] if a["state"] == "EXISTS"],
@@ -937,7 +1006,7 @@ def run_plan(out: Path, *, days: list[str], client: QBOClient, source, s: dict, 
     summary = {**meta, "window": [days[0], days[-1]] if days else [], "qbo_requests": client.requests,
                "counts": dict(Counter(e["status"] for e in entries)),
                "days": [{k: e["summary"][k] for k in ("day", "status", "state", "reasons", "warnings", "receipts_total",
-                                                       "sheet_total", "final_by_bank", "payloads_sha256",
+                                                       "sheet_total", "final_by_bank", "payloads_sha256", "overage",
                                                        "post_command")} | {"dir": str(out / e["day"])}
                         for e in entries]}
     dump_json(out / "summary.json", summary)
@@ -1003,7 +1072,8 @@ def recheck_receipts(client: QBOClient, p: dict) -> str:
     """'' when every receipt is still in Undeposited Funds with the planned amount."""
     expected = {}
     for line in p["payload"]["Line"]:
-        expected[line["LinkedTxn"][0]["TxnId"]] = Decimal(str(line["Amount"]))
+        if line.get("LinkedTxn"):  # an overage line has no receipt
+            expected[line["LinkedTxn"][0]["TxnId"]] = Decimal(str(line["Amount"]))
     for rid in p["receipt_ids"]:
         sr = client.get_json(f"/salesreceipt/{rid}").get("SalesReceipt") or {}
         if abs(D(sr.get("TotalAmt"), Decimal(0)) - expected[rid]) > CENT / 2:
@@ -1158,7 +1228,7 @@ def run_scheduled(out: Path, *, business_day: str, client: QBOClient, source, s:
         else:
             status, posted_now = d["state"], False
         days_out.append({**{k: d[k] for k in ("day", "warnings", "receipts_total", "sheet_total", "final_by_bank",
-                                               "payloads_sha256", "dir", "post_command")},
+                                               "payloads_sha256", "dir", "post_command")}, "overage": d.get("overage", "0.00"),
                          "status": status, "reasons": reasons, "posted_now": posted_now})
         record_day(state, d["day"], status, reasons=reasons, run_dir=d["dir"], receipts_total=d["receipts_total"],
                    approval_ref=s["ref"] if posted_now else "")

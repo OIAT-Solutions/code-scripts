@@ -433,7 +433,8 @@ class DailyRun:
         sheet = r.get("till_sheet") or {}
         res.counts = {
             "mode": mode, "window": r["window"], "uf_balance": r["uf_balance"],
-            "deposited": [{"day": d["day"], "total": d["receipts_total"], "by_bank": d["final_by_bank"]}
+            "deposited": [{"day": d["day"], "total": d["receipts_total"], "by_bank": d["final_by_bank"],
+                           "overage": d.get("overage", "0.00")}
                           for d in r["days"] if d["status"] == ufd.DEPOSITED and d.get("posted_now")],
             "held": [{"day": d["day"], "status": d["status"], "reason": (d["reasons"] or [""])[0]}
                      for d in r["days"] if d["status"] in (ufd.HELD, ufd.WAITING_SHEET, ufd.NO_SALES)],
@@ -967,14 +968,20 @@ def slack_text(summary: dict) -> str:
             oiat.append(f"banking didn't run → {run}")
             section("Banking", "didn't run")
         else:
-            def total(items):
-                return sum((Decimal(str(d.get("total") or 0)) for d in items), Decimal(0))
+            def total(items):  # money banked: the receipts plus any till-sheet overage
+                return sum((Decimal(str(d.get("total") or 0)) + Decimal(str(d.get("overage") or 0)) for d in items),
+                           Decimal(0))
 
             deposited, ready, held = c.get("deposited") or [], c.get("ready") or [], c.get("held") or []
+            over_line = ""
             stop_days = [d["day"] for d in held if str(d.get("reason", "")).startswith("post stopped")]
             bits = []
             if deposited:
                 bits.append(f"{naira_text(total(deposited))} banked for {day_list(d['day'] for d in deposited)}")
+                over = [d for d in deposited if Decimal(str(d.get("overage") or 0)) > 0]
+                if over:
+                    over_line = (f"{naira_text(sum(Decimal(str(d['overage'])) for d in over))} more on the till sheet "
+                                 f"than sales ({day_list(d['day'] for d in over)}), booked to Till Overage")
             if stop_days:
                 bits.append(f"stopped part-way on {day_list(stop_days)}")
                 stopped.append("banking stopped")
@@ -988,7 +995,7 @@ def slack_text(summary: dict) -> str:
                 you.append(f"approve banking {naira_text(total(ready))} for {day_list(d['day'] for d in ready)} → {inbox}")
             if not bits:
                 bits.append("nothing new to bank")
-            section("Banking", " · ".join(bits), [uf_line])
+            section("Banking", " · ".join(bits), [over_line, uf_line])
             sheet_days = defaultdict(list)
             for d in held:
                 if d.get("status") == "WAITING_SHEET":
