@@ -1,6 +1,6 @@
 # Stock reconciliation: evidence and review
 
-Local implementation prepared 6 October 2026. Not deployed or enabled. Company A only.
+Implemented and deployed 6 October 2026, with specific owner approval for the read-only check. Company A only. Quantity posting is not implemented.
 
 ## Evidence before correction
 
@@ -28,7 +28,7 @@ python -m code_scripts.akponora_ops.stock_movements \
   --out outputs/stock_review/movements
 ```
 
-The daily stock step runs this check only with `OIAT_COMPANY_A_STOCK_MOVEMENTS_ENABLED=1` (default off), using a three-day overlap and the snapshot's catalogue and mapping sources. **Deployment and enabling this mode require specific owner approval.** It never changes stock or posts bills. The overlap does not recover older missed days; run an explicit bounded capture for those days.
+The daily stock step runs this check only with `OIAT_COMPANY_A_STOCK_MOVEMENTS_ENABLED=1` (default off; now enabled by explicit owner approval), using a three-day overlap through today's Lagos calendar date and the snapshot's catalogue and mapping sources. The sales business date may be yesterday; movement detection still includes today. It never changes stock or posts bills. The overlap does not recover older missed days; run an explicit bounded capture for those days.
 
 The portal reads `daily/<date>/<run>/movements/summary.json` and `portal_reads/<read>/movements/summary.json`. Stable event IDs prevent duplicate cards. Staff can record delivery, count correction, or loss using existing permissions, signed confirmations, evidence checksums, background jobs and audit records. Classification remains open until the accounting follow-up is completed; it cannot authorise a stock correction. A PO link is currently **unverified**, so cards ask for a PO check rather than assert that no PO exists. Automatic PO matching and accounting follow-up closure remain to be implemented.
 

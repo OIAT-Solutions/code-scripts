@@ -106,11 +106,15 @@ class DailyRunTests(unittest.TestCase):
                             report = {"events": [{"event_id": "test"}],
                                       "errors": ["missing details"] if incomplete else []}
                             self.assertIn("--capture-live", cmd)
-                            self.assertEqual(cmd[cmd.index("--from-date") + 1], "2026-10-03")
-                            self.assertEqual(cmd[cmd.index("--through-date") + 1], "2026-10-05")
+                            self.assertEqual(cmd[cmd.index("--from-date") + 1], "2026-10-04")
+                            self.assertEqual(cmd[cmd.index("--through-date") + 1], "2026-10-06")
                         (out / "summary.json").write_text(json.dumps(report))
                         return 0
-                    with mock.patch.object(dr, "_company_slack_env_key", return_value="SLACK_TEST"):
+                    class Clock(datetime):
+                        @classmethod
+                        def now(cls, tz=None):
+                            return datetime(2026, 10, 6, 18, tzinfo=ZoneInfo("Africa/Lagos"))
+                    with mock.patch.object(dr, "_company_slack_env_key", return_value="SLACK_TEST"), mock.patch.object(dr, "datetime", Clock):
                         run = dr.DailyRun("2026-10-05", root=Path(folder), runner=runner,
                             env={"OIAT_COMPANY_A_STOCK_MOVEMENTS_ENABLED": "1" if enabled else "0"})
                         result = dr.StepResult(name="stock", out=str(run.step_dir("stock")))

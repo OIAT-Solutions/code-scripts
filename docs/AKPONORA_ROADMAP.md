@@ -54,7 +54,8 @@ Owner column: **Marvin**, **Team**, **Agent** (Claude / Codex / Cursor), **Staff
 | --- | --- | --- |
 | [ ] | 51 products with no master link in EPOS (e.g. Coke/Fanta/Sprite 60CL singles, CWAY water singles) → link them, then rebuild the mapping | Staff |
 | [ ] | Frozen food by kg, eggs, loose rice: make one stock-tracked master per family (unit g / Each), then rebuild the mapping so they become Inventory | Staff + Agent |
-| [ ] | 78 "ghost stock" families opened at qty 0: count them; any real stock → one approved stock adjustment on the new item | Staff + Agent |
+| [ ] | 78 "ghost stock" families opened at qty 0: verify original quantity, ownership and cost; keep opening corrections separate from October count variance. Item notes prepared 6 Oct | Staff + Agent |
+| [x] | Coke six-pack and Colgate single deductions corrected in live EPOS; sale and purchase mapping installed 6 Oct. See `AKPONORA_CORRECTION_LOG.md` | Agent |
 | [ ] | Pricing review: `outputs/final_mapping_2026-10-01/pricing_review.csv` | Staff |
 | [ ] | Answer: Ernest's 19 Sep stock adds (deliveries or recounts?); POs 3828/3829/3855/3861 duplicates? If deliveries/non-duplicates → adjust GRNI | Staff, then Agent |
 

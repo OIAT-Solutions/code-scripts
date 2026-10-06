@@ -423,10 +423,12 @@ class DailyRun:
             res.exit_code = 2
             return
         out = self.step_dir("movements")
-        start = max(date(2026, 10, 1), date.fromisoformat(self.date) - timedelta(days=2)).isoformat()
+        # Sales normally posts yesterday; staff stock additions must include today.
+        end = datetime.now(ZoneInfo("Africa/Lagos")).date()
+        start = max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
         rc = self.run_step("movements", [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
-            "--mapping", str(mapping), "--from-date", start, "--through-date", self.date, "--out", str(out)], out)
+            "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)], out)
         report = read_json(out / "summary.json", {}) or {}
         events = report.get("events") or []
         res.counts["movement_events"] = len(events)
