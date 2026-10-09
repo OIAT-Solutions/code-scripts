@@ -1,4 +1,5 @@
 import json
+import os
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -45,9 +46,23 @@ class StockMovementPortalTests(CompanyAOpsFixtureMixin, TestCase):
         self.report["errors"] = ["missing movement page"]
         self.make_run("2026-10-03", "run_170000Z", _summary("2026-10-03"),
             files={"movements/summary.json": json.dumps(self.report)})
+        folder = self.tmp / "ops/company_a/daily/2026-10-03/run_170000Z/movements/summary.json"
+        later = folder.stat().st_mtime + 60
+        os.utime(folder, (later, later))
         items, errors = attention.inbox()
         self.assertEqual(sum(i["kind"] == "stock_movement" for i in items), 1)
-        self.assertTrue(any("incomplete" in e for e in errors))
+        self.assertEqual([e for e in errors if "could not read 1 adjustment" in e], [errors[0]])
+
+    def test_an_older_incomplete_capture_raises_no_warning(self):
+        # 9 Oct 2026: four stale red banners came from captures older than the latest clean one
+        self.write_report("2026-10-01", ["Transfer 1: unexpected detail columns"], age=-120)
+        self.assertFalse(any("stock-movement" in e for e in attention.inbox()[1]))
+
+    def write_report(self, day, errors, age):
+        self.make_run(day, "run_170000Z", _summary(day), files={"movements/summary.json": json.dumps(dict(self.report, errors=errors))})
+        path = self.tmp / f"ops/company_a/daily/{day}/run_170000Z/movements/summary.json"
+        when = (self.tmp / "ops/company_a/daily/2026-10-02/run_170000Z/movements/summary.json").stat().st_mtime + age
+        os.utime(path, (when, when))
 
     def test_changed_evidence_rejected_before_enqueue(self):
         token = self.token()

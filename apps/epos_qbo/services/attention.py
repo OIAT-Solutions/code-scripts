@@ -323,13 +323,14 @@ def stock_movement_items(runs, errors):
         marker = (record.payload.get("identity"), record.payload.get("movement_sha"))
         classified.setdefault(marker, record)
     items, seen = [], set()
-    for run, path in sorted(reports, key=lambda pair: pair[1].stat().st_mtime, reverse=True):
+    for n, (run, path) in enumerate(sorted(reports, key=lambda pair: pair[1].stat().st_mtime, reverse=True)):
         try:
             report = document(path)
             if report.get("company") != "company_a":
                 raise ValueError("Wrong stock-movement company")
-            if report.get("errors"):
-                errors.append("EPOS stock-movement capture is incomplete. Review its report before correcting stock.")
+            if report.get("errors") and n == 0:  # only the newest capture says whether reading is still incomplete
+                errors.append(f"The latest EPOS stock-movement check could not read {len(report['errors'])} "
+                              "adjustment(s). Review its report before correcting stock.")
             for event in report.get("events", []):
                 identity = event["event_id"]
                 if identity in seen:
