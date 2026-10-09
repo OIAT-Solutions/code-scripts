@@ -245,6 +245,22 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(e["3973"]["status"], "HOLD")
         self.assertTrue(any("vendors.csv" in r for r in e["3973"]["reasons"]))
 
+    def test_supplier_picked_from_epos_list_links_by_exact_qbo_name(self):
+        # Oct 2026: staff pick the EPOS supplier (named exactly as in QuickBooks) instead of typing it in the note
+        def picked(ref, name, sid="7701", note_supplier="anything typed"):
+            lst, det = order(ref, [COKE], supplier=note_supplier)
+            lst.update(SupplierId=int(sid), SupplierName=name)
+            det["SupplierId"] = int(sid)
+            return lst, det
+        _, _, e, _ = self.f.plan([picked(3980, "Uncle Sams Bakery"),          # case/spacing aside: vendor 11
+                                  picked(3981, "UNCLE SAMS BAKERY & CAFE"),   # not a QBO name: held, no guessing
+                                  picked(3982, "NIGERIAN BOTTLING COMPANY", note_supplier="")])
+        self.assertEqual(e["3980"]["status"], "READY", e["3980"]["reasons"])
+        self.assertEqual(e["3980"]["vendor"]["Id"], "11")
+        self.assertEqual(e["3982"]["vendor"]["Id"], "10")
+        self.assertEqual(e["3981"]["status"], "HOLD")
+        self.assertTrue(any("is not exactly one active QBO supplier name" in r for r in e["3981"]["reasons"]))
+
     def test_legacy_and_catch_all_targets_refused(self):
         _, _, e, _ = self.f.plan([order(3974, [("400", "OLD SOAP", 1, 1, 50.0, 53.75)]),
                                   order(3975, [("500", "MYSTERY", 1, 1, 10.0, 10.75)])])

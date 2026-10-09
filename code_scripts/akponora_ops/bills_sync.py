@@ -446,6 +446,11 @@ def build_po(order: dict, detail: dict | None) -> dict:
     payment = payment or payment_mode((detail or {}).get("PaymentMode") or order.get("PaymentMode"))
     paid, pay_account = payment_detail(note)
     supplier_id = clean((detail or {}).get("SupplierId") or order.get("SupplierId"))
+    supplier_id = "" if supplier_id in ("0", "None") else supplier_id
+    note_supplier = supplier
+    chosen = clean(order.get("SupplierName") or (detail or {}).get("SupplierName")) if supplier_id else ""
+    if chosen:  # the supplier picked from the EPOS list wins over a typed note
+        supplier = chosen
     lines = []
     for n, p in enumerate((detail or {}).get("Products") or [], start=1):
         lines.append({
@@ -461,7 +466,7 @@ def build_po(order: dict, detail: dict | None) -> dict:
         "ref": str(order["OrderRef"]), "status": clean(order.get("StatusName") or (detail or {}).get("StatusName")),
         "received_at": recv_at.isoformat(timespec="seconds") if recv_at else "",
         "received_date": business_date(recv_at).isoformat() if recv_at else "",
-        "supplier": supplier, "supplier_id": "" if supplier_id in ("0", "None") else supplier_id,
+        "supplier": supplier, "supplier_id": supplier_id, "epos_supplier": bool(chosen), "note_supplier": note_supplier,
         "payment": payment, "payment_paid": paid, "payment_account": pay_account,
         "note": note, "grn": ";".join(order.get("GoodsReceiptNumbers") or []),
         "total_ex": D(order.get("TotalValueReceivedExTax"), Decimal(0)),
@@ -527,9 +532,25 @@ def load_vendor_map(rows: list[dict]) -> tuple[dict, dict, list]:
     return by_id, by_name, conflicts
 
 
+def exact_vendor(name: str, vendors_by_id: dict) -> list[dict]:
+    """Active QBO vendors whose DisplayName is exactly ``name`` (case and spacing aside)."""
+    want = " ".join(str(name or "").split()).casefold()
+    return [v for v in vendors_by_id.values() if v.get("Active") is not False and want
+            and " ".join(str(v.get("DisplayName") or "").split()).casefold() == want]
+
+
 def resolve_vendor(po: dict, vmap, vendors_by_id: dict) -> tuple[dict | None, str]:
     by_id, by_name, conflicts = vmap
     row = by_id.get(po["supplier_id"]) if po["supplier_id"] else None
+    if row is None and po.get("epos_supplier"):
+        # Picked from the EPOS supplier list: EPOS suppliers carry the exact QBO supplier name, so this is an
+        # identity match, never a likeness. No typed-note fallback: a mismatch is fixed in EPOS, not guessed.
+        hits = exact_vendor(po["supplier"], vendors_by_id)
+        if len(hits) == 1:
+            return hits[0], ""
+        return None, (f"EPOS supplier '{po['supplier']}' (EPOS id {po['supplier_id']}) is not exactly one active "
+                      f"QBO supplier name ({len(hits)} found) - name it exactly as in QuickBooks in EPOS, "
+                      "or approve a new supplier")
     key = vendor_key(po["supplier"])
     if row is None:
         if not key:
@@ -993,7 +1014,7 @@ def slack_text(summary: dict, out: Path, posted: dict | None = None) -> str:
 
 
 # ---------------------------------------------------------------- vendors (automatic creation)
-def unmapped_suppliers(pos: list[dict], vmap, window: tuple[str, str]) -> list[dict]:
+def unmapped_suppliers(pos: list[dict], vmap, window: tuple[str, str], vendors_by_id: dict | None = None) -> list[dict]:
     """Suppliers of October POs received in ``window`` that vendors.csv does not resolve
     (id or name), grouped by normalized name."""
     by_id, by_name, conflicts = vmap
@@ -1005,6 +1026,8 @@ def unmapped_suppliers(pos: list[dict], vmap, window: tuple[str, str]) -> list[d
             continue
         if po["supplier_id"] and po["supplier_id"] in by_id:
             continue
+        if po.get("epos_supplier") and len(exact_vendor(po["supplier"], vendors_by_id or {})) == 1:
+            continue  # picked from the EPOS list and named exactly as in QuickBooks: already linked
         key = vendor_key(po["supplier"])
         if not key or key in by_name or key in conflicts:
             continue
@@ -1020,7 +1043,7 @@ def vendor_stage(pos, vmap, ctx, *, window, vendors_path: Path, create: bool, wr
     """Score unmapped suppliers; in ``create`` mode (scheduled) create genuinely new vendors when the
     auto gates allow (never an excluded supplier). Updates ``ctx['vendors']`` with created vendors.
     Returns the actions."""
-    suppliers = unmapped_suppliers(pos, vmap, window)
+    suppliers = unmapped_suppliers(pos, vmap, window, ctx.get("vendors"))
     if exclusions is not None:
         po_skip = exclusions.keys("bill")
         suppliers = [s for s in suppliers if not set(s["po_refs"]) <= po_skip]
