@@ -32,6 +32,6 @@ Suggested note: **This quantity was deliberately excluded at cutover. The differ
 
 ## Incomplete and negative records
 
-The ten received EPOS adjustments with no item lines remain incomplete evidence. Negative EPOS quantities require a count and transaction review, not a negative physical-stock target. Do not write a made-up explanation to clear a card. The portal records the staff explanation and preserves the need for accounting follow-up.
+The ten received EPOS adjustments with no item lines (1–6 Oct; 5529770, 5550027, 5581246–5582217, 5644927) are empty stock takes: EPOS shows no item grid because nothing was saved on them, and they changed no stock (checked 8 Oct in both the 6 Oct and the daily captures). They are recorded as `empty_transfers`, not errors. Negative EPOS quantities require a count and transaction review, not a negative physical-stock target. Do not write a made-up explanation to clear a card. The portal records the staff explanation and preserves the need for accounting follow-up.
 
 Accounting basis: IAS 2 requires supported inventory cost and recognises inventory losses as expense in the period incurred; IAS 8 treats material prior-period errors separately. Sources: [IAS 2](https://www.ifrs.org/issued-standards/list-of-standards/ias-2-inventories/), [IAS 8](https://www.ifrs.org/issued-standards/list-of-standards/ias-8-basis-of-preparation-of-financial-statements/).
