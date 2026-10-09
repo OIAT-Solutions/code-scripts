@@ -31,7 +31,7 @@ def normalise(captures, catalogue, mapping_rows, *, from_date, through_date):
     for r in mapping_rows:
         if r.get("Review Status", "").strip().casefold() == "approved":
             approved[str(r.get("EPOS Product ID", ""))].append(r)
-    transfers, errors = {}, []
+    transfers, errors, empty = {}, [], []
     for capture in captures:
         query = parse_qs(urlparse(capture.get("url", "")).query)
         tid = (query.get("TransferID") or [""])[0]
@@ -49,6 +49,9 @@ def normalise(captures, catalogue, mapping_rows, *, from_date, through_date):
         if info.get("Status", "").casefold() != "received":
             continue  # drafts do not change stock
         items = capture.get("items") or []
+        if not items and capture.get("items") is None and "MainContent_gvItems" not in (capture.get("tables") or ["?"]):
+            empty.append(tid)  # a received adjustment saved with no product lines: EPOS renders no item grid
+            continue
         if not items or [" ".join(str(c).upper().split()) for c in items[0]] != [
                 "PRODUCT", "PRODUCT COST PRICE (EXC. TAX)", "QUANTITY VARIANCE", "VOLUME VARIANCE",
                 "COST PRICE VARIANCE", "ITEM REASON"]:
@@ -106,7 +109,7 @@ def normalise(captures, catalogue, mapping_rows, *, from_date, through_date):
             events.append(event)
     return {"schema_version": 1, "company": COMPANY, "from_date": from_date, "through_date": through_date,
         "date_basis": "EPOS displayed date; timezone not inferred", "events": events,
-        "errors": sorted(set(errors)), "financial_writes": False}
+        "errors": sorted(set(errors)), "empty_transfers": sorted(set(empty)), "financial_writes": False}
 
 
 def read_capture(folder, *, require_both=True):

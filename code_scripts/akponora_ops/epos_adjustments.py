@@ -106,6 +106,9 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
                         det.goto(urljoin(url, loc), wait_until="domcontentloaded")
                         det.wait_for_timeout(800)
                         d = det.evaluate(DETAIL_JS)
+                        if d.get("items") is None:  # no item grid yet: read once more after a longer wait
+                            det.wait_for_timeout(3000)
+                            d = det.evaluate(DETAIL_JS)
                         k = 2  # item grid pager (view only)
                         while det.locator(f"#MainContent_gvItems a[href*=\"Page${k}'\"]").count():
                             det.evaluate(f"__doPostBack('ctl00$MainContent$gvItems','Page${k}')")

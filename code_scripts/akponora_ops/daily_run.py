@@ -433,9 +433,16 @@ class DailyRun:
         events = report.get("events") or []
         res.counts["movement_events"] = len(events)
         res.counts["movement_capture_errors"] = len(report.get("errors") or [])
-        if rc != 0 or report.get("errors") or not report:
-            res.status, res.detail = FAILED, f"EPOS stock-movement capture incomplete; see {out / 'summary.json'}"
+        if not report:
+            res.status, res.detail = FAILED, f"EPOS stock-movement check did not run; see {out / 'log.txt'}"
             res.exit_code = rc or 2
+        elif report.get("errors"):
+            # The stock check itself finished; an unreadable adjustment needs a look, it is not a failed run.
+            res.status = REVIEW
+            res.review.append(f"EPOS stock-movement check could not read {len(report['errors'])} adjustment(s); "
+                              f"see {out / 'summary.json'}. Nothing was posted.")
+            if events:
+                res.review.append(f"{len(events)} EPOS stock adjustment(s) need classification; no stock corrections posted.")
         elif events:
             res.status = REVIEW
             res.review.append(f"{len(events)} EPOS stock adjustment(s) need classification; no stock corrections posted.")

@@ -91,7 +91,7 @@ class FakeRunner:
 
 
 class DailyRunTests(unittest.TestCase):
-    def test_stock_movement_capture_opt_in_and_incomplete_failure(self):
+    def test_stock_movement_capture_opt_in_and_incomplete_is_review(self):
         with tempfile.TemporaryDirectory() as folder:
             for enabled, incomplete in ((False, False), (True, False), (True, True)):
                 with self.subTest(enabled=enabled, incomplete=incomplete):
@@ -120,8 +120,11 @@ class DailyRunTests(unittest.TestCase):
                         result = dr.StepResult(name="stock", out=str(run.step_dir("stock")))
                         run.step_stock(result)
                     self.assertEqual(len(calls), 2 if enabled else 1)
-                    self.assertEqual(result.status, dr.FAILED if incomplete else dr.REVIEW if enabled else dr.OK)
-                    self.assertEqual(result.exit_code, 2 if incomplete else 0)
+                    # an unreadable adjustment is a review item, not a failed run (7-8 Oct 2026)
+                    self.assertEqual(result.status, dr.REVIEW if enabled else dr.OK)
+                    self.assertEqual(result.exit_code, 0)
+                    if incomplete:
+                        self.assertTrue(any("could not read 1 adjustment" in r for r in result.review))
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

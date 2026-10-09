@@ -140,6 +140,17 @@ class MovementTests(unittest.TestCase):
         for change in ({"url": "wrong"}, {"items": [["wrong columns"]]}):
             self.assertTrue(self.run_capture([{**self.capture, **change}])["errors"])
 
+    def test_received_adjustment_with_no_lines_is_empty_not_an_error(self):
+        # 6 and 7 Oct 2026: EPOS renders no item grid for a stock take saved with no product lines
+        empty = {**self.capture, "url": self.capture["url"].replace("=42", "=43"), "items": None,
+                 "tables": ["MainContent_dvTransfers"]}
+        r = self.run_capture([self.capture, empty])
+        self.assertEqual(r["errors"], [])
+        self.assertEqual(r["empty_transfers"], ["43"])
+        self.assertEqual(len(r["events"]), 1)
+        # a grid that is present but unreadable is still an error
+        self.assertTrue(self.run_capture([{**empty, "items": None, "tables": ["MainContent_gvItems"]}])["errors"])
+
     def test_drafts_and_outside_window_not_counted(self):
         for value in (["Status", "Draft"], ["Date", "30/09/2026 09:00:00"]):
             c = copy.deepcopy(self.capture)
