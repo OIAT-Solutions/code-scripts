@@ -10,7 +10,7 @@ from . import attention, company_a_ops as ops, experience
 TAB_LABELS = {"sales": "Sales", "purchases": "Purchases", "products": "Products & Stock",
               "deposits": "Banking", "settings": "Settings"}
 STEP_TABS = {"purchases": {"bills"}, "products": {"catalogue", "guard"}, "deposits": {"uf", "deposits", "uf_deposits"}}
-KIND_TABS = {"purchases": {"bill", "vendor"}, "products": {"product"}, "deposits": {"deposit"}}
+KIND_TABS = {"purchases": {"bill", "vendor"}, "products": {"product", "stock_adjust"}, "deposits": {"deposit"}}
 
 
 def available_tabs(company, user, inventory_enabled=False):

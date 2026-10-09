@@ -45,6 +45,22 @@ python -m code_scripts.akponora_ops.stock_reconciliation count-plan \
 
 The output binds the source snapshot and decisions to a checksum, with `postable=false`. There is no posting adapter or portal count approval in this milestone. Before adding them: validate the supported QBO adjustment operation and FIFO valuation in a sandbox; prove quantity and GL/subledger effects; add durable duplicate prevention and recovery after partial failure; require fresh mapping, transaction-cutoff and quantity checks; then add a signed portal approval and post-write reconciliation. Opening omissions and current-period count variance need separate accountant-approved treatment. A current EPOS balance alone cannot establish a historical physical count or choose an accounting account.
 
+## Posting a checked count: `stock_adjust` (8 Oct 2026)
+
+`stock_adjust plan --draft <count-plan plan.json> --out <STATE_ROOT>/ops/company_a/portal_reads/stock_adjust/<name>`
+re-checks the draft checksum, the offset account (must be an active Cost of Goods Sold account; use 82
+Inventory Shrinkage) and every item live in QuickBooks (active, Inventory, tracks quantity, same SKU). It builds one
+InventoryAdjustment per 100 lines dated the cutoff, `QtyDiff = verified count - book quantity at cutoff`, and
+writes `summary.json` with `payloads_sha256`. A READY plan in that folder appears in Needs your attention as
+**Stock count correction**; **Approve stock correction** runs `stock_adjust post` with that checksum. Post refuses
+a changed plan, never posts the same adjustment twice (DocNumber `SC<yymmdd>-<draft>-<n>` and the draft checksum in
+the memo), sends an Intuit requestid, reads the adjustment back and checks each item's quantity moved by exactly
+QtyDiff (a sale landing at the same moment is reported, not hidden).
+
+Not proven yet: QuickBooks' valuation of the adjusted units (FIFO cost layers) in this company. The first live post
+is one item, checked in QuickBooks (quantity, Inventory Asset and account 82) before the rest. The Company A
+sandbox login expired on 27 Jul 2026; reconnect it to rehearse first.
+
 ## Validation
 
 Run the reconciliation, snapshot and daily-run unit suites, plus Django stock-movement and attention suites. Fixtures perform no live financial calls. Production activation and live acceptance are separate milestones.

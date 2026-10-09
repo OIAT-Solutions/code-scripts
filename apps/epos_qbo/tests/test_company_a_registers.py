@@ -458,6 +458,36 @@ class RefreshTests(RegisterFixtures, TestCase):
         self.assertEqual(attention_actions._folder(item), folder.resolve())
 
 
+class StockCorrectionTests(RegisterFixtures, TestCase):
+    """A planned stock count correction is approved in Needs your attention and posted by stock_adjust."""
+    def write_plan(self, status="READY", sha="adjsha"):
+        folder = self.tmp / "ops/company_a/portal_reads/stock_adjust/count_20261008"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "summary.json").write_text(json.dumps({
+            "status": status, "cutoff": "2026-10-08", "lines": 16, "units_added": "1877", "units_removed": "0",
+            "offset_account": {"id": "82", "name": "Inventory Shrinkage"}, "payloads_sha256": sha if status == "READY" else ""}))
+        (folder / "payloads.jsonl").write_text("{}\n")
+        return folder
+
+    def test_ready_plan_is_an_approvable_card_and_posts_with_its_checksum(self):
+        folder = self.write_plan()
+        item = self.item("stock_adjust")
+        self.assertTrue(item["approve"])
+        self.assertIn("Inventory Shrinkage", item["reason"])
+        cmd = attention_actions.tool_command(item, "approve", "Approved by Ada")
+        self.assertEqual(cmd[1:4], ["-m", "code_scripts.akponora_ops.stock_adjust", "post"])
+        self.assertEqual(cmd[cmd.index("--plan-dir") + 1], str(folder.resolve()))
+        self.assertEqual(cmd[cmd.index("--expect-sha") + 1], "adjsha")
+        html = self.client.get(reverse("epos_qbo:attention")).content.decode()
+        self.assertIn("Approve stock correction", html)
+        (folder / "post_summary.json").write_text(json.dumps({"complete": True}))
+        self.assertFalse(any(i["kind"] == "stock_adjust" for i in attention.inbox()[0]))
+
+    def test_held_plan_is_not_shown(self):
+        self.write_plan(status="HOLD")
+        self.assertFalse(any(i["kind"] == "stock_adjust" for i in attention.inbox()[0]))
+
+
 class DepositTests(RegisterFixtures, TestCase):
     def write_days(self, days):
         path = self.tmp / "ops/company_a/uf_deposits/days.json"

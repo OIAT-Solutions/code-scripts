@@ -284,6 +284,31 @@ def bill_plans(runs):
 
 
 # ----------------------------------------------------------------------------- inbox
+def stock_adjust_items(errors):
+    """Checked stock count corrections planned by ``stock_adjust plan`` into portal_reads/stock_adjust/<name>/."""
+    out, root = [], ops.ops_root() / "portal_reads" / "stock_adjust"
+    for path in sorted(root.glob("*/summary.json")) if root.is_dir() else []:
+        try:
+            summary = document(path)
+            posted = path.parent / "post_summary.json"
+            if summary.get("status") != "READY" or (posted.is_file() and document(posted).get("complete")):
+                continue
+            cutoff = str(summary.get("cutoff") or "")
+            run = ops.Run(business_date=cutoff, run_id="run_portal_plan", path=root, dry_run=False, status="review")
+            acct = summary.get("offset_account") or {}
+            reason = (f"{summary.get('lines')} product(s) set to their checked count on {cutoff}: "
+                      f"{summary.get('units_added')} unit(s) added, {summary.get('units_removed')} removed. "
+                      f"The difference is booked to {acct.get('name')}. Approving posts one QuickBooks stock adjustment.")
+            item = make_item("stock_adjust", path.parent.name, f"Stock count correction · {cutoff}", reason, run,
+                             path.parent.name, approve=bool(summary.get("payloads_sha256")),
+                             extra={"sha": summary.get("payloads_sha256", ""), "summary": summary})
+            item["details_url"] = reverse("epos_qbo:company-detail", args=["company_a"]) + "?tab=products"
+            out.append(item)
+        except (OSError, ValueError, TypeError, KeyError, ops.EvidenceError):
+            errors.append("A stock count correction plan could not be read safely.")
+    return out
+
+
 def stock_movement_items(runs, errors):
     """Read captured movements only. Classification never authorises stock writes."""
     reports = [(run, run.path / "movements/summary.json") for run in runs
@@ -351,6 +376,7 @@ def inbox():
         errors.append("The product or supplier lists could not be read. Review items may be out of date.")
     runs = ops.list_runs()
     items += stock_movement_items(runs, errors)
+    items += stock_adjust_items(errors)
     done_bills = set()
     for run in runs:
         if run.dry_run:

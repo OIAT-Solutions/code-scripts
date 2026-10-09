@@ -109,6 +109,8 @@ def tool_command(item, action, approval_ref):
         return product_command(item, approval_ref)
     if item["kind"] == "deposit":
         return _tool("uf_deposits") + ["post", "--plan-dir", str(folder), "--approval-ref", approval_ref, "--expect-sha", item["extra"]["sha"], "--no-slack"]
+    if item["kind"] == "stock_adjust":
+        return _tool("stock_adjust") + ["post", "--plan-dir", str(folder), "--approval-ref", approval_ref, "--expect-sha", item["extra"]["sha"]]
     raise ValueError("This tool does not support manual approval or skipping. Fix the source and re-plan.")
 
 

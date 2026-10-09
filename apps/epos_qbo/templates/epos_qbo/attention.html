@@ -12,7 +12,7 @@
 <div class="space-y-4">
 {% for item in items %}
 <article id="item-{{ item.key }}" class="portal-panel p-5">
-<p class="portal-eyebrow mb-2">{{ item.company }} · {% if item.kind == 'product' %}New product{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Bill{% elif item.kind == 'deposit' %}Banking{% elif item.kind == 'stock_movement' %}Stock adjustment{% else %}Sales{% endif %}{% if item.date %} · {{ item.date }}{% endif %}</p>
+<p class="portal-eyebrow mb-2">{{ item.company }} · {% if item.kind == 'product' %}New product{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Bill{% elif item.kind == 'deposit' %}Banking{% elif item.kind == 'stock_movement' %}Stock adjustment{% elif item.kind == 'stock_adjust' %}Stock correction{% else %}Sales{% endif %}{% if item.date %} · {{ item.date }}{% endif %}</p>
 <h2 class="font-semibold break-words">{{ item.title }}</h2>
 <p class="text-sm mt-2 break-words">{{ item.reason }}</p>
 {% if item.kind == 'stock_movement' %}<p class="portal-muted mt-2">EPOS {{ item.extra.event.transfer_id }} · {{ item.extra.event.occurred_at_epos }} · {{ item.extra.event.staff }} · Quantity change: {{ item.extra.event.canonical_qty_change|default_if_none:'Needs unit review' }}</p>{% endif %}
@@ -25,7 +25,7 @@
 <a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=loss">Record as loss</a>
 {% endif %}
 {% if can_approve and item.preview %}<a class="btn {% if item.approve %}btn-secondary{% else %}btn-primary{% endif %}" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=preview">{% if item.extra.check %}Check again{% else %}Check with QuickBooks{% endif %}</a>{% endif %}
-{% if can_approve and item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=approve">{% if item.kind == 'hold' %}Clear hold{% elif item.kind == 'product' %}Approve product{% elif item.kind == 'vendor' %}Approve supplier{% elif item.kind == 'deposit' %}Approve banking{% else %}Approve bill{% endif %}</a>{% endif %}
+{% if can_approve and item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=approve">{% if item.kind == 'hold' %}Clear hold{% elif item.kind == 'product' %}Approve product{% elif item.kind == 'vendor' %}Approve supplier{% elif item.kind == 'deposit' %}Approve banking{% elif item.kind == 'stock_adjust' %}Approve stock correction{% else %}Approve bill{% endif %}</a>{% endif %}
 {% if can_approve and item.extra.repeat_ok %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=repeat_ok">Approve this order</a>{% endif %}
 {% if can_approve and item.extra.routine %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=routine">Approve and mark supplier as routine</a>{% endif %}
 {% if can_approve and item.skip %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=skip">{% if item.kind == 'bill' %}Skip for this plan{% else %}Skip for now{% endif %}</a>{% endif %}
