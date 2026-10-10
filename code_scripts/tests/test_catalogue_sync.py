@@ -96,8 +96,8 @@ class Base(unittest.TestCase):
         for key in (cs.AUTO_ENV, cs.APPROVAL_ENV, cs.CAP_ENV):
             os.environ.pop(key, None)
 
-    def plan(self, new_products, scrapes, receipts=None, name="plan", only_ids=None, qbo=True):
-        self.epos = FakeEpos(scrapes, receipts)
+    def plan(self, new_products, scrapes=None, receipts=None, name="plan", only_ids=None, qbo=True, epos=None):
+        self.epos = epos or FakeEpos(scrapes, receipts)
         catalogue = [cs.normalize_product(p) for p in BASE_CATALOGUE + new_products]
         return cs.build_plan(out=self.tmp / name, catalogue=catalogue, mapping_path=self.mapping, state=self.state,
                              epos=self.epos, client=client(self.fake) if qbo else None, only_ids=only_ids)
@@ -188,6 +188,26 @@ class PlanClassificationTests(Base):
         self.assertEqual(ds["409"]["review"], cs.REVIEW)
         self.assertEqual(ds["409"]["payload"]["QtyOnHand"], 0)
         self.assertTrue(cs.needs_attention(plan))
+
+    def test_po_check_failure_holds_only_products_with_stock(self):
+        # 9 Oct 2026: the EPOS PO list timed out and failed the whole product step
+        class SlowEpos(FakeEpos):
+            def po_receipts(self, ids):
+                raise TimeoutError("Page.goto: Timeout 30000ms exceeded.")
+        epos = SlowEpos({"408": scrape("408", stock=3), "410": scrape("410", stock=0)})
+        plan = self.plan([product("408", "MILO TIN", True), product("410", "BOURNVITA TIN", True)], epos=epos)
+        ds = self.by_pid(plan)
+        self.assertEqual(ds["408"]["review"], cs.REVIEW)
+        self.assertTrue(any("could not be checked" in n for n in ds["408"]["notes"]))
+        self.assertEqual(ds["410"]["review"], cs.AUTO)  # no stock to explain: unaffected
+
+    def test_po_receipts_read_from_list_and_details_by_text_ref(self):
+        orders = [{"OrderRef": 4001, "StatusName": "Received", "DateReceived": "2026-10-02T10:00:00"},
+                  {"OrderRef": 4002, "StatusName": "Received", "DateReceived": "2026-10-03T10:00:00"}]
+        details = {"4001": {"Products": [{"ProductId": 408, "QuantityReceived": 3}]}}
+        r = cs.receipts_from_orders(orders, details, ["408"])
+        self.assertEqual([x["po"] for x in r["408"]], ["4001"])
+        self.assertEqual(r["_missing_details"], ["4002"])
 
     def test_new_master_and_child_in_same_run(self):
         plan = self.plan([product("410", "PEAK MILK*48", True, vos=48), product("411", "PEAK MILK", False)],

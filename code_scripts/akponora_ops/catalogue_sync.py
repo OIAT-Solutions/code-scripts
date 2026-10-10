@@ -29,7 +29,7 @@ are never planned (no create, no mapping row) and are reported as ``excluded``; 
 excluded master is HOLD ``MASTER_EXCLUDED``. Excluding a product does NOT make its till sales post.
 
 New tracked products: the current EPOS stock is read from the same Advanced Edit page. Non-zero stock
-is compared with October EPOS PO receipts (``bills_from_epos_pos.capture_pos``). Explained stock is
+is compared with October EPOS PO receipts (``bills_sync.capture_epos``, cached per PO). Explained stock is
 noted (it reaches QBO through the PO's Bill); unexplained stock is flagged UNEXPLAINED_STOCK. The item
 is still created at qty 0: this job NEVER posts an InventoryAdjustment (that needs a chat yes).
 
@@ -102,7 +102,6 @@ from code_scripts.product_conversion import (
 )
 from code_scripts.scripts.akponora_cutover import w7_create_items as w7
 from code_scripts.scripts.akponora_cutover._common import company_config, epos_login
-from code_scripts.scripts.akponora_cutover.bills_from_epos_pos import capture_pos
 from code_scripts.scripts.akponora_cutover.build_final_mapping import ns_name
 from code_scripts.scripts.akponora_cutover.epos_catalogue_pull import products_from_captures, pull, write_products
 from code_scripts.scripts.akponora_cutover.epos_master_links import scrape_product
@@ -283,29 +282,35 @@ def diff_catalogue(catalogue: dict, mapping_rows: list[dict], snapshot: dict | N
 # ---------------------------------------------------------------- EPOS sources
 def receipts_from_po_capture(po_list_path, po_details_path, ids) -> dict[str, list[dict]]:
     """Per EPOS product id: PO lines with QuantityReceived != 0 from a capture_pos evidence folder."""
-    ids = set(ids)
     orders = json.loads(Path(po_list_path).read_text())["body"]["orders"]
     details = {}
     for line in Path(po_details_path).read_text().splitlines():
         if line.strip():
             d = json.loads(line)
-            details[d.get("OrderRef")] = d
+            details[str(d.get("OrderRef"))] = d
+    return receipts_from_orders(orders, details, ids)
+
+
+def receipts_from_orders(orders: list[dict], details: dict, ids) -> dict[str, list[dict]]:
+    """``details`` keyed by OrderRef (as text)."""
+    ids = set(ids)
     out = defaultdict(list)
     for o in orders:
-        d = details.get(o.get("OrderRef"))
+        d = details.get(str(o.get("OrderRef")))
         for p in (d or {}).get("Products") or []:
             pid = canonical_product_id(p.get("ProductId"))
             qty = w7.D(p.get("QuantityReceived"), Decimal(0))
             if pid in ids and qty != 0:
                 out[pid].append({"po": str(o.get("OrderRef")), "status": o.get("StatusName"),
                                  "received": (o.get("DateReceived") or "")[:19], "qty": str(qty)})
-    missing = [str(o.get("OrderRef")) for o in orders if o.get("OrderRef") not in details]
+    missing = [str(o.get("OrderRef")) for o in orders if str(o.get("OrderRef")) not in details]
     if missing:
         out["_missing_details"] = missing
     return dict(out)
 
 
 PULL_ATTEMPTS = 3
+PO_CACHE = "po_detail_cache.jsonl"  # this step's own copy; the bills step keeps its own
 
 
 class LiveEpos:
@@ -354,10 +359,15 @@ class LiveEpos:
         return out
 
     def po_receipts(self, ids) -> dict[str, list[dict]]:
+        """October PO receipts. Details are kept in this step's own cache, so each night only POs that are
+        new or changed since the last run are opened (the full October list used to be re-opened nightly)."""
+        from code_scripts.akponora_ops.bills_sync import capture_epos
+
         ev = self.out / "epos_pos"
         ev.mkdir(parents=True, exist_ok=True)
-        capture_pos(ev, INV_START, business_today(), 100000, COMPANY)
-        return receipts_from_po_capture(ev / "po_list_raw.json", ev / "po_details.jsonl", ids)
+        orders, details = capture_epos(ev, order_from=INV_START, order_to=business_today(), want=lambda o: True,
+                                       cacheable=lambda o: True, cache_path=state_dir(TOOL) / PO_CACHE)
+        return receipts_from_orders(orders, details, ids)
 
 
 class OfflineEpos:
@@ -614,7 +624,15 @@ def apply_stock_check(decisions: list[dict], epos) -> None:
     pending = [d for d in decisions if d["action"] == CREATE_INV and d["stock"] and Decimal(d["stock"]["units"]) > 0]
     if not pending:
         return
-    receipts = epos.po_receipts([d["pid"] for d in pending])
+    try:
+        receipts = epos.po_receipts([d["pid"] for d in pending])
+    except Exception as exc:  # noqa: BLE001 - EPOS slow/unreachable: hold these products, never the whole step
+        print(f"PO receipt check failed ({str(exc)[:200]}); {len(pending)} product(s) with stock go to review", flush=True)
+        for d in pending:
+            d["flags"].append("UNEXPLAINED_STOCK")
+            d["notes"].append(f"EPOS stock {fmt(Decimal(d['stock']['units']))} could not be checked against October "
+                              "PO receipts (EPOS did not respond); created at qty 0 after review. The next run checks again")
+        return
     missing = receipts.get("_missing_details") or []
     for d in pending:
         units = Decimal(d["stock"]["units"])
