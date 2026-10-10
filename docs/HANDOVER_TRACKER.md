@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-06 by Codex (local stock-reconciliation milestone; no deployment).
+**Last updated:** 2026-10-10 by Claude (5–10 Oct changes below; all deployed, server and GitHub at `cdcee81`).
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: cutover log (removed 5 Oct; in git history).
 
@@ -35,6 +35,17 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 ---
 
 ## 2. Live state (production), as of 4 Oct 2026
+
+**5–10 Oct (Claude), all deployed; server checkout = origin `cursor/post-akponora-qbo-writes-51f3`:**
+- Banking: till sheet over sales → every bank equals the sheet to the kobo, extra to **800100 - Till Overage** (QBO Id 88; note on each line names the day and till lines). Days banked before this keep their old split. Margin max(₦100,000, 5%) (portal settings file). 25 Sep–7 Oct banked.
+- Credit sales: invoice numbers without `.0` (5 Oct invoices renamed in QBO with owner yes).
+- Bills: routine suppliers' repeats are not held; supplier names fixed in `vendors.csv` after QBO merges/renames; **EPOS suppliers created with exact QBO names** (144: 108 + top-up 36, via Claude in Chrome) — a supplier picked on the EPOS PO links by EPOS id / exact name (`5a1f835`). Staff still type suppliers in the PO note (no PO had a picked supplier by 9 Oct); EPOS builds a PO under a supplier from its Supplier List.
+- Products step: a failed EPOS PO check holds only the products it covers; PO details cached (`c93a7bd`). EPOS page loads retried (`f316919`).
+- Stock: empty EPOS stock takes are not errors (`6c88288`); `stock_adjust` plan → portal "Approve stock correction" → InventoryAdjustment to account 82 (`e460bff`); waits for staff count answers (workbook `outputs/stock_staff_review_01a11369/`). First live post: one item, checked, with owner yes.
+- Portal: Refresh on Needs your attention (read-only re-check), Suppliers tab / Recent work / Days-not-confirmed KPI removed, one stale-warning fix.
+- **Nora Mart Payments workbook** ([doc](AKPONORA_PAYMENTS_SHEET.md)), daily step `payments`, posting on from 10 Oct: staff enter credit repayments and supplier payments; system posts ReceivePayment / BillPayment.
+- Codex's 4 server-only commits (6 Oct) were brought onto GitHub with identical hashes; **do not commit on the server checkout**.
+- EPOS refused the server's connections on 10 Oct after many ad-hoc logins: ad-hoc EPOS checks go through a browser, not the server.
 
 **6 Oct read-only refresh:** deployed branch HEAD verified as `c3a3d19`. Stock review compares sales posted through 5 Oct with EPOS read on 6 Oct; it is not a same-cutoff physical count. Live EPOS pack deductions for Coke 6-pack and Colgate single still show 12. No settings or financial records were changed. Evidence is ignored under `outputs/stock_recovery_2026-10-06/` in the stock-reconciliation worktree.
 
