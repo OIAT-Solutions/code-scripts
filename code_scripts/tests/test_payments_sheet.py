@@ -103,7 +103,7 @@ class PaymentsSheetTests(unittest.TestCase):
         self.assertEqual(self.run_(sheet)["credit"], [])  # second run: nothing new
         self.assertEqual(len(self.qbo.posts), 2)
         self.assertEqual(sheet.bodies[(ps.CREDIT_SALES, "A")][0][6], "Paid")
-        self.assertEqual(sheet.bodies[(ps.LISTS, "B")], [])
+        self.assertEqual(sheet.bodies[(ps.LISTS, "B")], [])  # paid in full: no longer offered
 
     def test_sheet_losing_the_mark_never_posts_twice(self):
         sheet = FakeSheet(credit=[pay("CR261005-389764", 1000)])
@@ -149,6 +149,16 @@ class PaymentsSheetTests(unittest.TestCase):
 
     def test_off_without_sheet_id(self):
         self.assertFalse(ps.run(client=self.qbo, sheet=FakeSheet(), env={})["enabled"])
+
+    def test_staff_pick_by_name_date_and_amount(self):
+        sheet = FakeSheet(credit=[pay("Mrs VERA AKPOREHA · 5 Oct 2026 · ₦58,200.00 · CR261005-389764", 1000)],
+                          bills=[pay("UNCLE SAM'S BAKERY & CAFE · 3 Oct 2026 · ₦72,000.00 · EPOS-PO-3976", 2000)])
+        sheet.tabs[ps.CREDIT_PAYMENTS][0][0] = "Credit Sale"  # staff-facing header name is accepted
+        sheet.tabs[ps.BILL_PAYMENTS][0][0] = "Bill"
+        r = self.run_(sheet)
+        self.assertEqual([x["status"] for x in r["credit"] + r["bills"]], ["posted", "posted"])
+        self.assertEqual(sheet.bodies[(ps.LISTS, "B")], [["Mrs VERA AKPOREHA · 5 Oct 2026 · ₦58,200.00 · CR261005-389764"]])
+        self.assertEqual(sheet.bodies[(ps.LISTS, "C")], [["UNCLE SAM'S BAKERY & CAFE · 3 Oct 2026 · ₦72,000.00 · EPOS-PO-3976"]])
 
     def test_sheet_dates(self):
         self.assertEqual(ps.parse_day("06/10/2026"), "2026-10-06")

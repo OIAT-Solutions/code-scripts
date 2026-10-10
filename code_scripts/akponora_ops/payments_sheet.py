@@ -7,7 +7,9 @@ Each run:
 1. Writes the system tabs from QuickBooks: ``Credit sales`` (credit invoices ``CR...`` from 1 Oct with
    their balance), ``Bills to pay`` (every open bill) and ``Lists`` B/C (open invoice / bill numbers for
    the dropdowns). Staff never edit these.
-2. Reads ``Credit payments`` and ``Bill payments``. A row is processed once: its key (sha of the row's
+2. Reads ``Credit payments`` and ``Bill payments``. Staff pick a line such as
+   ``Mrs VERA AKPOREHA · 5 Oct 2026 · ₦58,200.00 · CR261005-389764`` (who · when · total · number); the
+   number at the end identifies the invoice/bill, so staff never need QuickBooks numbers. A row is processed once: its key (sha of the row's
    staff cells + how many identical rows come before it) is stored in ``posted.json`` and in the QBO memo.
    Checks: the invoice/bill exists and is open, the account is one of the listed accounts and maps to
    exactly one active QBO Bank account by its number, the amount is > 0 and not more than the balance
@@ -109,8 +111,13 @@ def settings(env=None) -> dict:
             "cap": money(env.get(CAP_ENV)) or Decimal("2000000")}
 
 
+FIRST_COL_NAMES = {"Invoice No": {"Invoice No", "Credit Sale"}, "Bill No": {"Bill No", "Bill"}}
+
+
 def headers_ok(rows: list[list], cols: list[str], tab: str) -> None:
     got = [clean(c) for c in (rows[0] if rows else [])][:len(cols)]
+    if got and got[0] in FIRST_COL_NAMES.get(cols[0], ()) and tab in (CREDIT_PAYMENTS, BILL_PAYMENTS):
+        got[0] = cols[0]  # the staff-facing name of the pick column ("Credit Sale" / "Bill") is accepted
     if got != cols:
         raise SheetError(f"tab '{tab}' headers are {got}, expected {cols} - fix the sheet, nothing was posted")
 
@@ -186,8 +193,30 @@ def system_rows(qbo: dict) -> dict:
         days = (ref - date.fromisoformat(b["TxnDate"])).days if b.get("TxnDate") else ""
         bills.append([bill_no(b, dup), b.get("TxnDate"), (b.get("VendorRef") or {}).get("name", ""), float(total),
                       float(total - bal), float(bal), days, stamp])
+    pick = lambda rows: sorted((label(r[2], r[1], r[3], r[0]) for r in rows), key=str.casefold)  # noqa: E731
     return {"credit": credit, "bills": bills,
-            "open_invoices": [r[0] for r in credit if r[5] > 0], "open_bills": [r[0] for r in bills]}
+            "open_invoices": pick([r for r in credit if r[5] > 0]), "open_bills": pick(bills)}
+
+
+SEP = " · "
+
+
+def nice_day(iso: str) -> str:
+    try:
+        d = date.fromisoformat(str(iso))
+    except ValueError:
+        return str(iso or "")
+    return f"{d.day} {d:%b %Y}"
+
+
+def label(name: str, day: str, total, doc: str) -> str:
+    """What staff pick: who · when · how much · the QuickBooks number (read back by ``doc_of``)."""
+    return SEP.join([clean(name) or "?", nice_day(day), f"₦{Decimal(str(total or 0)):,.2f}", doc])
+
+
+def doc_of(cell) -> str:
+    """The QuickBooks number from a picked label (its last part); a bare number is accepted too."""
+    return clean(cell).rsplit(SEP.strip(), 1)[-1].strip() if SEP.strip() in clean(cell) else clean(cell)
 
 
 def bank_for(label: str, banks: list[dict]) -> tuple[dict | None, str]:
@@ -205,7 +234,7 @@ def check_row(kind: str, cells: list, target: dict | None, left: Decimal | None,
     """(payload parts or None, problem). ``left`` = balance still open after earlier rows this run."""
     amount, day, label = money(cells[1]), parse_day(cells[2]), clean(cells[3])
     if target is None:
-        return None, f"{'invoice' if kind == 'credit' else 'bill'} {clean(cells[0]) or '(blank)'} is not open in QuickBooks"
+        return None, f"{'credit sale' if kind == 'credit' else 'bill'} {doc_of(cells[0]) or '(blank)'} is not open in QuickBooks"
     if amount is None or amount <= 0:
         return None, "the amount is missing or not a positive number"
     if amount > left:
@@ -228,7 +257,7 @@ def check_row(kind: str, cells: list, target: dict | None, left: Decimal | None,
 
 def payload(kind: str, target: dict, parts: dict, cells: list, key: str) -> tuple[str, dict]:
     amount = float(parts["amount"])
-    note = (f"{'Credit sale payment' if kind == 'credit' else 'Supplier payment'} {clean(cells[0])} | "
+    note = (f"{'Credit sale payment' if kind == 'credit' else 'Supplier payment'} {doc_of(cells[0])} | "
             f"entered by {clean(cells[5]) or '?'} in the Nora Mart Payments sheet | row {key} | auto by {TOOL}")
     ref = clean(cells[4])[:21]
     if kind == "credit":
@@ -268,7 +297,7 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
         if status == POSTED:  # changed after posting: the old key is gone; never re-post an edited row
             results.append({"row": n, "status": "edited after posting"})
             continue
-        target_key = clean(cells[0])
+        target_key = doc_of(cells[0])
         target = targets.get(target_key)
         parts, why = check_row(kind, cells, target, left.get(target_key), qbo["banks"], qbo["book_close"], s["cap"])
         row = {"row": n, "doc": target_key, "amount": str(money(cells[1]) or ""), "account": clean(cells[3])}
