@@ -31,7 +31,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -85,6 +85,22 @@ def parse_day(value) -> str:
         except ValueError:
             continue
     return ""
+
+
+EPOCH = date(1899, 12, 30)  # Google Sheets day 0
+
+
+def serial(iso: str | None):
+    """An ISO date as a Sheets date number, so the column's date format applies ('' when not a date)."""
+    try:
+        return (date.fromisoformat(str(iso)) - EPOCH).days
+    except ValueError:
+        return ""
+
+
+def now_serial() -> float:
+    n = datetime.now(TZ).replace(tzinfo=None)
+    return round((n - datetime(1899, 12, 30)).total_seconds() / 86400, 6)
 
 
 def now_text() -> str:
@@ -195,12 +211,12 @@ def bill_no(bill: dict, dup: set) -> str:
 
 
 def system_rows(qbo: dict) -> dict:
-    stamp, ref = now_text(), date.fromisoformat(today())
+    stamp, ref = now_serial(), date.fromisoformat(today())
     credit = []
     for i in sorted(qbo["invoices"], key=lambda x: (x.get("TxnDate") or "", x.get("DocNumber") or "")):
         total, bal = Decimal(str(i.get("TotalAmt") or 0)), Decimal(str(i.get("Balance") or 0))
         status = "Paid" if bal == 0 else "Open" if bal == total else "Part paid"
-        credit.append([i["DocNumber"], i.get("TxnDate"), (i.get("CustomerRef") or {}).get("name", ""), float(total),
+        credit.append([i["DocNumber"], serial(i.get("TxnDate")), (i.get("CustomerRef") or {}).get("name", ""), float(total),
                        float(total - bal), float(bal), status, stamp])
     docs = [clean(b.get("DocNumber")) for b in qbo["bills"]]
     dup = {d for d in docs if d and docs.count(d) > 1}
@@ -208,9 +224,10 @@ def system_rows(qbo: dict) -> dict:
     for b in sorted(qbo["bills"], key=lambda x: (x.get("TxnDate") or "", x.get("Id"))):
         total, bal = Decimal(str(b.get("TotalAmt") or 0)), Decimal(str(b.get("Balance") or 0))
         days = (ref - date.fromisoformat(b["TxnDate"])).days if b.get("TxnDate") else ""
-        bills.append([bill_no(b, dup), b.get("TxnDate"), (b.get("VendorRef") or {}).get("name", ""), float(total),
+        bills.append([bill_no(b, dup), serial(b.get("TxnDate")), (b.get("VendorRef") or {}).get("name", ""), float(total),
                       float(total - bal), float(bal), days, stamp])
-    pick = lambda rows: sorted((label(r[2], r[1], r[3], r[0]) for r in rows), key=str.casefold)  # noqa: E731
+    day = lambda n: (EPOCH + timedelta(days=n)).isoformat() if isinstance(n, int) else ""  # noqa: E731
+    pick = lambda rows: sorted((label(r[2], day(r[1]), r[3], r[0]) for r in rows), key=str.casefold)  # noqa: E731
     return {"credit": credit, "bills": bills,
             "open_invoices": pick([r for r in credit if r[5] > 0]), "open_bills": pick(bills)}
 

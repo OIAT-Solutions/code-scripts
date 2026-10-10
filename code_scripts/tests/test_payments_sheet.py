@@ -164,6 +164,14 @@ class PaymentsSheetTests(unittest.TestCase):
         self.assertEqual(sheet.bodies[(ps.LISTS, "B")], [["Mrs VERA AKPOREHA · 5 Oct 2026 · ₦58,200.00 · CR261005-389764"]])
         self.assertEqual(sheet.bodies[(ps.LISTS, "C")], [["UNCLE SAM'S BAKERY & CAFE · 3 Oct 2026 · ₦72,000.00 · EPOS-PO-3976"]])
 
+    def test_system_tabs_write_real_dates(self):
+        sheet = FakeSheet()
+        self.run_(sheet)
+        row = sheet.bodies[(ps.CREDIT_SALES, "A")][0]
+        self.assertEqual(row[1], 46300)  # 5 Oct 2026 as a Sheets date number
+        self.assertIsInstance(row[7], float)
+        self.assertEqual(sheet.bodies[(ps.BILLS, "A")][0][1], 46298)
+
     def test_sheet_dates(self):
         self.assertEqual(ps.parse_day("06/10/2026"), "2026-10-06")
         self.assertEqual(ps.parse_day(46301), "2026-10-06")
