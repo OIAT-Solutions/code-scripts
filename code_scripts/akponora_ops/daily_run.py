@@ -54,7 +54,7 @@ import os
 import subprocess
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -66,7 +66,7 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
-STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "uf")
+STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "uf", "payments")
 DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
@@ -148,7 +148,8 @@ class DailyRun:
     def __init__(self, business_day: str, *, dry_run: bool = False, only: list[str] | None = None,
                  root: Path | None = None, runner: Callable = run_command, slack: Callable | None = None,
                  send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
-                 uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None):
+                 uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None,
+                 payments_client=None, payments_write_client=None):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
@@ -161,6 +162,7 @@ class DailyRun:
         self.uf_sheet = uf_sheet
         self.credit_client = credit_client
         self.credit_write_client = credit_write_client
+        self.payments_client, self.payments_write_client = payments_client, payments_write_client
         self.python = python
         stamp = datetime.now(timezone.utc).strftime("%H%M%SZ")
         self.day_dir = Path(root) if root else _daily_root() / business_day
@@ -371,6 +373,29 @@ class DailyRun:
             res.status = OK
         if not invoices and not r["mixed"]:
             res.detail = "no credit sales"
+
+    def step_payments(self, res: StepResult) -> None:
+        """Nora Mart Payments workbook: credit repayments and supplier payments -> QBO (payments_sheet)."""
+        from code_scripts.akponora_ops import payments_sheet as ps
+        from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
+
+        s = ps.settings(self.base_env)
+        if not s["sheet_id"]:
+            res.status, res.detail = DISABLED, f"off ({ps.SHEET_ENV} not set)"
+            return
+        client = self.payments_client or QBOClient.for_company_a(allow_writes=False)
+        write = None
+        if s["post"] and not self.dry_run:
+            write = self.payments_write_client or QBOClient.for_company_a(allow_writes=True)
+        r = ps.run(client=client, write_client=write, env=self.base_env, dry_run=self.dry_run, out=Path(res.out))
+        res.counts = {"post": r["post"], "credit": r["credit"], "bills": r["bills"],
+                      "open_credit": r.get("open_credit"), "open_bills": r.get("open_bills")}
+        for kind, rows in (("credit payment", r["credit"]), ("bill payment", r["bills"])):
+            for x in rows:
+                if x["status"] in ("held", "failed", "waiting", "edited after posting"):
+                    res.review.append(f"{kind} row {x['row']} {x.get('doc', '')} N{x.get('amount', '')}: "
+                                      f"{x['status']} {x.get('reason', '')}".rstrip())
+        res.status = FAILED if any(x["status"] == "failed" for x in r["credit"] + r["bills"]) else REVIEW if res.review else OK
 
     def step_guard(self, res: StepResult) -> None:
         out = Path(res.out)
@@ -604,6 +629,11 @@ def step_line(r: dict) -> str:
         body = "; ".join(b for b in bits if b)
         if c.get("till_sheet"):
             body += ". " + c["till_sheet"]
+    elif name == "payments":
+        rows = (c.get("credit") or []) + (c.get("bills") or [])
+        n = Counter(x["status"] for x in rows)
+        body = (f"credit payments {len(c.get('credit') or [])}, bill payments {len(c.get('bills') or [])}: "
+                + ", ".join(f"{k} {v}" for k, v in sorted(n.items())) if rows else "no new payment rows")
     else:
         body = ""
     detail = r.get("detail") or ""
@@ -662,7 +692,7 @@ def technical_text(summary: dict) -> str:
 
 # ---------------------------------------------------------------- the Slack messages (plain English)
 STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "credit": "Credit sales", "guard": "Item check",
-              "stock": "Stock", "uf": "Banking"}
+              "stock": "Stock", "uf": "Banking", "payments": "Payments sheet"}
 SHEET_URL = "https://docs.google.com/spreadsheets/d/{}"
 
 
@@ -1056,6 +1086,24 @@ def slack_text(summary: dict) -> str:
                 oiat.append(f"{len(old)} days not banked after more than {limit} days ({day_list(d['day'] for d in old)}; "
                             f"oldest {days_waiting(old[0]['day'], summary['business_date'])} days): "
                             f"follow up with the store → {sheet}")
+
+    # Payments sheet: credit repayments and supplier payments entered by staff
+    if status("payments") not in (None, SKIPPED, DISABLED):
+        c = counts("payments")
+        rows = [dict(x, kind="credit") for x in c.get("credit") or []] + [dict(x, kind="bill") for x in c.get("bills") or []]
+        if status("payments") == FAILED and not rows:
+            oiat.append(f"the payments sheet step didn't run → {run}")
+            section("Payments", "didn't run")
+        elif rows:
+            posted = [x for x in rows if x["status"] == "posted"]
+            held = [x for x in rows if x["status"] in ("held", "failed", "waiting")]
+            got = sum(Decimal(str(x.get("amount") or 0)) for x in posted if x["kind"] == "credit")
+            paid = sum(Decimal(str(x.get("amount") or 0)) for x in posted if x["kind"] == "bill")
+            bits = [b for b in (f"{naira_text(got)} received on credit sales" if got else "",
+                                f"{naira_text(paid)} paid to suppliers" if paid else "") if b] or ["nothing posted"]
+            section("Payments", " · ".join(bits))
+            for x in held:
+                store.append(f"payments sheet row {x['row']} ({x.get('doc') or '?'}): {x.get('reason') or x['status']}")
 
     # Checks (products, item check, stock): did they run, and what changed
     check_bits, broken = [], []
