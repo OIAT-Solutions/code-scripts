@@ -61,6 +61,9 @@ class FakeSheet:
     def replace_body(self, tab, cols, rows, first_col="A"):
         self.bodies[(tab, first_col)] = rows
 
+    def lock_rows(self, tab, rows, editor):
+        self.locked = getattr(self, "locked", []) + [(tab, n) for n in rows]
+
     def write_cells(self, updates):
         for rng, vals in updates:
             tab, cell = rng.rsplit("!", 1)
@@ -100,6 +103,7 @@ class PaymentsSheetTests(unittest.TestCase):
         self.assertEqual(self.qbo.posts[1][1]["DepositToAccountRef"], {"value": "29"})
         self.assertEqual(self.qbo.invoices["80642"]["Balance"], 0)
         self.assertEqual(sheet.cells[(ps.CREDIT_PAYMENTS, 2)][0], ps.POSTED)
+        self.assertEqual(sheet.locked, [(ps.CREDIT_PAYMENTS, 2), (ps.CREDIT_PAYMENTS, 3)])  # posted rows locked
         self.assertEqual(self.run_(sheet)["credit"], [])  # second run: nothing new
         self.assertEqual(len(self.qbo.posts), 2)
         self.assertEqual(sheet.bodies[(ps.CREDIT_SALES, "A")][0][6], "Paid")

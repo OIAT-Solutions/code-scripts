@@ -17,7 +17,8 @@ Each run:
    Over ``OIAT_COMPANY_A_PAYMENTS_CAP`` (N2,000,000) waits for approval. Then posts a ReceivePayment
    (credit) or BillPayment (bill) into/from that account, with a stable Intuit requestid, re-reads the
    invoice/bill (its balance must fall by the amount) and writes Status / QuickBooks Payment No /
-   Processed At back on the row. A problem is written as ``Held: <reason>``; the row is retried next run.
+   Processed At back on the row, then locks and greys the row (only the owner and the service account can
+   change it). A problem is written as ``Held: <reason>``; the row is retried next run.
 
 Settings (env or ``STATE_ROOT/ops/company_a/payments_sheet/settings.env``):
 ``OIAT_COMPANY_A_PAYMENTS_SHEET_ID`` (off when blank), ``OIAT_COMPANY_A_PAYMENTS_POST=1`` to post (else
@@ -140,6 +141,7 @@ class GoogleSheet:
         if service is None:
             from code_scripts.akponora_ops.till_sheet_marks import writer_service
             service = writer_service(key_path)
+        self.service = service
         self.values = service.spreadsheets().values()
 
     def read(self, tab: str, cols: int) -> list[list]:
@@ -154,6 +156,21 @@ class GoogleSheet:
         if rows:
             self.values.update(spreadsheetId=self.id, range=f"'{tab}'!{first_col}2", valueInputOption="RAW",
                                body={"values": rows}).execute()
+
+    def lock_rows(self, tab: str, rows: list[int], editor: str) -> None:
+        """Lock posted rows (only the owner and ``editor`` may change them) and shade them grey."""
+        if not rows:
+            return
+        meta = self.service.spreadsheets().get(spreadsheetId=self.id, fields="sheets.properties").execute()
+        sid = next(sh["properties"]["sheetId"] for sh in meta["sheets"] if sh["properties"]["title"] == tab)
+        reqs = []
+        for n in sorted(set(rows)):
+            rng = {"sheetId": sid, "startRowIndex": n - 1, "endRowIndex": n, "startColumnIndex": 0, "endColumnIndex": 10}
+            reqs.append({"addProtectedRange": {"protectedRange": {
+                "range": rng, "description": f"{TOOL}: posted payment (row {n})", "editors": {"users": [editor]}}}})
+            reqs.append({"repeatCell": {"range": rng, "cell": {"userEnteredFormat": {
+                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85}}}, "fields": "userEnteredFormat.backgroundColor"}})
+        self.service.spreadsheets().batchUpdate(spreadsheetId=self.id, body={"requests": reqs}).execute()
 
     def write_cells(self, updates: list[tuple[str, list]]) -> None:
         if updates:
@@ -344,9 +361,12 @@ def run(*, client, write_client=None, sheet=None, env=None, dry_run: bool = Fals
     res = {"enabled": bool(s["sheet_id"]), "post": s["post"] and not dry_run, "credit": [], "bills": [], "error": ""}
     if not s["sheet_id"]:
         return res
+    editor = ""
     if sheet is None:
         from code_scripts.akponora_ops import uf_deposits as ufd
-        sheet = GoogleSheet(s["sheet_id"], ufd.key_path(ufd.settings()))
+        key = ufd.key_path(ufd.settings())
+        sheet = GoogleSheet(s["sheet_id"], key)
+        editor = json.loads(Path(key).read_text()).get("client_email", "")
     qbo = load_qbo(client)
     sys_rows = system_rows(qbo)
     credit_rows, bill_rows = sheet.read(CREDIT_PAYMENTS, 10), sheet.read(BILL_PAYMENTS, 10)
@@ -374,6 +394,9 @@ def run(*, client, write_client=None, sheet=None, env=None, dry_run: bool = Fals
         sheet.replace_body(LISTS, 1, [[d] for d in sys_rows["open_bills"]], first_col="C")
         sheet.write_cells([(f"'{CREDIT_PAYMENTS}'!H{n}:J{n}", v) for n, v in cu] +
                           [(f"'{BILL_PAYMENTS}'!H{n}:J{n}", v) for n, v in bu])
+        # rows that became Posted this run (or got their mark back) are locked and greyed for staff
+        for tab, ups in ((CREDIT_PAYMENTS, cu), (BILL_PAYMENTS, bu)):
+            sheet.lock_rows(tab, [n for n, v in ups if v[0] == POSTED], editor or "oiat-sheets-reader@oiat-ops.iam.gserviceaccount.com")
     res["open_credit"] = len(sys_rows["open_invoices"])
     res["open_bills"] = len(sys_rows["open_bills"])
     if out:
