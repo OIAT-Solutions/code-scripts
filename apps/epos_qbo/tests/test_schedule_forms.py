@@ -46,8 +46,6 @@ class RunScheduleFormTests(TestCase):
             "parallel": "3",
             "stagger_seconds": "4",
             "continue_on_failure": "on",
-            "category": "ALCOHOLS & SPIRITS",
-            "product_filter": "TROPHY",
         }
         payload.update(overrides)
         return payload
@@ -85,55 +83,11 @@ class RunScheduleFormTests(TestCase):
         self.assertFalse(schedule.continue_on_failure)
         self.assertEqual(schedule.inventory_options_json, {})
 
-    def test_recurring_inventory_one_company_requires_inventory_enabled_company(self):
-        disabled_form = RunScheduleForm(
-            data=self._payload(
-                workflow=RunScheduleForm.WORKFLOW_INVENTORY,
-                company_target=RunScheduleForm.COMPANY_TARGET_ONE,
-                company_key=self.sales_only_company.company_key,
-                category="ALCOHOLS & SPIRITS",
-                product_filter="TROPHY",
-            )
-        )
-        self.assertFalse(disabled_form.is_valid())
-        self.assertIn("inventory-enabled company", str(disabled_form.errors))
-
-        form = RunScheduleForm(
-            data=self._payload(
-                workflow=RunScheduleForm.WORKFLOW_INVENTORY,
-                company_target=RunScheduleForm.COMPANY_TARGET_ONE,
-                company_key=self.inventory_company.company_key,
-                category="ALCOHOLS & SPIRITS",
-                product_filter="TROPHY",
-                parallel="5",
-                continue_on_failure="on",
-            )
-        )
-
-        self.assertTrue(form.is_valid(), form.errors)
-        schedule = form.save(commit=False)
-
-        self.assertEqual(schedule.scope, RunJob.SCOPE_INVENTORY_PIPELINE)
-        self.assertEqual(schedule.company_key, self.inventory_company.company_key)
-        self.assertEqual(
-            schedule.inventory_options_json,
-            {"categories": ["ALCOHOLS & SPIRITS"], "product_filter": "TROPHY"},
-        )
-        self.assertEqual(schedule.parallel, 1)
-        self.assertEqual(schedule.stagger_seconds, 0)
-        self.assertFalse(schedule.continue_on_failure)
-
-    def test_inventory_all_companies_is_invalid(self):
-        form = RunScheduleForm(
-            data=self._payload(
-                workflow=RunScheduleForm.WORKFLOW_INVENTORY,
-                company_target=RunScheduleForm.COMPANY_TARGET_ALL,
-                company_key="",
-            )
-        )
-
+    def test_inventory_can_no_longer_be_scheduled(self):
+        form = RunScheduleForm(data=self._payload(workflow="inventory", company_target=RunScheduleForm.COMPANY_TARGET_ONE,
+                                                  company_key=self.sales_only_company.company_key))
         self.assertFalse(form.is_valid())
-        self.assertIn("not supported yet", str(form.errors))
+        self.assertIn("workflow", form.errors)
 
     def test_one_time_schedule_requires_date_time_and_computes_run_once_at(self):
         missing_form = RunScheduleForm(
@@ -150,11 +104,11 @@ class RunScheduleFormTests(TestCase):
 
         form = RunScheduleForm(
             data=self._payload(
-                name="Sunday Inventory Sync",
+                name="Sunday Goldplates Sales",
                 schedule_type=RunSchedule.SCHEDULE_TYPE_ONE_TIME,
-                workflow=RunScheduleForm.WORKFLOW_INVENTORY,
+                workflow=RunScheduleForm.WORKFLOW_SALES,
                 company_target=RunScheduleForm.COMPANY_TARGET_ONE,
-                company_key=self.inventory_company.company_key,
+                company_key=self.sales_only_company.company_key,
                 cron_expr="",
                 timezone_name="Africa/Lagos",
                 run_once_date="2026-05-03",

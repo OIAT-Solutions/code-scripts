@@ -11,7 +11,7 @@ WORKDIR /app
 COPY requirements.txt /tmp/requirements.txt
 
 RUN pip install --upgrade pip \
-    && pip install -r /tmp/requirements.txt APScheduler \
+    && pip install -r /tmp/requirements.txt \
     && python -m playwright install --with-deps chromium
 
 COPY . /app

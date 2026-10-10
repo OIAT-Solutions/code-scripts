@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Review run · OIAT Portal{% endblock %}
+{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
+{% block content %}
+<div class="portal-panel p-6 space-y-5">
+<h1 class="text-2xl font-semibold break-words">{{ title }}</h1>
+<p class="text-sm leading-relaxed">{{ description }}</p>
+<form method="post" action="{% url 'epos_qbo:run-trigger' %}" class="flex flex-wrap gap-3 border-t border-slate-100 dark:border-slate-700 pt-5">{% csrf_token %}
+<input type="hidden" name="scope" value="single_company"><input type="hidden" name="company_key" value="{{ company_key }}">
+<input type="hidden" name="date_mode" value="target_date"><input type="hidden" name="target_date" value="{{ target_date }}">
+<button type="submit" class="btn btn-primary">Run sales</button><a class="btn btn-secondary" href="{{ back_url }}">Cancel</a>
+</form></div>
+{% endblock %}

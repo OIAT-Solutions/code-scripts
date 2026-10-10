@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Needs your attention · OIAT Portal{% endblock %}
+{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
+{% block content %}
+{% include "components/attention_banners.html" %}
+<div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+  <div><h1 class="text-2xl font-semibold">Needs your attention</h1><p class="text-sm text-slate-500 mt-2">Decisions waiting for you. Each shows what was found and what happens when you approve it.</p></div>
+  <div class="flex flex-wrap items-center gap-3">{% if can_refresh %}<form method="post" action="{% url 'epos_qbo:attention-refresh' %}">{% csrf_token %}<button type="submit" class="btn btn-secondary" {% if rechecking %}disabled{% endif %} title="Checks bills and banking again. Nothing is posted.">{% if rechecking %}Checking…{% else %}Refresh{% endif %}</button></form>{% endif %}<a href="{% url 'epos_qbo:runs' %}?company=company_a" class="btn btn-secondary">View daily runs</a></div>
+</div>
+{% for error in errors %}<p role="alert" class="border border-red-300 bg-red-50 text-red-900 dark:bg-red-950/30 dark:text-red-200 dark:border-red-900 rounded-lg p-4 mb-4">{{ error }}</p>{% endfor %}
+
+<div class="space-y-4">
+{% for item in items %}
+<article id="item-{{ item.key }}" class="portal-panel p-5">
+<p class="portal-eyebrow mb-2">{{ item.company }} · {% if item.kind == 'product' %}New product{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Bill{% elif item.kind == 'deposit' %}Banking{% elif item.kind == 'stock_movement' %}Stock adjustment{% elif item.kind == 'stock_adjust' %}Stock correction{% else %}Sales{% endif %}{% if item.date %} · {{ item.date }}{% endif %}</p>
+<h2 class="font-semibold break-words">{{ item.title }}</h2>
+<p class="text-sm mt-2 break-words">{{ item.reason }}</p>
+{% if item.kind == 'stock_movement' %}<p class="portal-muted mt-2">EPOS {{ item.extra.event.transfer_id }} · {{ item.extra.event.occurred_at_epos }} · {{ item.extra.event.staff }} · Quantity change: {{ item.extra.event.canonical_qty_change|default_if_none:'Needs unit review' }}</p>{% endif %}
+{% if item.kind == 'stock_movement' %}<p class="text-sm mt-2">Delivery: check the supplier invoice and PO before recording a bill. Count correction or loss: verify the count and use a separately approved stock correction. Do not record the same delivery twice.</p>{% for hold in item.extra.event.holds %}<p class="text-sm mt-2 text-amber-800 dark:text-amber-300">{{ hold }}</p>{% endfor %}{% endif %}
+{% if item.kind == 'vendor' and item.extra.check %}<p class="text-sm mt-2 {% if item.extra.check.ok %}text-emerald-800 dark:text-emerald-300{% else %}text-amber-800 dark:text-amber-300{% endif %}">{% if item.extra.check.ok %}Checked with QuickBooks: ready to approve.{% elif item.extra.check.result.problems %}QuickBooks check found a problem: {{ item.extra.check.result.problems|join:'; ' }}{% else %}The last QuickBooks check did not finish. Check again.{% endif %}</p>{% endif %}
+<div class="flex flex-wrap items-center gap-3 mt-4">
+{% if can_approve and item.kind == 'stock_movement' %}
+<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=delivery">Record as delivery</a>
+<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=recount">Record as count correction</a>
+<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=loss">Record as loss</a>
+{% endif %}
+{% if can_approve and item.preview %}<a class="btn {% if item.approve %}btn-secondary{% else %}btn-primary{% endif %}" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=preview">{% if item.extra.check %}Check again{% else %}Check with QuickBooks{% endif %}</a>{% endif %}
+{% if can_approve and item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=approve">{% if item.kind == 'hold' %}Clear hold{% elif item.kind == 'product' %}Approve product{% elif item.kind == 'vendor' %}Approve supplier{% elif item.kind == 'deposit' %}Approve banking{% elif item.kind == 'stock_adjust' %}Approve stock correction{% else %}Approve bill{% endif %}</a>{% endif %}
+{% if can_approve and item.extra.repeat_ok %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=repeat_ok">Approve this order</a>{% endif %}
+{% if can_approve and item.extra.routine %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=routine">Approve and mark supplier as routine</a>{% endif %}
+{% if can_approve and item.skip %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=skip">{% if item.kind == 'bill' %}Skip for this plan{% else %}Skip for now{% endif %}</a>{% endif %}
+{% if can_approve and item.exclude %}<a class="portal-link" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=exclude">{% if item.kind == 'bill' %}Handled outside, never post{% else %}Don't ask again{% endif %}</a>{% endif %}
+{% if can_run and item.kind == 'deposit' and not item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:runs' %}?run_company=company_a&amp;run_step=uf&amp;run_date={{ item.date }}">Run banking for this day</a>{% endif %}
+<a class="portal-link" href="{{ item.details_url }}">Open details</a>
+</div>
+{% if not item.approve and not item.preview and not item.extra.repeat_ok and not item.extra.routine and item.kind != 'stock_movement' %}<p class="portal-muted mt-3">{% if item.kind == 'product' %}This product can't be approved here yet. Fix it in EPOS; the next daily product check plans it again.{% else %}This can't be approved as it is. Fix the source and run a new preview first.{% endif %}</p>{% endif %}
+<details class="mt-4 text-sm"><summary class="cursor-pointer portal-link">Details</summary><pre class="portal-code mt-2">{{ item.extra }}</pre></details>
+</article>
+{% empty %}<div class="portal-panel p-6"><h2 class="font-semibold">Nothing is waiting for you</h2><p class="portal-muted mt-2">This reflects the recorded daily runs. Check the red banners for missing sales days.</p></div>{% endfor %}
+</div>
+<section class="mt-8"><h2 class="text-lg font-semibold mb-3">Recent decisions</h2>
+{% for record in recent_actions %}<div class="border-b border-slate-200 dark:border-slate-700 py-3 text-sm"><a class="underline font-medium" href="{% url 'epos_qbo:run-detail' record.job_id %}">{{ record.action_label }} · {{ record.payload.title|default:"Review action" }} · {{ record.actor }}</a><p>{{ record.reason }}</p><p class="text-slate-500">{{ record.created_at }} · {{ record.job.get_status_display }} · {{ record.result }}</p></div>{% empty %}<p class="text-sm text-slate-500">No portal decisions yet.</p>{% endfor %}
+</section>
+{% endblock %}

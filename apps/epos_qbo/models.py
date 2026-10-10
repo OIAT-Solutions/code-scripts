@@ -293,15 +293,22 @@ class QboWebhookEvent(models.Model):
 
 
 class RunJob(models.Model):
+    SCOPE_WORKSPACE_READ = "workspace_read"
+    SCOPE_PORTAL_REVIEW = "portal_review"
     SCOPE_SINGLE = "single_company"
     SCOPE_ALL = "all_companies"
     SCOPE_INVENTORY_PIPELINE = "inventory_pipeline"
     SCOPE_INVENTORY_SYNC = "inventory_sync"
+    # Nora (company_a) full daily routine: code_scripts.akponora_ops.daily_run for one closed date
+    SCOPE_COMPANY_A_DAILY = "company_a_daily"
     SCOPE_CHOICES = [
+        (SCOPE_WORKSPACE_READ, "Company records update"),
+        (SCOPE_PORTAL_REVIEW, "Company A review"),
         (SCOPE_SINGLE, "Single Company"),
         (SCOPE_ALL, "All Companies"),
         (SCOPE_INVENTORY_PIPELINE, "Inventory"),
         (SCOPE_INVENTORY_SYNC, "Inventory Sync"),
+        (SCOPE_COMPANY_A_DAILY, "Nora daily routine"),
     ]
 
     STATUS_QUEUED = "queued"
@@ -380,6 +387,10 @@ class RunJob(models.Model):
 
     @property
     def workflow_label(self) -> str:
+        if self.scope == self.SCOPE_WORKSPACE_READ:
+            return "Records update"
+        if self.scope == self.SCOPE_PORTAL_REVIEW:
+            return "Review"
         if self.scope in {self.SCOPE_SINGLE, self.SCOPE_ALL}:
             return "Sales"
         if self.scope == self.SCOPE_INVENTORY_PIPELINE:
@@ -390,6 +401,8 @@ class RunJob(models.Model):
 
     @property
     def scope_label(self) -> str:
+        if self.scope == self.SCOPE_PORTAL_REVIEW:
+            return "Company A review"
         if self.scope == self.SCOPE_ALL:
             return "All companies"
         if self.scope == self.SCOPE_SINGLE:
@@ -574,46 +587,6 @@ class RunArtifact(models.Model):
         return "slate"
 
 
-class InventoryReviewAcknowledgement(models.Model):
-    """Operator acknowledgement for a specific inventory review artifact.
-
-    This is intentionally tied to the artifact, not the company alone, so a
-    newer inventory audit automatically reopens review if it still finds issues.
-    """
-
-    company_key = models.SlugField(max_length=64)
-    artifact = models.OneToOneField(
-        RunArtifact,
-        on_delete=models.CASCADE,
-        related_name="inventory_review_acknowledgement",
-    )
-    run_job = models.ForeignKey(
-        RunJob,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="inventory_review_acknowledgements",
-    )
-    reviewed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="inventory_review_acknowledgements",
-    )
-    reviewed_at = models.DateTimeField(default=timezone.now)
-    summary_json = models.JSONField(default=dict, blank=True)
-
-    class Meta:
-        ordering = ["-reviewed_at"]
-        indexes = [
-            models.Index(fields=["company_key", "-reviewed_at"], name="epos_qbo_inv_ack_company_idx"),
-        ]
-
-    def __str__(self) -> str:
-        return f"Inventory review acknowledged for {self.company_key} artifact {self.artifact_id}"
-
-
 class RunLock(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     active = models.BooleanField(default=False)
@@ -665,7 +638,7 @@ class RunSchedule(models.Model):
         choices=SCHEDULE_TYPE_CHOICES,
         default=SCHEDULE_TYPE_RECURRING,
     )
-    scope = models.CharField(max_length=32, choices=RunJob.SCOPE_CHOICES, default=RunJob.SCOPE_ALL)
+    scope = models.CharField(max_length=32, choices=[choice for choice in RunJob.SCOPE_CHOICES if choice[0] not in {RunJob.SCOPE_PORTAL_REVIEW,RunJob.SCOPE_WORKSPACE_READ}], default=RunJob.SCOPE_ALL)
     company_key = models.SlugField(max_length=64, null=True, blank=True)
     cron_expr = models.CharField(max_length=120, blank=True)
     timezone_name = models.CharField(max_length=64, default="UTC")
@@ -684,7 +657,6 @@ class RunSchedule(models.Model):
     last_fired_at = models.DateTimeField(null=True, blank=True)
     last_result = models.CharField(max_length=32, choices=LAST_RESULT_CHOICES, blank=True)
     last_error = models.TextField(blank=True)
-    is_system_managed = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -709,7 +681,6 @@ class RunSchedule(models.Model):
         ordering = ["name", "created_at"]
         indexes = [
             models.Index(fields=["enabled", "next_fire_at"], name="epos_qbo_rs_enabled_next_idx"),
-            models.Index(fields=["is_system_managed", "enabled"], name="epos_qbo_rs_system_enabled_idx"),
             models.Index(fields=["scope", "company_key"], name="epos_qbo_rs_scope_company_idx"),
         ]
 
@@ -798,6 +769,9 @@ class RunScheduleEvent(models.Model):
     TYPE_FALLBACK_DISABLED = "fallback_disabled"
     TYPE_RUN_SUCCEEDED = "run_succeeded"
     TYPE_RUN_FAILED = "run_failed"
+    TYPE_SKIPPED_MISSED = "skipped_missed"
+    TYPE_SKIPPED_DONE = "skipped_done"
+    TYPE_SKIPPED_NOT_OWNER = "skipped_not_owner"
     EVENT_TYPE_CHOICES = [
         (TYPE_QUEUED, "Queued"),
         (TYPE_SKIPPED_OVERLAP, "Skipped Overlap"),
@@ -808,6 +782,9 @@ class RunScheduleEvent(models.Model):
         (TYPE_FALLBACK_DISABLED, "Fallback Disabled"),
         (TYPE_RUN_SUCCEEDED, "Run Succeeded"),
         (TYPE_RUN_FAILED, "Run Failed"),
+        (TYPE_SKIPPED_MISSED, "Skipped: missed while the worker was offline"),
+        (TYPE_SKIPPED_DONE, "Skipped: that business day already ran"),
+        (TYPE_SKIPPED_NOT_OWNER, "Skipped: another scheduler owns this workflow"),
     ]
 
     schedule = models.ForeignKey(
@@ -970,6 +947,36 @@ def _operator_schedule_name(name: str) -> str:
     raw = (name or "").strip()
     if raw == "All Companies Daily Run":
         return "Daily Sales Sync"
-    if raw == "Legacy Env Fallback":
-        return "System Fallback Schedule"
     return raw or "-"
+
+
+class PortalReviewAction(models.Model):
+    """Durable authorization and outcome for a specific reviewed evidence snapshot."""
+
+    job = models.OneToOneField(RunJob, on_delete=models.PROTECT, related_name="review_action")
+    actor = models.CharField(max_length=150)
+    action = models.CharField(max_length=20)
+    reason = models.TextField()
+    payload = models.JSONField(default=dict)
+    confirmation_id = models.CharField(max_length=64, unique=True)
+    result = models.TextField(blank=True, default="Queued")
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        permissions = [("can_approve_company_a_reviews", "Can approve Company A reviews")]
+
+
+class PortalSettingChange(models.Model):
+    """Audit of a pipeline setting changed from the portal (who, old, new, why)."""
+
+    company_key = models.SlugField(max_length=64)
+    setting = models.CharField(max_length=120)
+    old_value = models.CharField(max_length=200, blank=True, default="")
+    new_value = models.CharField(max_length=200)
+    reason = models.TextField()
+    actor = models.CharField(max_length=150)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]

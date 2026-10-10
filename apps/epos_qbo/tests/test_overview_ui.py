@@ -6,7 +6,6 @@ from unittest import mock
 
 from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User
-from django.template.loader import render_to_string
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -136,185 +135,6 @@ class OverviewUIContextTests(TestCase):
             )
         return run
 
-    def test_inventory_pipeline_run_does_not_set_sales_not_reconciled(self):
-        self._create_inventory_run(products_checked=147, in_sync=147, blocked_items=0)
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["sales_status"]["label"], "No successful sales sync recorded")
-        self.assertEqual(company_row["inventory_status"]["label"], "In sync")
-        self.assertNotEqual(company_row["sales_status"]["label"], "Not reconciled")
-
-    def test_sales_unreconciled_and_inventory_in_sync_are_separate(self):
-        self._create_sales_run(status=RunJob.STATUS_SUCCEEDED, minutes_ago=20, with_artifact=False)
-        self._create_inventory_run(products_checked=147, in_sync=147, blocked_items=0, minutes_ago=5)
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["sales_status"]["label"], "Not reconciled")
-        self.assertEqual(company_row["inventory_status"]["label"], "In sync")
-        self.assertEqual(company_row["inventory_status"]["products_checked"], 147)
-        self.assertEqual(company_row["inventory_status"]["blocked_items"], 0)
-
-    def test_inventory_blocked_items_show_needs_review(self):
-        self._create_inventory_run(
-            products_checked=147,
-            in_sync=146,
-            blocked_items=1,
-            still_needs_review=1,
-            final_status_counts={"in_sync": 146, "ambiguous_in_qbo": 1},
-        )
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["inventory_status"]["label"], "Needs review")
-        self.assertEqual(company_row["inventory_status"]["blocked_items"], 1)
-
-    def test_no_inventory_run_shows_not_checked(self):
-        self._set_inventory_enabled(True)
-        self._create_sales_run(with_artifact=True, reconcile_status="MATCH")
-
-        company_row = self._company_row()
-
-        self.assertTrue(company_row["inventory_enabled"])
-        self.assertEqual(company_row["sales_status"]["label"], "Reconciled")
-        self.assertEqual(company_row["inventory_status"]["label"], "Not checked")
-        self.assertEqual(company_row["status"], "unknown")
-
-    def test_inventory_capability_accepts_boolean_like_config_values(self):
-        for raw in (True, "true", "1", "yes", "on"):
-            with self.subTest(raw=raw):
-                cfg = self.company.config_json
-                cfg["inventory"] = {"enable_inventory_items": raw}
-                self.company.config_json = cfg
-                self.assertTrue(views._company_inventory_enabled(self.company))
-
-        cfg = self.company.config_json
-        cfg["inventory"] = {"enable_inventory_items": "false"}
-        self.company.config_json = cfg
-        self.assertFalse(views._company_inventory_enabled(self.company))
-
-    def test_inventory_disabled_omits_operational_inventory_from_overview(self):
-        self._set_inventory_enabled(False)
-        self._create_sales_run(with_artifact=True, reconcile_status="MATCH")
-
-        context = self._overview_context()
-        company_row = next(item for item in context["companies"] if item["company_key"] == self.company.company_key)
-        html = render_to_string(
-            "components/company_list.html",
-            {
-                "companies": [company_row],
-                "revenue_company_options": [],
-                "revenue_period_options": [],
-                "revenue_chart_payload": {},
-            },
-        )
-
-        self.assertFalse(company_row["inventory_enabled"])
-        self.assertEqual(company_row["status"], "healthy")
-        self.assertNotIn("Inventory: Not checked", html)
-        self.assertNotIn("Inventory sync:", html)
-
-    def test_inventory_disabled_omits_operational_inventory_from_company_card(self):
-        self._set_inventory_enabled(False)
-        run = self._create_sales_run(with_artifact=True, reconcile_status="MATCH")
-        artifact = RunArtifact.objects.get(run_job=run)
-        company_data = views._enrich_company_data(
-            self.company,
-            run,
-            preloaded={
-                "latest_activity_job": run,
-                "latest_sales_job": run,
-                "latest_sales_artifact": artifact,
-                "latest_successful_sales_artifact": artifact,
-                "artifacts_today": [artifact],
-                "token_info": {"severity": "healthy", "display_label": "Connected", "display_subtext": ""},
-                "sales_reconcile_statuses_by_company_job": {
-                    (self.company.company_key, str(run.id)): ["MATCH"]
-                },
-            },
-        )
-        html = render_to_string("components/company_cards.html", {"companies_data": [company_data]})
-
-        self.assertFalse(company_data["inventory_enabled"])
-        self.assertNotIn("Inventory: Not checked", html)
-        self.assertNotIn("Inventory Sync", html)
-
-    def test_inventory_enabled_not_checked_renders_inventory_marker(self):
-        self._set_inventory_enabled(True)
-        self._create_sales_run(with_artifact=True, reconcile_status="MATCH")
-
-        context = self._overview_context()
-        company_row = next(item for item in context["companies"] if item["company_key"] == self.company.company_key)
-        html = render_to_string(
-            "components/company_list.html",
-            {
-                "companies": [company_row],
-                "revenue_company_options": [],
-                "revenue_period_options": [],
-                "revenue_chart_payload": {},
-            },
-        )
-
-        self.assertTrue(company_row["inventory_enabled"])
-        self.assertIn("Inventory: Not checked", html)
-        self.assertIn("Inventory sync:", html)
-
-    def test_latest_inventory_activity_keeps_sales_copy_precise(self):
-        self._set_inventory_enabled(True)
-        self._create_inventory_run(products_checked=147, in_sync=147, blocked_items=0)
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["latest_activity_label"], "Inventory audit")
-        self.assertIn("Inventory audit", company_row["latest_activity_display"])
-        self.assertEqual(company_row["sales_status"]["label"], "No successful sales sync recorded")
-        self.assertEqual(company_row["latest_sales_sync_display"], "No successful sales sync recorded")
-        self.assertEqual(company_row["status"], "unknown")
-
-    def test_inventory_card_uses_operator_copy_for_mode_and_stats(self):
-        run = self._create_inventory_run(products_checked=5, in_sync=2, blocked_items=0)
-        artifact = RunArtifact.objects.get(run_job=run)
-        stats = artifact.upload_stats_json
-        stats.update(
-            {
-                "total_groups": 5,
-                "status_counts": {
-                    "in_sync": 2,
-                    "needs_adjustment": 1,
-                    "ambiguous_in_qbo": 1,
-                    "missing_in_qbo": 1,
-                },
-                "apply": {"mode": "audit_only", "posted": 0, "skipped": 0},
-            }
-        )
-        artifact.upload_stats_json = stats
-        artifact.save(update_fields=["upload_stats_json"])
-        company_data = views._enrich_company_data(
-            self.company,
-            run,
-            preloaded={
-                "latest_activity_job": run,
-                "latest_inventory_job": run,
-                "latest_inventory_artifact": artifact,
-                "artifacts_today": [artifact],
-                "token_info": {"severity": "healthy", "display_label": "Connected", "display_subtext": ""},
-                "sales_reconcile_statuses_by_company_job": {},
-            },
-        )
-
-        html = render_to_string("components/company_cards.html", {"companies_data": [company_data]})
-
-        self.assertIn("Checked only", html)
-        self.assertNotIn("audit_only", html)
-        self.assertIn("Product groups", html)
-        self.assertIn("Already in sync", html)
-        self.assertIn("Need updates", html)
-        self.assertIn("Multiple QBO matches", html)
-        self.assertIn("Missing in QBO", html)
-        self.assertNotIn("Needs adj.", html)
-        self.assertNotIn("Ambiguous:", html)
-
     def test_latest_sales_artifact_receipt_copy_uses_sales_artifact(self):
         self._create_sales_run(with_artifact=True, reconcile_status="MATCH")
         artifact = RunArtifact.objects.get(kind=RunArtifact.KIND_SALES_UPLOAD)
@@ -325,73 +145,6 @@ class OverviewUIContextTests(TestCase):
         company_row = self._company_row()
 
         self.assertEqual(company_row["latest_sales_sync_display"], "22 receipts — Feb 12, 2026")
-
-    def test_failed_inventory_run_shows_failed(self):
-        self._create_inventory_run(
-            status=RunJob.STATUS_FAILED,
-            with_artifact=False,
-            minutes_ago=4,
-        )
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["inventory_status"]["label"], "Failed")
-        self.assertEqual(company_row["inventory_status"]["severity"], "critical")
-
-    def test_clean_inventory_run_with_updates_stays_in_sync_with_update_detail(self):
-        self._create_inventory_run(
-            products_checked=147,
-            in_sync=147,
-            blocked_items=0,
-            still_needs_review=0,
-            updates=5,
-            final_status_counts={"in_sync": 147},
-        )
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["inventory_status"]["label"], "In sync")
-        self.assertEqual(company_row["inventory_status"]["updates_applied"], 5)
-        self.assertEqual(company_row["inventory_status"]["subtext"], "5 updates applied")
-
-    def test_latest_inventory_status_uses_audit_only_mode_label(self):
-        self._create_inventory_run(
-            products_checked=147,
-            in_sync=147,
-            blocked_items=0,
-            inventory_stats_extra={"inventory_mode": "audit_only"},
-        )
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["inventory_status"]["label"], "Inventory review")
-        self.assertEqual(company_row["inventory_status"]["severity"], "healthy")
-
-    def test_latest_inventory_status_uses_preview_mode_label(self):
-        self._create_inventory_run(
-            products_checked=147,
-            in_sync=147,
-            blocked_items=0,
-            inventory_stats_extra={"inventory_mode": "quantity_preview"},
-        )
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["inventory_status"]["label"], "Preview only")
-
-    def test_latest_inventory_status_uses_catalog_plan_label(self):
-        self._create_inventory_run(
-            products_checked=147,
-            in_sync=147,
-            blocked_items=0,
-            inventory_stats_extra={
-                "inventory_mode": "catalog_plan_only",
-            },
-        )
-
-        company_row = self._company_row()
-
-        self.assertEqual(company_row["inventory_status"]["label"], "Catalog plan only")
 
     def test_company_last_run_falls_back_to_latest_artifact_time(self):
         RunArtifact.objects.create(
@@ -956,7 +709,7 @@ class OverviewUITemplateTests(TestCase):
             "environment": "production",
         }
 
-    def test_overview_renders_search_and_overview_script(self):
+    def test_home_renders_shared_filter_and_refresh_script(self):
         with (
             mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
             mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
@@ -966,11 +719,11 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn('id="overview-company-filter"', html)
+        self.assertIn('id="home-company"', html)
         self.assertIn(f'data-panels-url="{reverse("epos_qbo:overview-panels")}"', html)
-        self.assertIn("js/overview.js", html)
+        self.assertIn("js/home.js", html)
 
-    def test_overview_card_renders_separate_sales_inventory_and_token_statuses(self):
+    def test_home_does_not_treat_old_runs_or_stock_checks_as_confirmed_sales(self):
         sales_run = RunJob.objects.create(
             scope=RunJob.SCOPE_SINGLE,
             company_key="company_a",
@@ -1019,12 +772,10 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Sales: Not reconciled", html)
-        self.assertIn("Inventory: In sync", html)
-        self.assertIn("Token: Connected", html)
-        self.assertIn("Products checked: 147", html)
-        self.assertIn("Blocked: 0", html)
-        self.assertIn("Access token expires in", html)
+        self.assertIn("No confirmed sales record yet", html)
+        self.assertNotIn("Last confirmed sales:", html)
+        self.assertNotIn("Products checked: 147", html)
+        self.assertNotIn("Access token expires in", html)
         self.assertNotIn("inventory_pipeline", html)
         self.assertNotIn("/tmp/inventory_pipeline_company_a_summary.json", html)
 
@@ -1040,7 +791,7 @@ class OverviewUITemplateTests(TestCase):
         self.assertNotIn("Run Reliability", html)
         self.assertNotIn("Failure Sources (Last 60 Days)", html)
 
-    def test_live_log_uses_company_and_run_label_not_uuid(self):
+    def test_home_keeps_run_identifiers_out_of_company_summary(self):
         run = RunJob.objects.create(
             scope=RunJob.SCOPE_SINGLE,
             company_key="company_a",
@@ -1057,7 +808,8 @@ class OverviewUITemplateTests(TestCase):
             response = self.client.get(reverse("epos_qbo:overview"))
 
         html = response.content.decode("utf-8")
-        self.assertIn(f"Company A: Run {run.friendly_id} succeeded", html)
+        self.assertIn("Company A", html)
+        self.assertNotIn(run.friendly_id, html)
         self.assertNotIn(str(run.id), html)
 
     def test_overview_panels_endpoint_renders_fragment(self):
@@ -1070,9 +822,10 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("System Health", html)
-        self.assertIn('id="overview-company-filter"', html)
-        self.assertIn("Live Log", html)
+        self.assertIn("Confirmed sales", html)
+        self.assertIn("Companies", html)
+        self.assertNotIn("Days not confirmed", html)
+        self.assertNotIn("Live Log", html)
         self.assertNotIn("Run Reliability", html)
 
     def test_overview_panels_respects_revenue_period_param(self):
@@ -1085,9 +838,10 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn('<option value="90d" selected>', html)
+        self.assertEqual(response.context['revenue_period'], '90d')
+        self.assertIn('Confirmed sales', html)
 
-    def test_overview_panels_company_filter_keeps_revenue_company_options(self):
+    def test_home_refresh_respects_company_filter(self):
         CompanyConfigRecord.objects.create(
             company_key="company_b",
             display_name="Company B",
@@ -1107,10 +861,11 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn('value="company_a">Company A</option>', html)
-        self.assertIn('value="company_b">Company B</option>', html)
+        self.assertEqual([r['company_key'] for r in response.context['home_rows']], ['company_a'])
+        self.assertIn('Company A', html)
+        self.assertNotIn('Company B', html)
 
-    def test_overview_topbar_uses_quick_sync_label(self):
+    def test_home_routes_run_controls_to_daily_runs(self):
         perm = Permission.objects.get(codename="can_trigger_runs")
         self.user.user_permissions.add(perm)
         with (
@@ -1122,10 +877,9 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Quick Sync", html)
-        self.assertNotIn("Manual Sync", html)
-        self.assertIn('name="date_mode" value="target_date"', html)
-        self.assertIn('name="target_date"', html)
+        self.assertIn("View daily runs", html)
+        self.assertNotIn("Quick Sync", html)
+        self.assertNotIn('name="date_mode" value="target_date"', html)
 
     def test_overview_renders_consolidated_kpi_row(self):
         run_prev = RunJob.objects.create(
@@ -1166,14 +920,8 @@ class OverviewUITemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("System Health", html)
-        self.assertIn("Sales Synced", html)
-        self.assertIn("Run Success", html)
-        self.assertIn("Avg Runtime", html)
-        self.assertIn("Metrics are based on Target Date:", html)
-        self.assertIn("Last successful sync", html)
-        self.assertNotIn("KPI basis: trading day cutoff", html)
-        self.assertNotIn("Healthy Companies", html)
-        self.assertNotIn("Critical Errors", html)
-        self.assertNotIn("Records Synced (24h)", html)
-        self.assertNotIn("Active Runs", html)
+        self.assertIn("Confirmed sales", html)
+        self.assertIn("Open tasks", html)
+        self.assertNotIn("Days not confirmed", html)
+        self.assertNotIn("Avg Runtime", html)
+        self.assertNotIn("Metrics are based on Target Date:", html)

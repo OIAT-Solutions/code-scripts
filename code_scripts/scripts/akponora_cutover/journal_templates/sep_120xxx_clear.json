@@ -1,0 +1,17 @@
+{
+  "_comment": "DRAFT TEMPLATE - placeholder amounts. Zero the legacy 120000 sub-account balances against their 200xxx purchases accounts. Live read-only 30 Sep 2026 18:38 PT: 120100 Grocery (Id 1150040011) = -13,430,840.54 and 120202 Non-Alcoholic Drinks (Id 1150040030) = -29,398.70; other 120xxx = 0. Negative (credit) balances come from the GPFH invoices relieving legacy Inventory (invoice_drift_reconciliation.md). Re-read balances on the night and use those exact amounts; a positive balance swaps Debit/Credit. Needs chat yes.",
+  "doc_number": "SEP-120XXX-CLEAR",
+  "txn_date": "2026-09-30",
+  "status": "DRAFT - placeholder amounts",
+  "private_note": "AKPONORA Sep 2026 close: zero legacy 120100 / 120202 sub-balances against 200100 / 200202. Balances read <TIMESTAMP>. Per chat approval <REF>.",
+  "lines": [
+    {"account_id": "1150040011", "posting_type": "Debit", "amount": "0.00",
+     "description": "Zero 120100 Grocery legacy sub-balance (live read: -13,430,840.54)"},
+    {"account_id": "74", "posting_type": "Credit", "amount": "0.00",
+     "description": "200100 Purchases - Groceries: offset of 120100 clear"},
+    {"account_id": "1150040030", "posting_type": "Debit", "amount": "0.00",
+     "description": "Zero 120202 Non-Alcoholic Drinks legacy sub-balance (live read: -29,398.70)"},
+    {"account_id": "1150040034", "posting_type": "Credit", "amount": "0.00",
+     "description": "200202 Non-Alcoholic Drinks purchases: offset of 120202 clear"}
+  ]
+}

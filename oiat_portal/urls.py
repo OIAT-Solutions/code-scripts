@@ -9,5 +9,4 @@ urlpatterns = [
     path("logout/", core_views.logout_view, name="logout"),
     path("", include("apps.core.urls")),
     path("epos-qbo/", include("apps.epos_qbo.urls")),
-    path("websites/", include("apps.websites.urls")),
 ]

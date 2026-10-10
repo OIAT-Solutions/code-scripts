@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Akponora (Company A) COGS / inventory cutover:** follow [`AGENTS.md`](AGENTS.md) before any QBO write, inventory change, or Company A pipeline change.
+
 ## What This Repo Is
 
 An EPOS → QuickBooks Online automation pipeline with a Django monitoring dashboard (the "OIAT Portal"). The pipeline downloads daily sales CSVs from EPOS Now, transforms them, uploads them to QuickBooks Online via REST API, and archives all artifacts. The Django portal provides run triggering, scheduling, company management, and dashboard views over the pipeline.
@@ -180,7 +182,7 @@ Keep Django variable tags on one line — never wrap `{{ ... }}` across multiple
 
 ### Docker / Scheduler
 
-The `docker-compose.yml` defines a `scheduler` service that runs the schedule worker. Env vars: `OIAT_SCHEDULER_POLL_SECONDS` (default 15), `SCHEDULE_CRON` (default `0 18 * * *`), `SCHEDULE_TZ` (default `Africa/Lagos`).
+The `docker-compose.yml` defines a `scheduler` service that runs the schedule worker: the only scheduler and the only process that starts jobs (pages and Inbox actions just queue). Schedules are `RunSchedule` rows from the workflow catalogue (`apps/epos_qbo/services/workflows.py`): "Daily routine" (`company_a` only; runs `code_scripts.akponora_ops.daily_run`) and "Sales sync" (every other company). There is no env-var schedule. Env vars: `OIAT_SCHEDULER_POLL_SECONDS` (default 15), `OIAT_SCHEDULE_MISSED_GRACE_MINUTES` (default 180). See [docs/SCHEDULING_AUTHORITY.md](docs/SCHEDULING_AUTHORITY.md).
 
 ## Key Environment Variables
 

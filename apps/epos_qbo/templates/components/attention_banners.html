@@ -1,0 +1,14 @@
+{% if blockers %}
+<section aria-label="Sales posting problems" class="space-y-3 mb-6">
+{% for blocker in blockers %}
+<div role="alert" class="rounded-lg border border-red-300 bg-red-50 p-4 text-red-900 dark:bg-red-950 dark:text-red-100 dark:border-red-800">
+    <p class="font-semibold">{{ blocker.company }} needs attention</p>
+    <p class="text-sm mt-1">{{ blocker.reason }}</p>
+    <div class="flex flex-wrap gap-4 mt-3 text-sm font-semibold">
+        <a class="underline" href="{% url 'epos_qbo:attention' %}">Review items</a>
+        <a class="underline" href="{{ blocker.url }}">Open daily runs</a>
+    </div>
+</div>
+{% endfor %}
+</section>
+{% endif %}

@@ -1,0 +1,13 @@
+{
+  "_comment": "DRAFT TEMPLATE - placeholder amounts. September option-1 COGS (stock movement only; purchases already sit on 200xxx). Amount = 30 Sep EPOS zero-floor closing value - Sep opening IA value on the same ex-tax basis (operations_controls.close_control). Positive: Dr IA 77 / Cr Cost of sales 76 (as shown). Negative: swap Debit/Credit. Same pattern as COGS-2026-07 (75097) / COGS-2026-08 (75098). Post BEFORE the W7 creates so B already includes it. Needs chat yes.",
+  "doc_number": "COGS-2026-09",
+  "txn_date": "2026-09-30",
+  "status": "DRAFT - placeholder amounts",
+  "private_note": "AKPONORA Sep 2026 stock movement (option 1): EPOS 30 Sep zero-floor closing <CLOSING> - opening <OPENING>. Purchases already on 200xxx. Per chat approval <REF>.",
+  "lines": [
+    {"account_id": "77", "posting_type": "Debit", "amount": "0.00",
+     "description": "Capitalize September 2026 unsold purchases (EPOS stock movement)"},
+    {"account_id": "76", "posting_type": "Credit", "amount": "0.00",
+     "description": "Reduce September 2026 cost of sales by the stock movement"}
+  ]
+}

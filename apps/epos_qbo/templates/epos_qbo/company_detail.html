@@ -1,234 +1,38 @@
-{% extends "base.html" %}
-{% load static %}
-
-{% block title %}{{ company_data.company.display_name }} • Companies{% endblock %}
-
-{% block topbar %}
-    {% include "components/topbar.html" %}
-{% endblock %}
-
+{% extends "base.html" %}{% load static %}
+{% block title %}{{ company_data.company.display_name }} · OIAT Portal{% endblock %}
+{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="space-y-6">
-    <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-        <div>
-            <div class="flex items-center gap-3 mb-2">
-                <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">{{ company_data.company.display_name }}</h1>
-                <span class="px-3 py-1 bg-{{ company_data.status.color }}-100 dark:bg-{{ company_data.status.color }}-900/30 text-{{ company_data.status.color }}-700 dark:text-{{ company_data.status.color }}-400 text-sm font-medium rounded-full flex items-center gap-2">
-                    <span class="w-2 h-2 bg-{{ company_data.status.color }}-500 rounded-full"></span>
-                    {{ company_data.status.label }}
-                </span>
-            </div>
-            <p class="text-sm text-slate-500 dark:text-slate-400">Company Key: <code class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono text-slate-900 dark:text-slate-200">{{ company_data.company.company_key }}</code></p>
-        </div>
-        <div class="flex flex-wrap items-center justify-start md:justify-end gap-3">
-            {% if company_data.inventory_review_required %}
-            <a href="{{ company_data.inventory_review_url }}" class="btn btn-secondary border-amber-200 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/30">
-                <iconify-icon icon="solar:box-linear" width="20"></iconify-icon>
-                {{ company_data.inventory_review_label }}
-            </a>
-            {% endif %}
-            {% if company_data.inventory_enabled and perms.epos_qbo.can_trigger_runs %}
-            <form method="post" action="{% url 'epos_qbo:run-trigger-inventory' %}" class="inline">
-                {% csrf_token %}
-                <input type="hidden" name="company_key" value="{{ company_data.company.company_key }}">
-                <input type="hidden" name="mode" value="audit_only">
-                <button type="submit" class="btn btn-secondary">
-                    <iconify-icon icon="solar:clipboard-check-linear" width="20"></iconify-icon>
-                    Run Inventory Review
-                </button>
-            </form>
-            {% endif %}
-            {% if perms.epos_qbo.can_trigger_runs %}
-            <form method="post" action="{% url 'epos_qbo:run-trigger' %}" class="inline">
-                {% csrf_token %}
-                <input type="hidden" name="scope" value="single_company">
-                <input type="hidden" name="company_key" value="{{ company_data.company.company_key }}">
-                <input type="hidden" name="date_mode" value="yesterday">
-                <button type="submit" class="btn btn-primary">
-                    <iconify-icon icon="solar:play-circle-linear" width="20"></iconify-icon>
-                    Run Sales Sync
-                </button>
-            </form>
-            {% endif %}
-            {% if perms.epos_qbo.can_edit_companies %}
-            <a href="{% url 'epos_qbo:company-advanced' company_data.company.company_key %}" class="btn btn-secondary">
-                <iconify-icon icon="solar:settings-linear" width="20"></iconify-icon>
-                Settings
-            </a>
-            {% endif %}
-        </div>
-    </div>
+<div class="flex flex-wrap items-end justify-between gap-5"><div><h1 class="text-3xl font-semibold tracking-tight">{{ company_data.company.display_name }}</h1><p class="portal-muted mt-3">{% if company_data.company.company_key == "company_a" %}Sales, bills, credit sales, stock and banking for this company.{% else %}Daily sales sent to QuickBooks for this company.{% endif %}</p></div>
+<div class="flex flex-wrap items-center gap-3">{% if perms.epos_qbo.can_trigger_runs %}<a class="btn btn-primary" href="{% url 'epos_qbo:runs' %}?run_company={{ company_data.company.company_key }}{% if company_data.company.company_key == 'company_a' %}{% if company_tab == 'deposits' %}&amp;run_step=uf{% elif company_tab == 'purchases' %}&amp;run_step=bills{% elif company_tab == 'products' %}&amp;run_step=stock{% endif %}{% endif %}">Run</a>{% endif %}<details class="relative"><summary class="btn btn-secondary cursor-pointer">Switch company</summary><nav aria-label="Switch company" class="portal-panel p-2 mt-2 absolute left-0 sm:left-auto sm:right-0 z-20 w-64 max-w-[calc(100vw-3rem)]">{% for choice in company_choices %}<a class="portal-nav" href="{{ choice.url }}" {% if choice.key == company_data.company.company_key %}aria-current="page"{% endif %}>{{ choice.name }}</a>{% endfor %}</nav></details></div></div>
+{% if company_position %}
+<section class="portal-panel p-6 grid md:grid-cols-3 gap-5" aria-label="Company position">
+<div>{% include "components/business_status.html" with label=company_position.label tone=company_position.tone %}<p class="text-sm mt-3">{% if company_position.latest %}Sales confirmed through <strong>{{ company_position.latest|date:"j F Y" }}</strong>{% else %}No confirmed sales record yet{% endif %}</p></div>
+<div><p class="portal-eyebrow">Open tasks</p><p class="text-2xl font-semibold mt-2">{{ company_position.waiting }}</p><p class="portal-muted mt-1">Checked {{ company_position.coverage_start|date:"j M" }}–{{ company_position.expected|date:"j M Y" }}</p></div>
+<div><p class="portal-eyebrow">Next scheduled run</p><p class="text-sm mt-3">{% if company_position.next_run %}{{ company_position.next_run|date:"j F Y, H:i T" }}{% elif company_position.scheduled %}Run time needs checking{% else %}No active schedule recorded{% endif %}</p></div>
+</section>
+{% if company_position.issue %}<div class="portal-panel p-5 border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 flex flex-col sm:flex-row justify-between gap-4 sm:items-center"><p class="text-sm text-red-900 dark:text-red-200 flex-1">{{ company_position.issue }}</p><a class="btn btn-secondary self-start shrink-0" href="{{ company_position.action_url }}">{{ company_position.action_label }}</a></div>{% endif %}
+{% else %}<p class="portal-muted">This company is inactive. Its past records remain available.</p>{% endif %}
+{% if company_a_holds_alerts.guard.alert or company_a_holds_alerts.guard.warn or company_a_holds_alerts.guard.by_check %}<div class="portal-panel p-5 border-amber-200 dark:border-amber-900 flex flex-wrap gap-4 justify-between"><p class="text-sm">The latest stock check has records that need review.</p><a class="portal-link" href="?tab=products">Review stock checks →</a></div>{% endif %}
+<nav aria-label="Company sections" class="portal-tabs">{% for tab in company_tabs %}<a href="{{ tab.url }}" {% if tab.key == company_tab %}aria-current="page"{% endif %}>{{ tab.label }}</a>{% endfor %}</nav>
+{% if company_tab == 'sales' %}
+<section class="portal-panel overflow-hidden"><div class="p-6 border-b border-slate-100 dark:border-slate-700 flex flex-wrap justify-between gap-4"><div><h2 class="text-lg font-semibold">Sales by day</h2><p class="portal-muted mt-1">Confirmed amounts stay recorded even if a later attempt fails.</p></div><a href="{{ company_history_url }}" class="btn btn-secondary">View daily runs</a></div>
+{% for row in company_sales_page %}<article class="p-6 border-b last:border-b-0 border-slate-100 dark:border-slate-700 grid md:grid-cols-3 gap-4"><div><p class="font-semibold">{{ row.day|date:"j F Y"|default:"Date not recorded" }}</p><p class="portal-muted mt-1">{{ row.attempts|length }} attempt{{ row.attempts|length|pluralize }}</p></div><div>{% include "components/business_status.html" with label=row.label tone=row.tone %}<p class="text-sm mt-3">{% if row.confirmed %}Sales confirmed: <strong class="tabular-nums">{{ row.amount_label }}</strong>{% else %}{{ row.latest.message }}{% endif %}</p></div><div class="md:text-right"><a href="{{ row.latest.url }}" class="btn btn-secondary">Open details</a></div></article>{% empty %}<div class="p-8"><h3 class="font-medium">No sales records available</h3><p class="portal-muted mt-2">Check Daily runs before retrying a day. A missing record does not prove that nothing was posted.</p></div>{% endfor %}</section>
+{% if company_sales_page.paginator.num_pages > 1 %}<nav aria-label="Sales pages" class="flex flex-wrap justify-between gap-3"><p class="portal-muted">Page {{ company_sales_page.number }} of {{ company_sales_page.paginator.num_pages }}</p><div class="flex gap-3">{% if company_sales_page.has_previous %}<a class="btn btn-secondary" href="?{{ company_tab_query }}&amp;page={{ company_sales_page.previous_page_number }}">Previous</a>{% endif %}{% if company_sales_page.has_next %}<a class="btn btn-secondary" href="?{{ company_tab_query }}&amp;page={{ company_sales_page.next_page_number }}">Next</a>{% endif %}</div></nav>{% endif %}
+{% if perms.epos_qbo.can_trigger_runs %}<a class="portal-link inline-block" href="{{ company_history_url }}#run-a-day">Run a day or past dates →</a>{% endif %}
+{% elif company_tab == 'settings' %}
+{% if company_data.company.company_key == 'company_a' %}{% include 'components/deposit_settings.html' %}{% endif %}
+<section class="portal-panel p-6 space-y-4"><h2 class="text-lg font-semibold">Company settings</h2><p class="portal-muted">Change this company's business rules in the existing settings form.</p><a class="btn btn-secondary" href="{% url 'epos_qbo:company-advanced' company_data.company.company_key %}">Open company settings</a><details><summary class="portal-link cursor-pointer">Connection and configuration details</summary><p class="portal-muted mt-3">Company reference: {{ company_data.company.company_key }}</p><pre class="portal-code mt-3">{{ company_data.config_json_pretty }}</pre></details></section>
+{% else %}
+{% if company_record_errors %}<div role="alert" class="portal-panel p-5"><p class="font-medium">Some review records could not be read</p><p class="portal-muted mt-2">Check the daily run details before making a decision.</p></div>{% endif %}
+{% if company_tab == 'products' and company_data.company.company_key == 'company_a' %}{% include 'components/products_register.html' %}{% endif %}
+{% if company_tab == 'deposits' and company_data.company.company_key == 'company_a' %}{% include 'components/deposits_register.html' %}{% endif %}
+{% if company_tab == 'products' and company_a_holds_alerts %}<details class="portal-panel p-6"><summary class="font-semibold cursor-pointer">Stock check supporting details</summary><div class="mt-4">{% include "components/company_a_holds_alerts.html" with hold=company_a_holds_alerts.hold guard=company_a_holds_alerts.guard %}</div></details>{% endif %}
 
-    {% if company_data.issues %}
-    <div class="rounded-xl p-4 {% if company_data.issues_highest_severity == 'critical' %}bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800{% elif company_data.issues_highest_severity == 'warning' %}bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800{% else %}bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800{% endif %}">
-        <div class="flex items-start gap-3">
-            <iconify-icon icon="solar:danger-triangle-linear" width="24" class="flex-shrink-0 mt-0.5 {% if company_data.issues_highest_severity == 'critical' %}text-red-600 dark:text-red-400{% else %}text-amber-600 dark:text-amber-400{% endif %}"></iconify-icon>
-            <div class="flex-1">
-                <h3 class="font-semibold mb-2 {% if company_data.issues_highest_severity == 'critical' %}text-red-900 dark:text-red-300{% else %}text-amber-900 dark:text-amber-300{% endif %}">{{ company_data.issues|length }} Active Issue{{ company_data.issues|length|pluralize }}</h3>
-                <ul class="space-y-1.5 {% if company_data.issues_highest_severity == 'critical' %}text-red-800 dark:text-red-300{% else %}text-amber-800 dark:text-amber-300{% endif %} text-sm">
-                    {% for issue in company_data.issues %}<li>• {{ issue.message }}</li>{% endfor %}
-                </ul>
-            </div>
-        </div>
-    </div>
-    {% endif %}
+{% if company_tab == 'purchases' or company_data.company.company_key != 'company_a' %}<section class="portal-panel overflow-hidden"><div class="p-6 border-b border-slate-100 dark:border-slate-700"><h2 class="text-lg font-semibold">Waiting decisions</h2><p class="portal-muted mt-1">{% if company_tab == 'purchases' %}Approved bills are posted unpaid. This page does not pay suppliers.{% elif company_tab == 'products' %}Check new products and stock problems before making changes.{% else %}Check each day's till sheet and bank split before posting deposits.{% endif %}</p></div>
+{% for decision in company_decisions %}<article class="p-6 border-b last:border-b-0 border-slate-100 dark:border-slate-700 flex flex-wrap items-start justify-between gap-4"><div class="flex-1 min-w-0"><h3 class="font-semibold">{{ decision.title }}</h3><p class="portal-muted mt-2">{{ decision.reason }}</p><p class="portal-muted mt-2">{{ decision.day|date:"j F Y" }}</p></div><a href="{% url 'epos_qbo:attention' %}#item-{{ decision.key }}" class="btn btn-secondary">Review item</a></article>{% empty %}<div class="p-6"><p class="font-medium">No waiting decisions in the available records</p><p class="portal-muted mt-2">This is based on recorded reviews, not a fresh check of all QuickBooks records.</p></div>{% endfor %}</section>{% endif %}
 
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
-            <div class="flex items-center justify-between mb-2">
-                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Last Activity</p>
-                <iconify-icon icon="solar:clock-circle-linear" width="20" class="text-slate-400 dark:text-slate-500"></iconify-icon>
-            </div>
-            <p class="text-xl font-bold text-slate-900 dark:text-slate-100">{{ company_data.last_run_display }}</p>
-            {% if company_data.latest_run %}<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ company_data.latest_run.started_at|date:"M d, g:i A" }}</p>{% endif %}
-        </div>
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
-            <div class="flex items-center justify-between mb-2">
-                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Latest Sales Sync</p>
-                <iconify-icon icon="solar:wallet-money-linear" width="20" class="text-slate-400 dark:text-slate-500"></iconify-icon>
-            </div>
-            <p class="text-xl font-bold text-slate-900 dark:text-slate-100">{{ company_data.sales_last_run_display }}</p>
-            {% if company_data.sales_last_run_target_date %}
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Target: {{ company_data.sales_last_run_target_date|date:"M j, Y" }}</p>
-            {% else %}
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">No successful sales sync recorded</p>
-            {% endif %}
-        </div>
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
-            <div class="flex items-center justify-between mb-2">
-                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Token Status</p>
-                <iconify-icon icon="solar:key-minimalistic-linear" width="20" class="text-slate-400 dark:text-slate-500"></iconify-icon>
-            </div>
-            <p class="text-xl font-bold {% if company_data.token_info.severity == 'critical' %}text-red-600 dark:text-red-400{% elif company_data.token_info.severity == 'warning' %}text-amber-600 dark:text-amber-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %}">{{ company_data.token_info.display_label }}</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ company_data.token_info.display_subtext }}</p>
-        </div>
-        <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
-            <div class="flex items-center justify-between mb-2">
-                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total Runs</p>
-                <iconify-icon icon="solar:history-linear" width="20" class="text-slate-400 dark:text-slate-500"></iconify-icon>
-            </div>
-            <p class="text-xl font-bold text-slate-900 dark:text-slate-100">{{ recent_runs|length }}</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Last 30 runs</p>
-        </div>
-    </div>
-
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
-        <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-600">
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <iconify-icon icon="solar:settings-linear" width="20"></iconify-icon>
-                Configuration
-            </h2>
-        </div>
-        <div class="p-6">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
-                <div>
-                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">QuickBooks Online</h3>
-                    <dl class="space-y-2 text-sm">
-                        <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Realm ID:</dt><dd class="font-mono text-xs text-slate-900 dark:text-slate-100">{{ company_data.config_display.realm_id }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Deposit Account:</dt><dd class="text-slate-900 dark:text-slate-100 font-medium">{{ company_data.config_display.deposit_account }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Tax rate:</dt><dd class="text-slate-900 dark:text-slate-100 font-medium">{{ company_data.config_display.tax_rate|default:"—" }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Inventory:</dt><dd class="text-slate-900 dark:text-slate-100 font-medium">{% if company_data.config_display.inventory_enabled %}<span class="text-emerald-600 dark:text-emerald-400">Enabled</span>{% else %}<span class="text-slate-400 dark:text-slate-500">Disabled</span>{% endif %}</dd></div>
-                    </dl>
-                </div>
-                <div>
-                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3">Transform</h3>
-                    <dl class="space-y-2 text-sm">
-                        <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Group By:</dt><dd class="text-slate-900 dark:text-slate-100 font-medium">{{ company_data.config_display.group_by }}</dd></div>
-                        <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Date Format:</dt><dd class="font-mono text-xs text-slate-900 dark:text-slate-100">{{ company_data.config_display.date_format }}</dd></div>
-                    </dl>
-                </div>
-            </div>
-            <div class="mt-6 pt-6 border-t border-slate-200 dark:border-slate-600" x-data="{ showJson: false }">
-                <button type="button" @click="showJson = !showJson" class="text-sm text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 flex items-center gap-2">
-                    <iconify-icon :icon="showJson ? 'solar:alt-arrow-up-linear' : 'solar:alt-arrow-down-linear'" width="16"></iconify-icon>
-                    <span x-text="showJson ? 'Hide' : 'Show'"></span> Full Configuration JSON
-                </button>
-                <div x-show="showJson" x-cloak x-transition class="mt-3">
-                    <pre class="bg-slate-900 text-slate-100 p-4 rounded-lg text-xs overflow-x-auto font-mono">{{ company_data.config_json_pretty }}</pre>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
-        <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-600 flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <iconify-icon icon="solar:history-linear" width="20"></iconify-icon>
-                Recent Runs
-            </h2>
-            <a href="{% url 'epos_qbo:runs' %}?company={{ company_data.company.company_key }}" class="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium">View All →</a>
-        </div>
-        <div class="divide-y divide-slate-100 dark:divide-slate-700">
-            {% for run in recent_runs|slice:":10" %}
-            <a href="{% url 'epos_qbo:run-detail' job_id=run.id %}" class="block px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                <div class="flex items-center justify-between">
-                    <div class="flex-1">
-                        <div class="flex items-center gap-3 mb-1">
-                            <span class="font-mono text-sm text-slate-600 dark:text-slate-400">Run #{{ run.id|slice:":8" }}</span>
-                            <span class="px-2 py-0.5 rounded-full text-xs font-medium {% if run.status == 'succeeded' %}bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300{% elif run.status == 'failed' %}bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300{% elif run.status == 'running' %}bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300{% else %}bg-slate-100 dark:bg-slate-600 text-slate-700 dark:text-slate-200{% endif %}">{{ run.get_status_display }}</span>
-                        </div>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">
-                            {{ run.started_at|date:"M d, Y g:i A" }}
-                            {% if run.target_date %} • Target: {{ run.target_date|date:"Y-m-d" }}{% endif %}
-                        </p>
-                    </div>
-                    <iconify-icon icon="solar:alt-arrow-right-linear" width="20" class="text-slate-400 dark:text-slate-500"></iconify-icon>
-                </div>
-            </a>
-            {% empty %}
-            <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No runs yet. Trigger your first sync to get started.</div>
-            {% endfor %}
-        </div>
-    </div>
-
-    {% if recent_artifacts %}
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl">
-        <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-600">
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <iconify-icon icon="solar:document-text-linear" width="20"></iconify-icon>
-                Recent Artifacts
-            </h2>
-        </div>
-        <div class="divide-y divide-slate-100 dark:divide-slate-700">
-            {% for artifact in recent_artifacts|slice:":5" %}
-            <div class="px-6 py-4">
-                <div class="grid grid-cols-1 md:grid-cols-[1fr_auto] items-center gap-3 md:gap-4">
-                    <div>
-                        <div class="mb-2">
-                            <span class="text-sm font-medium text-slate-900 dark:text-slate-100">{{ artifact.target_date|date:"Y-m-d" }}</span>
-                        </div>
-                        <div class="grid grid-cols-3 gap-4 text-xs text-slate-600 dark:text-slate-400">
-                            <div><span class="text-slate-500 dark:text-slate-400">Total Rows:</span> <span class="font-medium">{{ artifact.rows_total|default:"0" }}</span></div>
-                            <div><span class="text-slate-500 dark:text-slate-400">Kept:</span> <span class="font-medium">{{ artifact.rows_kept|default:"0" }}</span></div>
-                            <div><span class="text-slate-500 dark:text-slate-400">Processed:</span> <span class="font-medium">{{ artifact.processed_at|date:"M d, g:i A" }}</span></div>
-                        </div>
-                    </div>
-                    <div class="md:justify-self-end self-center">
-                        {% if artifact.reliability_status == 'warning' %}
-                        <span class="px-2 py-0.5 bg-slate-100 dark:bg-slate-600 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-full">Rolling (last_*)</span>
-                        {% else %}
-                        <span class="px-2 py-0.5 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-medium rounded-full">Snapshot (dated)</span>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        <div class="px-6 py-4 border-t border-slate-100 dark:border-slate-600 bg-slate-50/60 dark:bg-slate-700/30">
-            <p class="text-xs text-slate-600 dark:text-slate-400 mb-2">
-                <span class="font-semibold text-slate-700 dark:text-slate-300">About metadata source:</span> This is informational and does not indicate sync failure.
-            </p>
-            <ul class="text-xs text-slate-500 dark:text-slate-400 space-y-1">
-                <li>• <span class="font-medium text-slate-700 dark:text-slate-300">Rolling (last_*)</span>: file is a rolling state file and may be overwritten by newer runs.</li>
-                <li>• <span class="font-medium text-slate-700 dark:text-slate-300">Snapshot (dated)</span>: file is treated as an immutable run-specific snapshot.</li>
-            </ul>
-        </div>
-    </div>
-    {% endif %}
+{% endif %}
 </div>
 {% endblock %}
-
-{% block body_extra %}
-{% load static %}
-<script src="{% static 'js/company_detail.js' %}"></script>
-{% endblock %}
+{% block body_extra %}<script src="{% static 'js/company_detail.js' %}"></script>{% endblock %}

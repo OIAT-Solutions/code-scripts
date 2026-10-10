@@ -86,7 +86,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core",
     "apps.epos_qbo",
-    "apps.websites",
     "apps.dashboard",
 ]
 
@@ -126,6 +125,9 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": STATE_ROOT / "db.sqlite3",
+        # Wait for a busy database instead of failing at once (3 Oct 2026: the scheduler crashed on
+        # "database is locked" while a migration ran; Django's default is 5 seconds).
+        "OPTIONS": {"timeout": 20},
     }
 }
 
@@ -156,11 +158,6 @@ PORTAL_SOLUTIONS = [
         "name": "EPOS -> QBO",
         "description": "Monitor runs, manage companies, and trigger sync jobs.",
         "url_name": "epos_qbo:overview",
-    },
-    {
-        "name": "Websites",
-        "description": "Monitor website logs, endpoint health, and site operations.",
-        "url_name": "websites:index",
     },
 ]
 

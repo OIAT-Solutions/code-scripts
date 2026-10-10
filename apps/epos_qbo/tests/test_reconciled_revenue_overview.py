@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -186,7 +186,7 @@ class ReconciledRevenueOverviewTemplateTests(TestCase):
             "environment": "production",
         }
 
-    def test_overview_renders_revenue_chart_section(self):
+    def test_home_does_not_display_old_company_a_artifacts_as_daily_sales(self):
         run = RunJob.objects.create(
             scope=RunJob.SCOPE_SINGLE,
             company_key="company_a",
@@ -215,10 +215,9 @@ class ReconciledRevenueOverviewTemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("Reconciled EPOS Revenue", html)
-        self.assertIn("Last 90D", html)
-        self.assertIn('id="overview-revenue-chart"', html)
-        self.assertIn("overview-revenue-chart-data", html)
+        self.assertIn("Confirmed sales", html)
+        self.assertIn("No confirmed sales record yet", html)
+        self.assertNotIn("₦5,000.00", html)  # Old Company A artifacts do not establish October daily outcomes.
 
     def test_overview_renders_empty_state_for_no_reconciled_data(self):
         with (
@@ -230,4 +229,5 @@ class ReconciledRevenueOverviewTemplateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         html = response.content.decode("utf-8")
-        self.assertIn("No reconciled revenue data yet for this period.", html)
+        self.assertIn("No confirmed sales record yet", html)
+        self.assertIn("Not fully confirmed", html)
