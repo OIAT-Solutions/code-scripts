@@ -82,9 +82,23 @@ def parse_bookkeeping_ts(value: str) -> datetime | None:
 
 
 # ---------------------------------------------------------------- EPOS (view only)
+def goto_retry(page, url: str, *, attempts: int = 3, timeout_ms: int = 90000, pause_ms: int = 5000) -> None:
+    """EPOS back-office pages sometimes take over 30 s (9 Oct 2026: the PO list timed out and failed the
+    run). Load with a longer timeout and try again a few times before giving up."""
+    for n in range(1, attempts + 1):
+        try:
+            page.goto(url, timeout=timeout_ms)
+            return
+        except Exception as exc:  # noqa: BLE001 - Playwright timeout / network
+            if n == attempts:
+                raise
+            print(f"EPOS page {url} did not load (attempt {n}/{attempts}): {str(exc)[:120]}; retrying", flush=True)
+            page.wait_for_timeout(pause_ms)
+
+
 def epos_login(page, cfg) -> None:
     """Log in to EPOS Now back office with the pipeline credentials (never printed)."""
-    page.goto(EPOS_LOGIN_URL)
+    goto_retry(page, EPOS_LOGIN_URL)
     page.get_by_role("textbox", name="Username or email address").fill(cfg.epos_username)
     page.get_by_role("textbox", name="Password").fill(cfg.epos_password)
     page.get_by_role("button", name="Log in").click()

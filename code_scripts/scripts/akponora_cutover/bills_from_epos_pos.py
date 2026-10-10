@@ -35,7 +35,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from code_scripts.scripts.akponora_cutover._common import (
-    GAPS_DIR, ReadOnlyQBO, company_config, dump_json, epos_login, resolve_out,
+    GAPS_DIR, ReadOnlyQBO, company_config, dump_json, epos_login, goto_retry, resolve_out,
 )
 
 TOOL = "bills_from_epos_pos"
@@ -435,7 +435,7 @@ def capture_pos(out: Path, date_from: str, date_to: str, limit: int, company_key
                 print('list capture failed', e)
 
     def open_list(page):
-        page.goto(PO_LIST_URL)
+        goto_retry(page, PO_LIST_URL)
         page.wait_for_load_state("networkidle")
         for sel, val in (('purchase-order__from-date--input', dfrom), ('purchase-order__to-date--input', dto)):
             inp = page.locator(f'[data-qa-id="{sel}"]')

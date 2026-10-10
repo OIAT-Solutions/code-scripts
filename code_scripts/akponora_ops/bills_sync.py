@@ -108,7 +108,7 @@ from code_scripts.product_conversion import (
     ProductConversionRegistry, ProductResolutionError, canonical_product_id, clean, october_target_error,
 )
 from code_scripts.scripts.akponora_cutover._common import (
-    REPO_ROOT, business_date, company_config, epos_login, setup_env,
+    REPO_ROOT, business_date, company_config, epos_login, goto_retry, setup_env,
 )
 from code_scripts.scripts.akponora_cutover.bills_from_epos_pos import (
     PO_LIST_URL, extract_po_model, norm,
@@ -358,7 +358,7 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
                 pass
 
     def open_list(page):
-        page.goto(PO_LIST_URL)
+        goto_retry(page, PO_LIST_URL)
         page.wait_for_load_state("networkidle")
         for sel, val in (("purchase-order__from-date--input", dfrom), ("purchase-order__to-date--input", dto)):
             inp = page.locator(f'[data-qa-id="{sel}"]')
