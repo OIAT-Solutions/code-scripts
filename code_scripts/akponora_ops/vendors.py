@@ -90,6 +90,43 @@ def same_name(a: str, b: str) -> bool:
     return bool(k(a)) and k(a) == k(b)
 
 
+# Words that say nothing about which business it is (owner, 11 Oct 2026: link "LOLYWAS VENTURES(MUSTAPHA)" to
+# "LOLYWAS VENTURES", "BABEEMA CONNECT ENT" to "BABEEMA CONNECT ENTERPRISES" without asking).
+GENERIC_WORDS = {"ENT", "ENTS", "ENTERPRISE", "ENTERPRISES", "VENTURE", "VENTURES", "LTD", "LIMITED", "NIG", "NIGERIA",
+                 "NIGERIAN", "CO", "COY", "COMPANY", "INVOICE", "INTL", "INTERNATIONAL", "GLOBAL", "PLC", "AND", "THE"}
+AUTO_LINK_SCORE = 0.85      # a near name is linked when the products agree too
+PRODUCT_AGREE = 0.5         # share of this PO's products the vendor has billed before
+PRODUCT_CONFLICT = 0.25     # another vendor at or above this share makes the evidence ambiguous
+
+
+def core_name(name: str) -> str:
+    """The business part of a supplier name: brackets (contact names), quotes, punctuation and generic words
+    (ENT, LTD, VENTURES, INVOICE, ...) removed. '' when nothing distinctive is left."""
+    text = re.sub(r"\([^)]*\)", " ", str(name or "").upper())
+    words = [w for w in re.sub(r"[^A-Z0-9 ]+", " ", text).split() if w not in GENERIC_WORDS]
+    core = " ".join(words)
+    return core if len(core.replace(" ", "")) >= 4 else ""
+
+
+def product_key(name: str) -> str:
+    """A product name comparable between EPOS POs and QBO bill lines: category prefix, 'LEGACY -', '(deleted..)'
+    and pack sizes (*12) removed; first four words."""
+    text = str(name or "").upper().split(":")[-1]
+    text = re.sub(r"\(DELETED[^)]*\)?", " ", text).replace("LEGACY —", " ").replace("LEGACY -", " ")
+    text = re.sub(r"\*\s*\d+\S*", " ", text)
+    return " ".join(re.sub(r"[^A-Z0-9 ]+", " ", text).split()[:4])
+
+
+def product_evidence(products, product_index) -> list[tuple[str, int, int]]:
+    """[(vendor id, PO products that vendor billed before, PO products)] best first."""
+    keys = {product_key(p) for p in products or () if product_key(p)}
+    hits = {}
+    for k in keys:
+        for vid in (product_index or {}).get(k, {}):
+            hits[vid] = hits.get(vid, 0) + 1
+    return sorted(((vid, n, len(keys)) for vid, n in hits.items()), key=lambda t: (-t[1], t[0]))
+
+
 def score(name: str, vendor: dict, bill_counts=None) -> float:
     """``vendors-suggest`` score: name similarity, boosted to 0.86 when the first word (>= 4
     letters) matches a vendor that has bills."""
@@ -129,7 +166,7 @@ def auto_settings(env=None) -> dict | None:
 
 
 def plan_actions(suppliers: list[dict], vendors: dict, *, history=None, bill_counts=None,
-                 exclusions=None) -> list[dict]:
+                 exclusions=None, product_index=None) -> list[dict]:
     """One action per unmapped supplier. ``suppliers``: [{"key", "name", "supplier_id", "po_refs"}].
     ``exclusions``: a ``review_exclusions.Exclusions``; an excluded supplier is ``EXCLUDED`` (never
     created). Pure (no HTTP)."""
@@ -160,6 +197,8 @@ def plan_actions(suppliers: list[dict], vendors: dict, *, history=None, bill_cou
                              "except capital letters / spacing: linked automatically")
         elif not name:
             act["state"], act["detail"] = HOLD_NEAR, "supplier name is empty after cleaning; map it by hand"
+        elif auto_link(act, name, sup, pool, ranked, product_index):
+            pass  # LINK (automatic) or HOLD_NEAR with product evidence set by auto_link
         elif best >= NEW_VENDOR_MAX_SCORE:
             act["state"] = HOLD_NEAR
             act["detail"] = (f"supplier '{sup['name']}' looks like an existing QBO vendor (best {best:.2f}): "
@@ -170,6 +209,56 @@ def plan_actions(suppliers: list[dict], vendors: dict, *, history=None, bill_cou
             act["detail"] = f"new vendor '{name}' (best existing match {best:.2f})"
         actions.append(act)
     return actions
+
+
+def auto_link(act: dict, name: str, sup: dict, pool: list, ranked, product_index) -> bool:
+    """Owner rules (11 Oct 2026). Sets ``act`` and returns True when it decides; False leaves the old rules.
+
+    1. Exactly one active vendor has the same core name (brackets / ENT / LTD / INVOICE ... ignored) -> LINK,
+       unless that vendor billed none of this PO's products while another vendor billed at least half.
+    2. Otherwise a near name (score >= 0.85) whose vendor billed at least half of this PO's products, with no
+       other vendor at a quarter or more -> LINK.
+    3. Otherwise, if any vendor billed at least half of the products -> HOLD_NEAR naming it (a person decides;
+       products alone never link - Gods Favour / Aishat Ayinke, 11 Oct 2026).
+    """
+    active = [v for v in pool if v.get("Active", True)]
+    by_id = {str(v.get("Id")): v for v in active}
+    evidence = [e for e in product_evidence(sup.get("products"), product_index) if e[0] in by_id]
+    share = {vid: n / total for vid, n, total in evidence if total}
+    ev_text = "; ".join(f"{n} of {total} products previously billed by {vid} {by_id[vid].get('DisplayName')}"
+                        for vid, n, total in evidence[:3]) or "no product history found"
+    core = core_name(name)
+    twins = [v for v in active if core and core_name(v.get("DisplayName", "")) == core]
+    if len(twins) == 1:
+        vid = str(twins[0].get("Id"))
+        rival = max((x for k, x in share.items() if k != vid), default=0)
+        if evidence and share.get(vid, 0) == 0 and rival >= PRODUCT_AGREE:
+            act["state"] = HOLD_NEAR
+            act["detail"] = (f"name matches QBO vendor {vid} '{twins[0].get('DisplayName')}' but its past bills have none "
+                             f"of these products ({ev_text}) - check before linking")
+            return True
+        act["state"], act["vendor_id"] = LINK, vid
+        act["detail"] = (f"same business name as QBO vendor {vid} '{twins[0].get('DisplayName')}' once brackets, "
+                         f"ENT/LTD/VENTURES/INVOICE are ignored ({ev_text}): linked automatically")
+        return True
+    near = [(sc, v) for sc, v in ranked if sc >= AUTO_LINK_SCORE and v.get("Active", True)]
+    if near:
+        sc, v = near[0]
+        vid = str(v.get("Id"))
+        rival = max((x for k, x in share.items() if k != vid), default=0)
+        if share.get(vid, 0) >= PRODUCT_AGREE and rival < PRODUCT_CONFLICT:
+            act["state"], act["vendor_id"] = LINK, vid
+            act["detail"] = (f"close name to QBO vendor {vid} '{v.get('DisplayName')}' ({sc:.2f}) and the products agree "
+                             f"({ev_text}): linked automatically")
+            return True
+    if evidence and evidence[0][1] / evidence[0][2] >= PRODUCT_AGREE:
+        vid = evidence[0][0]
+        act["state"] = HOLD_NEAR
+        act["candidates"] = [f"{vid} {by_id[vid].get('DisplayName')} (products {evidence[0][1]}/{evidence[0][2]})"] + act["candidates"]
+        act["detail"] = (f"supplier '{sup['name']}' is not a known name, but {ev_text} - link it if that is the same "
+                         f"supplier, or create it if it is really new")
+        return True
+    return False
 
 
 def name_taken(client, name: str) -> list[str]:

@@ -1032,8 +1032,9 @@ def unmapped_suppliers(pos: list[dict], vmap, window: tuple[str, str], vendors_b
         if not key or key in by_name or key in conflicts:
             continue
         g = groups.setdefault(key, {"key": key, "name": po["supplier"], "supplier_id": po["supplier_id"],
-                                    "po_refs": set()})
+                                    "po_refs": set(), "products": set()})
         g["po_refs"].add(po["ref"])
+        g["products"].update(ln["product"] for ln in po["lines"] if ln.get("qty_received"))
         g["supplier_id"] = g["supplier_id"] or po["supplier_id"]
     return [groups[k] for k in sorted(groups)]
 
@@ -1051,7 +1052,7 @@ def vendor_stage(pos, vmap, ctx, *, window, vendors_path: Path, create: bool, wr
         return []
     hist = history_suppliers(history) if history and Path(history).exists() else {}
     actions = vendor_ops.plan_actions(suppliers, ctx["vendors"], history=hist, bill_counts=ctx.get("bill_counts"),
-                                      exclusions=exclusions)
+                                      exclusions=exclusions, product_index=product_index(ctx))
     if not create:
         for act in actions:
             if act["state"] == vendor_ops.LINK:
@@ -1069,6 +1070,32 @@ def vendor_stage(pos, vmap, ctx, *, window, vendors_path: Path, create: bool, wr
         if act["state"] == vendor_ops.CREATED:
             ctx["vendors"][act["vendor_id"]] = act.pop("vendor")
     return actions
+
+
+PRODUCT_HISTORY_FROM = "2026-01-01"
+
+
+def product_index(ctx) -> dict:
+    """{product key: {vendor id: bill lines}} from this year's QBO bills (read once, only when a supplier needs it)."""
+    if "product_index" in ctx:
+        return ctx["product_index"]
+    client = ctx.get("client")
+    index: dict = {}
+    if client is not None:
+        try:
+            for b in client.query_all(f"select * from Bill where TxnDate >= '{PRODUCT_HISTORY_FROM}'", "Bill"):
+                vid = str((b.get("VendorRef") or {}).get("value") or "")
+                for ln in b.get("Line") or []:
+                    name = ((ln.get("ItemBasedExpenseLineDetail") or {}).get("ItemRef") or {}).get("name")
+                    k = vendor_ops.product_key(name) if name else ""
+                    if k and vid:
+                        index.setdefault(k, {}).setdefault(vid, 0)
+                        index[k][vid] += 1
+        except Exception as exc:  # noqa: BLE001 - evidence is a help, never a reason to fail the bills step
+            print(f"product history unavailable ({str(exc)[:120]}); suppliers matched on names only", flush=True)
+            index = {}
+    ctx["product_index"] = index
+    return index
 
 
 def vendor_reason(act: dict) -> str:
@@ -1142,6 +1169,7 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
     bills_from = (date.fromisoformat(window[0]) - timedelta(days=max(a.dup_days, 5) + 5)).isoformat()
     bills_to = (date.fromisoformat(window[1]) + timedelta(days=5)).isoformat()
     ctx = fetch_context(client, pos, registry, bills_from=bills_from, bills_to=bills_to)
+    ctx["client"] = client  # read-only; used for supplier product history when a new supplier name appears
     vmap = load_vendor_map(read_csv(vpath))
     ctx["bill_counts"] = Counter((b.get("VendorRef") or {}).get("value") for b in ctx["bills"])
     history = Path(a.history) if getattr(a, "history", None) else (DEFAULT_HISTORY if hasattr(a, "history") else None)
