@@ -98,6 +98,19 @@ class StockFollowTests(unittest.TestCase):
         big = sf.plan(evs, self.tmp / "big", s=self.s, approve_over_cap=True, tag="CL")
         self.assertEqual(big["events"], 1)
 
+    def test_same_item_twice_in_a_day_is_one_line(self):
+        # 11 Oct 2026: QBO refused "item ... is used more than once in this Inventory Quantity Adjustment"
+        e2 = dict(event("b", qty="-3"), transfer_id="5680999")
+        evs = sf.collect([self.capture([event("a"), e2])])
+        s = sf.plan(evs, self.tmp / "p", s=self.s, approve_over_cap=False)
+        p = json.loads((self.tmp / "p" / "payloads.jsonl").read_text().splitlines()[0])
+        self.assertEqual(len(p["Line"]), 1)
+        self.assertEqual(p["Line"][0]["ItemAdjustmentLineDetail"]["QtyDiff"], 17.0)
+        self.assertEqual(len(p["_events"]), 2)
+        r = sf.post(self.tmp / "p", client=self.qbo, approval_ref="yes", expect_sha=s["payloads_sha256"])
+        self.assertTrue(r["complete"])
+        self.assertEqual(self.qbo.qty["101"], 16.0)
+
     def test_adjustment_already_in_qbo_is_recorded_not_reposted(self):
         evs = sf.collect([self.capture([event("a")])])
         s = sf.plan(evs, self.tmp / "p", s=self.s, approve_over_cap=False)

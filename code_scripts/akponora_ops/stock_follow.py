@@ -140,11 +140,15 @@ def build_payloads(events: list[dict], s: dict, *, tag: str) -> list[dict]:
             chunk = evs[start:start + MAX_LINES]
             h = hashlib.sha256("|".join(e["event_id"] for e in chunk).encode()).hexdigest()[:5]
             doc = f"{kind}{day[2:4]}{day[5:7]}{day[8:10]}-{tag}{h}"[:21]  # same events -> same number, never two
-            lines = [{"DetailType": "ItemAdjustmentLineDetail", "Description": (
-                        f"EPOS {e['transfer_id']} {e['epos_reason']} by {e.get('staff') or '?'}: {e['name']}")[:4000],
-                      "ItemAdjustmentLineDetail": {"ItemRef": {"value": str(e["qbo_item_id"])},
-                                                   "QtyDiff": float(Decimal(str(e["canonical_qty_change"])))}}
-                     for e in chunk]
+            per_item = {}  # QuickBooks refuses the same item twice in one adjustment: one line per item
+            for e in chunk:
+                ln = per_item.setdefault(str(e["qbo_item_id"]), {"qty": Decimal(0), "refs": []})
+                ln["qty"] += Decimal(str(e["canonical_qty_change"]))
+                ln["refs"].append(f"EPOS {e['transfer_id']} {e['epos_reason']} by {e.get('staff') or '?'}: "
+                                  f"{e['name']} {e['canonical_qty_change']}")
+            lines = [{"DetailType": "ItemAdjustmentLineDetail", "Description": "; ".join(v["refs"])[:4000],
+                      "ItemAdjustmentLineDetail": {"ItemRef": {"value": item}, "QtyDiff": float(v["qty"])}}
+                     for item, v in per_item.items() if v["qty"] != 0]
             what = "Stock count correction (EPOS Stock Take)" if kind == "ST" else "Stock wastage (EPOS Wastage)"
             out.append({"TxnDate": day, "DocNumber": doc, "AdjustAccountRef": {"value": s["accounts"][kind]},
                         "PrivateNote": (f"{what} {day} | {doc} | events {','.join(e['event_id'][:10] for e in chunk)} "
