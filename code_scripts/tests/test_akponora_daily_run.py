@@ -168,9 +168,13 @@ class DailyRunTests(unittest.TestCase):
         for env in runner.envs:
             self.assertEqual(env["OIAT_RUN_LOCK_HELD"], "1")
             self.assertEqual(env["SLACK_WEBHOOK_URL_A"], "")
-        self.assertEqual(len(self.slack), 2)  # a start message, then one summary
-        self.assertIn("daily run started", self.slack[0])
-        self.assertTrue(self.slack[1].startswith(":large_yellow_circle: *Nora Mart · business day Fri 2 Oct* · ₦3,211,950 sales posted · "))
+        # owner, 11 Oct 2026: a start line, a short line per step with something to say, a short closing message
+        self.assertEqual(self.slack[0], ":arrow_forward: Nora Mart · Fri 2 Oct · nightly run started")
+        self.assertIn(":large_green_circle: Sales: ₦3.2m posted, matches EPOS", self.slack)
+        self.assertTrue(self.slack[-1].startswith(":large_yellow_circle: Nora Mart · Fri 2 Oct · done"))
+        self.assertTrue(all(len(m.split()) <= 14 for m in self.slack[1:-1]), self.slack)
+        self.assertTrue(dr.slack_text(summary).startswith(
+            ":large_yellow_circle: *Nora Mart · business day Fri 2 Oct* · ₦3,211,950 sales posted · "))
 
     def test_catalogue_crash_still_runs_bills_and_sales(self):
         runner = FakeRunner(raise_on={"catalogue"})
@@ -294,7 +298,7 @@ class DailyRunTests(unittest.TestCase):
         self.assertIn("*stock* [ok] Stock check: 3,812 match, 41 different, 11 negative in QuickBooks",
                       dr.technical_text(summary))
         self.assertIn("*Checks:* all ran\n• 2 new products added\n• 11 items with negative stock in QuickBooks\n",
-                      self.slack[-1])
+                      dr.slack_text(summary))
 
     def test_stock_step_is_read_only_in_dry_run_too(self):
         runner = FakeRunner()
@@ -706,8 +710,21 @@ class SlackMessageTests(unittest.TestCase):
     def test_start_message(self):
         text = dr.start_text("2026-10-02", banking_on=True,
                              links=dr.portal_links({"PORTAL_DOMAIN": "portal.example.com"}, "2026-10-02", "run_x"))
-        self.assertEqual(text, ":arrow_forward: *Nora Mart · business day Fri 2 Oct* · daily run started (sales, bills, banking, "
-                               "checks) · summary to follow · <https://portal.example.com/epos-qbo/company-a/daily-runs/|Daily runs>")
+        self.assertEqual(text, ":arrow_forward: Nora Mart · Fri 2 Oct · nightly run started")
+        self.assertEqual(dr.start_text("2026-10-02", only=["sales"]), ":arrow_forward: Nora Mart · Fri 2 Oct · run started (sales)")
+
+    def test_short_step_notes_and_closing(self):
+        r = lambda name, status, counts=None, detail="": dict(name=name, status=status, counts=counts or {}, review=[], detail=detail)  # noqa: E731
+        self.assertEqual(dr.step_note(r("bills", dr.REVIEW, {"posted": 20, "posted_total": "6710500", "waiting_items": [1] * 14})),
+                         ":large_yellow_circle: Bills: 20 posted (₦6.7m), 14 need you")
+        self.assertEqual(dr.step_note(r("sales", dr.REVIEW, {"uploaded": None}, detail="held: posting hold written")),
+                         ":red_circle: Sales: not posted, one item needs a look")
+        self.assertEqual(dr.step_note(r("credit", dr.OK, {"posted_total": "0"})), "")  # nothing to say: no message
+        self.assertEqual(dr.step_note(r("uf", dr.REVIEW, {"deposited": [], "held": [{"day": "2026-10-09", "status": "WAITING_SHEET"}]})),
+                         ":large_yellow_circle: Banking: waiting for the till sheet (9 Oct)")
+        self.assertEqual(dr.step_note(r("bills", dr.FAILED)), ":red_circle: Bills: didn't finish, we're on it")
+        quiet = {"business_date": "2026-10-11", "steps": [], "links": {}}
+        self.assertEqual(dr.closing_text(quiet), ":large_green_circle: Nora Mart · Sun 11 Oct · all done · nothing needs you")
 
     def test_bills_waiting_reads_the_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -570,6 +570,13 @@ class DailyRun:
                 res.status, res.detail = FAILED, f"{type(exc).__name__}: {exc}"
             res.finished_at = _now_utc()
             self.results.append(res)
+            if self.send_slack and name in self.only:
+                try:
+                    note = step_note(asdict(res))
+                    if note:
+                        self.slack(note)
+                except Exception:  # noqa: BLE001 - Slack must never break the run
+                    pass
         return self.finish()
 
     def links(self) -> dict:
@@ -598,7 +605,7 @@ class DailyRun:
         dump_json(self.day_dir / "summary.json", summary)
         if self.send_slack:
             try:
-                self.slack(slack_text(summary))
+                self.slack(closing_text(summary))
             except Exception:  # noqa: BLE001
                 pass
         return summary
@@ -825,6 +832,13 @@ def day_title(day: str) -> str:
 
 
 def start_text(day: str, *, dry_run: bool = False, only=None, banking_on: bool = False, links=None) -> str:
+    """'▶️ Nora Mart · Sat 10 Oct · nightly run started' (owner, 11 Oct 2026: short Slack messages)."""
+    what = "nightly run started" if not only or set(only) >= set(STEPS) else "run started (" + ", ".join(
+        STEP_WORD.get(s, s) for s in only) + ")"
+    return f":arrow_forward: Nora Mart · {short_day(day)} · {what}" + (" · practice run, nothing posted" if dry_run else "")
+
+
+def _old_start_text(day: str, *, dry_run: bool = False, only=None, banking_on: bool = False, links=None) -> str:
     links = links or {}
     parts = [("sales", "sales"), ("bills", "bills"), ("uf", "banking" if banking_on else "")]
     names = [label for step, label in parts if label and (not only or step in only)]
@@ -904,7 +918,134 @@ def _trend(now: int, before) -> str:
     return f" ({abs(now - before):,} {'more' if now > before else 'fewer'} than last run)"
 
 
-def slack_text(summary: dict) -> str:
+# ---------------------------------------------------------------- short Slack (owner, 11 Oct 2026)
+# One start line, one short line per step as it finishes (left out when there is nothing to say), and a closing
+# message grouped by who has to act. Plain words, no PO numbers or ids; details stay in the portal.
+GREEN, YELLOW, RED = ":large_green_circle:", ":large_yellow_circle:", ":red_circle:"
+STEP_WORD = {"catalogue": "products", "bills": "bills", "sales": "sales", "credit": "credit sales", "guard": "item check",
+             "stock": "stock check", "stock_follow": "stock counts", "uf": "banking", "payments": "payments"}
+
+
+def _needs(n: int) -> str:
+    return f"{n} need{'s' if n == 1 else ''} you" if n else ""
+
+
+def short_money(value) -> str:
+    """₦6.7m / ₦748,000 - easy to read on a phone."""
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        amount = Decimal(str(value or 0).replace(",", "").replace("₦", "").replace("N", ""))
+    except (InvalidOperation, ValueError):
+        return "unknown"
+    if abs(amount) >= 1_000_000:
+        return f"₦{amount / 1_000_000:.1f}m".replace(".0m", "m")
+    return f"₦{amount:,.0f}"
+
+
+def step_note(r: dict) -> str:
+    """One short line for a finished step, or '' when there is nothing worth a message."""
+    from decimal import Decimal
+
+    name, st, c = r.get("name"), r.get("status"), r.get("counts") or {}
+    if st in (SKIPPED, DISABLED, None):
+        return ""
+    label = STEP_WORD.get(name, name).capitalize()
+    if st == FAILED:
+        return f"{RED} {label}: didn't finish, we're on it"
+    need = len(r.get("review") or [])
+    if name == "catalogue":
+        made = int(c.get("items_created") or 0) + int(c.get("mapping_only") or 0)
+        wait = int(c.get("review") or 0) + int(c.get("hold") or 0)
+        if not made and not wait:
+            return ""
+        bits = [f"{made} new added" if made else ""] + [_needs(wait)]
+        return f"{YELLOW if wait else GREEN} Products: " + ", ".join(b for b in bits if b)
+    if name == "bills":
+        posted, waiting = int(c.get("posted") or 0), len(c.get("waiting_items") or [])
+        if not posted and not waiting:
+            return f"{GREEN} Bills: nothing new"
+        bits = [f"{posted} posted ({short_money(c.get('posted_total'))})" if posted else ""] + \
+               [_needs(waiting)]
+        return f"{YELLOW if waiting else GREEN} Bills: " + ", ".join(b for b in bits if b)
+    if name == "sales":
+        if st == REVIEW and ("hold" in (r.get("detail") or "") or c.get("uploaded") in (None, 0)):
+            return f"{RED} Sales: not posted, one item needs a look"
+        if c.get("reconcile_status") and c.get("reconcile_status") != "MATCH":
+            return f"{RED} Sales: posted, but doesn't match EPOS"
+        return f"{GREEN} Sales: {short_money(c.get('qbo_total'))} posted, matches EPOS"
+    if name == "credit":
+        total = Decimal(str(c.get("posted_total") or 0))
+        return f"{GREEN} Credit sales: {short_money(total)} invoiced" if total else ""
+    if name == "guard":
+        alerts = int(c.get("alert") or 0)
+        return f"{YELLOW} Item check: {alerts} thing{'s' if alerts != 1 else ''} to look at" if alerts else ""
+    if name == "stock":
+        return ""  # reported with the stock counts step
+    if name == "stock_follow":
+        posted = len([x for x in c.get("posted") or [] if x.get("status") == "POSTED"])
+        wait = int(c.get("waiting_approval") or 0)
+        if not posted and not wait:
+            return ""
+        bits = [f"{posted} count{'s' if posted != 1 else ''} updated" if posted else ""] + [_needs(wait)]
+        return f"{YELLOW if wait else GREEN} Stock: " + ", ".join(b for b in bits if b)
+    if name == "uf":
+        banked = sum(Decimal(str(d.get("total") or 0)) + Decimal(str(d.get("overage") or 0)) for d in c.get("deposited") or [])
+        sheet = [d["day"] for d in c.get("held") or [] if d.get("status") == "WAITING_SHEET"]
+        other = [d for d in c.get("held") or [] if d.get("status") == "HELD"]
+        bits = [f"{short_money(banked)} banked" if banked else ""]
+        if sheet:
+            bits.append(f"waiting for the till sheet ({day_list(sheet)})")
+        if other:
+            bits.append(f"{len(other)} day{'s' if len(other) != 1 else ''} need a look")
+        if not any(bits):
+            return ""
+        return f"{YELLOW if sheet or other else GREEN} Banking: " + ", ".join(b for b in bits if b)
+    if name == "payments":
+        rows = (c.get("credit") or []) + (c.get("bills") or [])
+        done = [x for x in rows if x.get("status") == "posted"]
+        held = [x for x in rows if x.get("status") in ("held", "failed", "waiting")]
+        if not rows:
+            return ""
+        bits = [f"{len(done)} recorded" if done else ""] + [f"{len(held)} need fixing" if held else ""]
+        return f"{YELLOW if held else GREEN} Payments: " + ", ".join(b for b in bits if b)
+    return f"{YELLOW} {label}: needs a look" if need else ""
+
+
+def closing_text(summary: dict) -> str:
+    """'🟡 Nora Mart · Sat 10 Oct · done' + one line per person who has to act; green when nothing does."""
+    you, store, oiat, stopped = todo_lists(summary)
+    links = summary.get("links") or {}
+    day = short_day(summary["business_date"])
+    tail = " · practice run, nothing posted" if summary.get("dry_run") else ""
+    if not (you or store or oiat or stopped):
+        return f"{GREEN} Nora Mart · {day} · all done · nothing needs you{tail}"
+    icon = RED if stopped else YELLOW
+    lines = [f"{icon} Nora Mart · {day} · {'stopped early' if stopped else 'done'}{tail}"]
+    if you:
+        lines.append(f"You: {_plural(len(you), 'thing')} to approve or decide → {link(links.get('inbox', ''), 'Inbox')}")
+    if store:
+        lines.append("Store: " + (_plain(store[0]) if len(store) == 1 else f"{len(store)} things → "
+                                  + link(links.get('till_sheet', ''), 'Till sheet')))
+    if oiat:
+        lines.append("OIAT: " + (_plain(oiat[0]) if len(oiat) == 1 else f"{len(oiat)} things") + " (we're on it)")
+    return "\n".join(lines)
+
+
+def _plain(item: str) -> str:
+    """'complete the till sales breakdown for 9 Oct → <link|Till sheet>' -> 'till sheet for 9 Oct → Till sheet'."""
+    text = item.replace("complete the till sales breakdown for", "till sheet for")
+    return text[:1].upper() + text[1:] if text else text
+
+
+def todo_lists(summary: dict) -> tuple[list, list, list, list]:
+    """(you, store, oiat, stopped) - the same to-dos the long summary lists."""
+    lists = {}
+    slack_text(summary, _collect=lists)
+    return lists["you"], lists["store"], lists["oiat"], lists["stopped"]
+
+
+def slack_text(summary: dict, _collect: dict | None = None) -> str:
     """The daily Slack summary, read on a phone: a one-line headline (status, business day, sales posted,
     to-do count), one *bold* line per area with any extra facts as bullets under it, then who needs to do
     what (who · what → where) and a short footer. No error text or file paths (they are behind 'Open run');
@@ -1166,6 +1307,8 @@ def slack_text(summary: dict) -> str:
     elif any(status(n) not in (None, SKIPPED, DISABLED) for n in ("catalogue", "guard", "stock")):
         section("Checks", "all ran" + ("" if check_bits else ", nothing new"), check_bits)
 
+    if _collect is not None:
+        _collect.update(you=list(you), store=list(store), oiat=list(oiat), stopped=list(stopped))
     todo = [f":bust_in_silhouette: *You* · {x}" for x in you] + [f":convenience_store: *Store* · {x}" for x in store] \
         + [f":hammer_and_wrench: *OIAT* · {x}" for x in oiat]
     n = len(todo)

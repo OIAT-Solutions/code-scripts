@@ -904,7 +904,8 @@ class DailyRunUFTests(NoNetwork):
         self.assertTrue(any(line.startswith("uf 2026-10-02 WAITING_SHEET") for line in summary["waiting_for_review"]))
         self.assertEqual(self.day_states()["2026-10-01"], ufd.DEPOSITED)
         self.assertEqual(self.day_states()["2026-10-02"], ufd.WAITING_SHEET)
-        human = self.slack[-1]
+        human = dr.slack_text(summary)
+        self.assertIn(":large_yellow_circle: Banking: ₦3.2m banked, waiting for the till sheet (2 Oct)", self.slack)
         self.assertIn("*Banking:* ₦3,200,000 banked for 1 Oct", human)
         self.assertIn("₦500 more on the till sheet than sales (1 Oct), booked to Till Overage", human)
         self.assertIn("*Store* · complete the till sales breakdown for 2 Oct", human)
@@ -919,7 +920,7 @@ class DailyRunUFTests(NoNetwork):
         self.assertEqual(fake.posts(), [])
         self.assertTrue(any("READY" in line and "post --plan-dir" in line for line in summary["waiting_for_review"]))
         self.assertIn("Waiting to deposit: 1 Oct.", dr.technical_text(summary))
-        self.assertIn("waiting for you", self.slack[-1])
+        self.assertIn("waiting for you", dr.slack_text(summary))
         summary = self.run_uf(AUTO, fake, source, dry=True)
         self.assertEqual({s["name"]: s for s in summary["steps"]}["uf"]["counts"]["mode"], "dry-run (plan only)")
         self.assertEqual(fake.posts(), [])
