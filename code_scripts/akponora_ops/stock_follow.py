@@ -300,9 +300,13 @@ def main(argv=None) -> int:
         big = {k: v for k, v in events.items() if classify(v, s["cap"])[1].startswith("worth ")}
         r1 = plan({k: v for k, v in small.items() if k not in big}, root / "catchup_within_cap", s=s, approve_over_cap=False,
                   tag="C", title="Catch-up since 1 Oct: stock takes and wastage within the limit")
-        r2 = plan(big, root / "catchup_over_cap", s=s, approve_over_cap=True, tag="CL",
-                  title="Catch-up since 1 Oct: large stock adjustments (over the limit)")
-        print(json.dumps({"within_cap": r1, "over_cap": r2}, indent=1, default=str))
+        large = {}
+        for k, e in big.items():  # one card per large line: each is decided on its own
+            name = f"catchup_large_{e['_day']}_{e['transfer_id']}_{k[:6]}"
+            large[name] = plan({k: e}, root / name, s=s, approve_over_cap=True, tag="CL",
+                               title=f"Large stock adjustment {e['_day']}: {e['name']} {e['canonical_qty_change']} "
+                                     f"(EPOS {e['transfer_id']}, {e.get('epos_reason')} by {e.get('staff')})")
+        print(json.dumps({"within_cap": r1, "large": large}, indent=1, default=str))
         return 0
     try:
         res = post(a.plan_dir, client=QBOClient.for_company_a(allow_writes=True), approval_ref=a.approval_ref,
