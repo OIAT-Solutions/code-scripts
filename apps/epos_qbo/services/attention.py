@@ -284,6 +284,33 @@ def bill_plans(runs):
 
 
 # ----------------------------------------------------------------------------- inbox
+def stock_follow_items(errors):
+    """EPOS Stock Take / Wastage plans waiting for approval (catch-up and over-the-limit) - stock_follow."""
+    out, root = [], ops.ops_root() / "portal_reads" / "stock_follow"
+    for path in sorted(root.glob("*/summary.json")) if root.is_dir() else []:
+        try:
+            summary = document(path)
+            posted = path.parent / "post_summary.json"
+            if summary.get("status") != "READY" or (posted.is_file() and document(posted).get("complete")):
+                continue
+            days = summary.get("days") or []
+            run = ops.Run(business_date=days[-1] if days else "", run_id="run_portal_plan", path=root, dry_run=False, status="review")
+            span = f"{days[0]} to {days[-1]}" if len(days) > 1 else (days[0] if days else "")
+            reason = (f"{summary.get('events')} EPOS stock adjustment(s) ({span}): {summary.get('added_units')} unit(s) added, "
+                      f"{summary.get('removed_units')} removed, net N{summary.get('value_net')} at EPOS cost. Approving posts "
+                      f"{summary.get('adjustments')} QuickBooks stock adjustment(s): Stock Take to Inventory Shrinkage, "
+                      "Wastage to Stock Wastage. The line list is under Details.")
+            item = make_item("stock_follow", path.parent.name, summary.get("title") or "Stock adjustments", reason, run,
+                             path.parent.name, approve=bool(summary.get("payloads_sha256")), skip=True,
+                             extra={"sha": summary.get("payloads_sha256", ""), "summary": summary,
+                                    "lines": rows(path.parent / "review.csv")[:300]})
+            item["details_url"] = reverse("epos_qbo:company-detail", args=["company_a"]) + "?tab=products"
+            out.append(item)
+        except (OSError, ValueError, TypeError, KeyError, csv.Error, ops.EvidenceError):
+            errors.append("A stock adjustment plan could not be read safely.")
+    return out
+
+
 def stock_adjust_items(errors):
     """Checked stock count corrections planned by ``stock_adjust plan`` into portal_reads/stock_adjust/<name>/."""
     out, root = [], ops.ops_root() / "portal_reads" / "stock_adjust"
@@ -378,6 +405,7 @@ def inbox():
     runs = ops.list_runs()
     items += stock_movement_items(runs, errors)
     items += stock_adjust_items(errors)
+    items += stock_follow_items(errors)
     done_bills = set()
     for run in runs:
         if run.dry_run:

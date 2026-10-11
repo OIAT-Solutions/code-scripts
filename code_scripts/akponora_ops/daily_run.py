@@ -66,7 +66,7 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
-STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "uf", "payments")
+STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "stock_follow", "uf", "payments")
 DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
@@ -149,7 +149,7 @@ class DailyRun:
                  root: Path | None = None, runner: Callable = run_command, slack: Callable | None = None,
                  send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
                  uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None,
-                 payments_client=None, payments_write_client=None):
+                 payments_client=None, payments_write_client=None, stock_follow_write_client=None):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
@@ -163,6 +163,7 @@ class DailyRun:
         self.credit_client = credit_client
         self.credit_write_client = credit_write_client
         self.payments_client, self.payments_write_client = payments_client, payments_write_client
+        self.stock_follow_write_client = stock_follow_write_client
         self.python = python
         stamp = datetime.now(timezone.utc).strftime("%H%M%SZ")
         self.day_dir = Path(root) if root else _daily_root() / business_day
@@ -373,6 +374,29 @@ class DailyRun:
             res.status = OK
         if not invoices and not r["mixed"]:
             res.detail = "no credit sales"
+
+    def step_stock_follow(self, res: StepResult) -> None:
+        """EPOS Stock Take / Wastage adjustments -> QBO InventoryAdjustments (stock_follow, in-process)."""
+        from code_scripts.akponora_ops import stock_follow as sf
+        from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
+
+        movements = self.step_dir("movements") / "summary.json"
+        if not movements.exists():
+            res.status, res.detail = SKIPPED, "no stock-movement capture in this run"
+            return
+        write = None
+        if sf.settings(self.base_env)["post"] and not self.dry_run and sf.catchup_done():
+            write = self.stock_follow_write_client or QBOClient.for_company_a(allow_writes=True)
+        r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run)
+        res.counts = r
+        posted = [x for x in r.get("posted") or [] if x["status"] == "POSTED"]
+        failed = [x for x in r.get("posted") or [] if x["status"] == "FAILED"]
+        if r.get("waiting_approval"):
+            res.review.append(f"{r['waiting_approval']} large stock adjustment(s) over the limit wait for approval")
+        for w in r.get("warnings") or []:
+            res.review.append(f"stock adjustment check: {w}")
+        res.detail = r.get("note") or f"{len(posted)} adjustment(s) posted"
+        res.status = FAILED if failed else REVIEW if res.review else OK
 
     def step_payments(self, res: StepResult) -> None:
         """Nora Mart Payments workbook: credit repayments and supplier payments -> QBO (payments_sheet)."""
@@ -629,6 +653,10 @@ def step_line(r: dict) -> str:
         body = "; ".join(b for b in bits if b)
         if c.get("till_sheet"):
             body += ". " + c["till_sheet"]
+    elif name == "stock_follow":
+        posted = [x for x in c.get("posted") or [] if x.get("status") == "POSTED"]
+        body = (f"{c.get('events', 0)} EPOS adjustment(s) read; {len(posted)} QuickBooks adjustment(s) posted; "
+                f"{c.get('waiting_approval', 0)} over the limit; {c.get('not_automatic', 0)} not automatic")
     elif name == "payments":
         rows = (c.get("credit") or []) + (c.get("bills") or [])
         n = Counter(x["status"] for x in rows)
@@ -692,7 +720,8 @@ def technical_text(summary: dict) -> str:
 
 # ---------------------------------------------------------------- the Slack messages (plain English)
 STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "credit": "Credit sales", "guard": "Item check",
-              "stock": "Stock", "uf": "Banking", "payments": "Payments sheet"}
+              "stock": "Stock", "uf": "Banking", "payments": "Payments sheet",
+              "stock_follow": "Stock adjustments"}
 SHEET_URL = "https://docs.google.com/spreadsheets/d/{}"
 
 

@@ -488,6 +488,26 @@ class StockCorrectionTests(RegisterFixtures, TestCase):
         self.assertFalse(any(i["kind"] == "stock_adjust" for i in attention.inbox()[0]))
 
 
+class StockFollowCardTests(RegisterFixtures, TestCase):
+    def test_catchup_plan_is_an_approvable_card_posting_with_its_checksum(self):
+        folder = self.tmp / "ops/company_a/portal_reads/stock_follow/catchup_within_cap"
+        folder.mkdir(parents=True)
+        (folder / "summary.json").write_text(json.dumps({
+            "status": "READY", "title": "Catch-up since 1 Oct", "events": 140, "adjustments": 9, "added_units": "900",
+            "removed_units": "40", "value_net": "512000.00", "days": ["2026-10-01", "2026-10-10"], "payloads_sha256": "fsha"}))
+        (folder / "payloads.jsonl").write_text("{}\n")
+        (folder / "review.csv").write_text("day,product,status\n2026-10-08,DUBIC MALT,in this plan\n")
+        item = self.item("stock_follow")
+        self.assertTrue(item["approve"])
+        self.assertIn("Stock Wastage", item["reason"])
+        cmd = attention_actions.tool_command(item, "approve", "Approved by Ada")
+        self.assertEqual(cmd[1:4], ["-m", "code_scripts.akponora_ops.stock_follow", "post"])
+        self.assertEqual(cmd[cmd.index("--expect-sha") + 1], "fsha")
+        self.assertContains(self.client.get(reverse("epos_qbo:attention")), "Approve and post to QuickBooks")
+        (folder / "post_summary.json").write_text(json.dumps({"complete": True}))
+        self.assertFalse(any(i["kind"] == "stock_follow" for i in attention.inbox()[0]))
+
+
 class DepositTests(RegisterFixtures, TestCase):
     def write_days(self, days):
         path = self.tmp / "ops/company_a/uf_deposits/days.json"
