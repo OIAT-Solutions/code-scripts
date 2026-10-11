@@ -206,10 +206,20 @@ def evaluate_gates(
                     if reason:
                         bad_lines.append(f"{doc}: ItemRef {item_id}: {reason}")
                 try:
-                    if _dec(detail.get("Qty")) <= 0:
-                        bad_lines.append(f"{doc}: ItemRef {item_id} has non-positive Qty")
+                    qty = _dec(detail.get("Qty"))
+                    if qty == 0:
+                        bad_lines.append(f"{doc}: ItemRef {item_id} has zero Qty")
+                    elif qty < 0 and not (_dec(line.get("Amount")) < 0 and _dec(detail.get("TaxInclusiveAmt")) < 0):
+                        bad_lines.append(f"{doc}: ItemRef {item_id} has negative Qty without a negative (return) amount")
                 except ValueError:
                     bad_lines.append(f"{doc}: ItemRef {item_id} has invalid Qty")
+            # A return (owner decision 11 Oct 2026) is a negative line; the receipt itself must stay positive.
+            try:
+                gross = sum(_dec((l.get("SalesItemLineDetail") or {}).get("TaxInclusiveAmt") or 0) for l in lines)
+                if lines and gross <= 0:
+                    bad_lines.append(f"{doc}: receipt total {gross} is not positive")
+            except ValueError:
+                bad_lines.append(f"{doc}: receipt total unreadable")
         if bad_lines:
             shown = "; ".join(bad_lines[:10])
             more = f" (+{len(bad_lines) - 10} more)" if len(bad_lines) > 10 else ""

@@ -24,7 +24,9 @@ from code_scripts.tests.test_cutover_review_fixes import (
     OCT_ITEM,
     CompanyAUploadHarness,
     FakeResponse,
+    _raw,
 )
+from code_scripts.tests.test_product_conversion import approved_row, write_mapping
 
 REF = "owner standing approval 2026-10-01 (chat #42)"
 ON = {
@@ -88,6 +90,9 @@ class StandingApprovalHarness(CompanyAUploadHarness):
                 return FakeResponse({"Item": CATCH_ALL_ITEM})
             if "/item/90001" in url:
                 return FakeResponse({"Item": OCT_ITEM})
+            if "/item/90002" in url:
+                return FakeResponse({"Item": dict(OCT_ITEM, Id="90002", Name="Gin bottle", Sku="AKP-GIN",
+                                                  FullyQualifiedName="Gin bottle")})
             if "/item/" in url:
                 raise AssertionError("unexpected item lookup " + url)
             if "SalesReceipt%20where%20DocNumber" in url:
@@ -236,6 +241,45 @@ class StandingApprovalFlowTests(StandingApprovalHarness):
         post = [s for s in self.step_log if s["script"] == "qbo_upload.py" and not s["dry_run"]][0]
         self.assertIsNone(post["approval_file"])
         self.assertFalse(posting_hold_path().exists())
+
+    def two_product_mapping(self):
+        rows = [approved_row(**{"Target QBO Item Type": "Inventory", "Target QBO Item Id": item, "Target QBO Name": name,
+                                "Target QBO SKU": sku, "Effective Date": "2026-10-01", "Staff Approved Sale Multiplier": "1",
+                                "EPOS Name": epos, "EPOS Product ID": pid, "EPOS Existing SKU": sku, "Row ID": pid,
+                                "Canonical Family Key": sku, "Canonical Unit": "bottle"})
+                for item, name, sku, epos, pid in (("90001", "Wine bottle", "AKP-WINE", "Wine crate", "4242"),
+                                                   ("90002", "Gin bottle", "AKP-GIN", "Gin bottle", "4343"))]
+        write_mapping(self.root, rows)
+
+    def test_return_line_on_a_positive_receipt_passes_every_gate_and_posts(self):
+        # 10 Oct 2026: a till refund held the day; owner decision 11 Oct: post it as a return line
+        self.enable()
+        self.two_product_mapping()
+        raw = pd.concat([self.october_raw(), _raw("Gin bottle", -1, -4500, f"{DAY} 13:00:00", "Cash", product_id="4343")],
+                        ignore_index=True)
+        self.prepare(raw)
+        result = self.auto_upload()
+        self.assertTrue(result["passed"])
+        lines = [l for l in self.all_posts[0]["payload"]["Line"] if l.get("DetailType") == "SalesItemLineDetail"]
+        ret = [l for l in lines if l["SalesItemLineDetail"]["Qty"] < 0]
+        self.assertEqual((len(ret), ret[0]["SalesItemLineDetail"]["ItemRef"]["value"]), (1, "90002"))
+        self.assertFalse(posting_hold_path().exists())
+
+    def test_negative_qty_with_positive_amount_is_refused(self):
+        self.enable()
+        self.prepare()
+
+        def tamper(path):
+            doc = json.loads(path.read_text())
+            for entry in doc["payloads"]:
+                for line in entry["payload"]["Line"]:
+                    if line.get("DetailType") == "SalesItemLineDetail":
+                        line["SalesItemLineDetail"]["Qty"] = -abs(line["SalesItemLineDetail"]["Qty"])
+                entry["sha256"] = payload_digest(entry["payload"])
+            path.write_text(json.dumps(doc))
+        self.after_dry_run = tamper
+        message = self.assert_refused("evidence_complete")
+        self.assertIn("negative Qty without a negative (return) amount", message)
 
     def test_gate_evidence_incomplete_preflight_failure(self):
         self.enable()
