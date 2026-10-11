@@ -119,6 +119,9 @@ class CompanyAUploadHarness(unittest.TestCase):
                 return FakeResponse({"Item": CATCH_ALL_ITEM})
             if "/item/90001" in url:
                 return FakeResponse({"Item": OCT_ITEM})
+            if "/item/90002" in url:
+                return FakeResponse({"Item": dict(OCT_ITEM, Id="90002", Name="Gin bottle", Sku="AKP-GIN",
+                                                  FullyQualifiedName="Gin bottle")})
             if "/item/" in url:
                 raise AssertionError("unexpected item lookup " + url)
             return FakeResponse({"QueryResponse": {}})
@@ -295,12 +298,35 @@ class OctoberControlTests(CompanyAUploadHarness):
         self.assertEqual((code, posts), (1, []))
         text = "\n".join(buf)
         self.assertIn("refused before any POST", text)
-        self.assertIn("Non-positive sale quantity", text)
+        self.assertIn("a receipt must stay positive", text)  # a refund alone on its receipt is still refused
         self.assertFalse(json.loads(self.evidence_path().read_text())["complete"])
         with self.assertRaises(ValueError):
             build_posting_manifest(json.loads(self.evidence_path().read_text()), realm=REALM,
                                    approved_by="x", chat_approval_ref="y",
                                    expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+
+    def test_october_return_inside_a_positive_receipt_posts_as_a_negative_line(self):
+        # 10 Oct 2026: a till refund (-1 SNIPER) held the whole day; owner decision 11 Oct: post it as a return line
+        rows = [approved_row(**{"Target QBO Item Type": "Inventory", "Target QBO Item Id": item, "Target QBO Name": name,
+                                "Target QBO SKU": sku, "Effective Date": "2026-10-01", "Staff Approved Sale Multiplier": "1",
+                                "EPOS Name": epos, "EPOS Product ID": pid, "EPOS Existing SKU": sku, "Row ID": pid,
+                                "Canonical Family Key": sku, "Canonical Unit": "bottle"})
+                for item, name, sku, epos, pid in (("90001", "Wine bottle", "AKP-WINE", "Wine crate", "4242"),
+                                                   ("90002", "Gin bottle", "AKP-GIN", "Gin bottle", "4343"))]
+        write_mapping(self.root, rows)
+        raw = pd.concat([self.october_raw(), _raw("Gin bottle", -1, -4500, "2026-10-01 13:00:00", "Cash", product_id="4343")],
+                        ignore_index=True)
+        csv_path = self.transform_to_csv(raw, "2026-10-01")
+        code, posts, _ = self.run_upload(csv_path, "2026-10-01", dry_run=True)
+        self.assertEqual(code, 0)
+        evidence = json.loads(self.evidence_path().read_text())
+        self.assertTrue(evidence["complete"])
+        lines = [l for p in evidence["payloads"] for l in p["payload"]["Line"] if l.get("DetailType") == "SalesItemLineDetail"]
+        ret = [l for l in lines if l["SalesItemLineDetail"]["Qty"] < 0]
+        self.assertEqual(len(ret), 1)
+        self.assertEqual(ret[0]["SalesItemLineDetail"]["TaxInclusiveAmt"], -4500.0)
+        self.assertLess(ret[0]["Amount"], 0)
+        self.assertGreater(ret[0]["SalesItemLineDetail"]["UnitPrice"], 0)
 
     def test_october_same_tender_sale_and_refund_that_cancel_are_dropped(self):
         voided = pd.concat([self.october_raw(qty=1, total=120000), self.october_raw(qty=-1, total=-120000)],

@@ -2237,6 +2237,7 @@ def build_sales_receipt_payload(
     lines = []
     gross_total = 0.0
     net_total = 0.0
+    return_lines = 0
     inventory_created_count = 0
     service_created_count = 0
     default_fallback_count = 0
@@ -2287,12 +2288,22 @@ def build_sales_receipt_payload(
                     f"Invalid sale quantity {row.get(QTY_COL)!r} for {item_name!r} on {doc_number} "
                     f"(TxnDate {txn_date}); October Inventory sales require a positive quantity"
                 ) from exc
-            if raw_qty <= 0:
+            if raw_qty == 0:
                 raise RuntimeError(
-                    f"Non-positive sale quantity {row.get(QTY_COL)!r} for {item_name!r} on {doc_number} "
-                    f"(TxnDate {txn_date}); October Inventory returns/zero lines need separate reviewed handling"
+                    f"Zero sale quantity for {item_name!r} on {doc_number} (TxnDate {txn_date}); "
+                    "October Inventory zero lines need separate reviewed handling"
                 )
+            if raw_qty < 0 and safe_numeric(row.get(AMOUNT_COL, 0)) > 0:
+                raise RuntimeError(
+                    f"Return of {item_name!r} on {doc_number} (TxnDate {txn_date}) has quantity {raw_qty} but a "
+                    "positive amount; refusing"
+                )
+            # A return (owner decision, Marvin chat 11 Oct 2026) posts as a negative line on the same receipt, as
+            # EPOS records it: sales fall by the refund and the stock comes back. The receipt must stay positive
+            # (checked after all lines are built).
             qty_val = float(raw_qty)
+            if raw_qty < 0:
+                return_lines += 1
         else:
             try:
                 qty_val = safe_numeric(row.get(QTY_COL, 1))
@@ -2459,8 +2470,8 @@ def build_sales_receipt_payload(
         else:
             # Company A: Use ItemTaxAmount from CSV
             raw_amount_net = amount_gross - tax_amount
-            if raw_amount_net < 0:
-                raw_amount_net = 0.0
+            if raw_amount_net < 0 and qty_val > 0:
+                raw_amount_net = 0.0  # a negative amount is only meaningful on a return line
 
         # Net unit price so that Amount == UnitPrice * Qty holds for QBO validation.
         unit_price_net = round(raw_amount_net / qty_val, 2) if qty_val else raw_amount_net
@@ -2481,6 +2492,12 @@ def build_sales_receipt_payload(
         )
         gross_total += amount_gross
         net_total += amount_net
+
+    if inventory_controlled and return_lines and round(gross_total, 2) <= 0:
+        raise RuntimeError(
+            f"{doc_number} (TxnDate {txn_date}): {return_lines} return line(s) make the receipt total "
+            f"N{gross_total:,.2f}; a receipt must stay positive - refunds bigger than the day's takings need review"
+        )
 
     payload: dict = {
         "TxnDate": txn_date,
