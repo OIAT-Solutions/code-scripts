@@ -1,6 +1,6 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-**Last updated:** 2026-10-10 by Claude (5–10 Oct changes below; all deployed, server and GitHub at `cdcee81`).
+**Last updated:** 2026-10-11 by Claude (5–11 Oct changes below; all deployed, server and GitHub at `3c85b61`+).
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: cutover log (removed 5 Oct; in git history).
 
@@ -35,6 +35,12 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 ---
 
 ## 2. Live state (production), as of 4 Oct 2026
+
+**11 Oct (Claude), deployed:**
+- QBO follows EPOS stock adjustments (`stock_follow`): Stock Take → 82 Inventory Shrinkage, Wastage → 83 (renamed **Stock Wastage**, owner yes); >₦100k, other reasons and uncertain products wait for approval. Catch-up 1–10 Oct posted (owner yes; Coca-Cola left out for the owner to investigate: bulk ~150–170-case transfer sales with no purchases since 4 Sep). QBO values past-dated adjustments a few minutes later (async). Negatives 61 → 28.
+- Till returns post as negative lines on their receipt (`0a5c9e2`, `3c85b61`); a refund alone on a receipt is still refused. 10 Oct sales posted after two holds cleared with owner approval.
+- Supplier links: Babeema → 119, Geesavos Enterprises → 12 Geesavos Ventures (vendors.csv, owner yes). EPOS has 144 suppliers named as in QBO, but staff still type suppliers in the PO note.
+- Payments workbook live (posted rows lock; system tabs hidden; readable picks). Routine rebuilds by Claude via `~/.oiat/bin/oiat-rebuild.sh` (code-only image on the running one; owner OK). Server restarted 10 Oct after 7 weeks (fixed refused outbound connections); Docker starts only after `oiatadmin` signs in.
 
 **5–10 Oct (Claude), all deployed; server checkout = origin `cursor/post-akponora-qbo-writes-51f3`:**
 - Banking: till sheet over sales → every bank equals the sheet to the kobo, extra to **800100 - Till Overage** (QBO Id 88; note on each line names the day and till lines). Days banked before this keep their old split. Margin max(₦100,000, 5%) (portal settings file). 25 Sep–7 Oct banked.
