@@ -119,7 +119,10 @@ BUSINESS_TZ = ZoneInfo("Africa/Lagos")
 AUTO, REVIEW, HOLD = "AUTO", "REVIEW", "HOLD"
 CREATE_INV, CREATE_NS, MAPPING_ONLY = "CREATE_INVENTORY", "CREATE_NONINVENTORY", "MAPPING_ONLY"
 CREATE_ACTIONS = {CREATE_INV, CREATE_NS}
-REVIEW_FLAGS = {"ZERO_COST_TRACKED", "UNEXPLAINED_STOCK", "AMOUNT_BASE_DIFFERS", "MASTER_NEEDS_REVIEW"}
+# UNEXPLAINED_STOCK is a note, not a review reason (owner, 12 Oct 2026): the item is created at qty 0 either way,
+# QuickBooks now follows EPOS stock takes (stock_follow), and a product left waiting blocked a whole day's sales
+# (HAANSBRO NOREOS on 11 Oct).
+REVIEW_FLAGS = {"ZERO_COST_TRACKED", "AMOUNT_BASE_DIFFERS", "MASTER_NEEDS_REVIEW"}
 TAX_CODES = {"VAT": "2", "NoTax": "7"}
 SNAPSHOT_FIELDS = ("Name", "IsStockTracked", "VolumeOfSale", "CostPriceExTax", "SalePriceIncTax", "CategoryName")
 SHA_EXCLUDED_COLUMNS = {"Approved By", "Target QBO Item Id", "Review Status"}

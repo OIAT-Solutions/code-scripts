@@ -67,6 +67,12 @@ class AutoLinkTests(unittest.TestCase):
         self.assertEqual(act["state"], v.HOLD_NEAR)
         self.assertIn("none of these products", act["detail"])
 
+    def test_owner_rule_god_miracle_trading_is_one_supplier(self):
+        # 12 Oct 2026: GOD MIRACLE TRADING(IKENNA)'s products had been billed by another vendor; owner: same supplier
+        act = plan("GOD MIRACLE TRADING(IKENNA)", TISSUE, index([("201", TISSUE)]))
+        self.assertEqual((act["state"], act["vendor_id"]), (v.LINK, "70"), act["detail"])
+        self.assertIn("owner rule", act["detail"])
+
     def test_two_vendors_with_the_same_core_are_not_guessed(self):
         act = plan("ADA FOODS LTD")
         self.assertNotEqual(act["state"], v.LINK)

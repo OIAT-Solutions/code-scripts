@@ -185,9 +185,9 @@ class PlanClassificationTests(Base):
         self.assertEqual(ds["408"]["review"], cs.AUTO)
         self.assertTrue(any("PO#4001" in n for n in ds["408"]["notes"]))
         self.assertIn("UNEXPLAINED_STOCK", ds["409"]["flags"])
-        self.assertEqual(ds["409"]["review"], cs.REVIEW)
+        self.assertEqual(ds["409"]["review"], cs.AUTO)  # a note, not a reason to wait (owner, 12 Oct 2026)
         self.assertEqual(ds["409"]["payload"]["QtyOnHand"], 0)
-        self.assertTrue(cs.needs_attention(plan))
+        self.assertTrue(any("vs October PO receipts" in n for n in ds["409"]["notes"]))
 
     def test_po_check_failure_holds_only_products_with_stock(self):
         # 9 Oct 2026: the EPOS PO list timed out and failed the whole product step
@@ -197,7 +197,7 @@ class PlanClassificationTests(Base):
         epos = SlowEpos({"408": scrape("408", stock=3), "410": scrape("410", stock=0)})
         plan = self.plan([product("408", "MILO TIN", True), product("410", "BOURNVITA TIN", True)], epos=epos)
         ds = self.by_pid(plan)
-        self.assertEqual(ds["408"]["review"], cs.REVIEW)
+        self.assertEqual(ds["408"]["review"], cs.AUTO)  # created at qty 0; the stock question is a note
         self.assertTrue(any("could not be checked" in n for n in ds["408"]["notes"]))
         self.assertEqual(ds["410"]["review"], cs.AUTO)  # no stock to explain: unaffected
 
@@ -353,8 +353,8 @@ class ApplyTests(Base):
 
     def test_manual_apply_skips_holds_and_applies_review_rows(self):
         prods, scrapes = self.new_products()
-        prods.append(product("504", "UNKNOWN STOCK", True))
-        scrapes["504"] = scrape("504", stock=7)
+        prods.append(product("504", "FREE SAMPLE", True, cost=0.0))
+        scrapes["504"] = scrape("504", stock=0)
         prods.append(product("505", "NO AMOUNT", False))
         scrapes["505"] = scrape("505", [("100", "")])
         plan = self.plan(prods, scrapes)
@@ -364,18 +364,21 @@ class ApplyTests(Base):
         reg = ProductConversionRegistry.from_csv(self.mapping)
         self.assertIn("504", reg.by_product_id)
         self.assertNotIn("505", reg.by_product_id)
-        self.assertEqual([x["pid"] for x in receipt["unexplained_stock"]], ["504"])
         self.assertTrue(all(self.fake.items[x["qbo_id"]].get("QtyOnHand", 0) == 0 for x in receipt["created"]))
 
     def test_automated_apply_skips_review_rows(self):
         prods, scrapes = self.new_products()
-        prods.append(product("504", "UNKNOWN STOCK", True))
-        scrapes["504"] = scrape("504", stock=7)
+        prods.append(product("504", "FREE SAMPLE", True, cost=0.0))
+        scrapes["504"] = scrape("504", stock=0)
+        prods.append(product("506", "UNKNOWN STOCK", True))  # unexplained stock is a note only (12 Oct 2026)
+        scrapes["506"] = scrape("506", stock=7)
         plan = self.plan(prods, scrapes)
         receipt = self.apply(plan, automated=True, cap=25)
+        self.assertEqual([x["pid"] for x in receipt["unexplained_stock"]], ["506"])
         reg = ProductConversionRegistry.from_csv(self.mapping)
         self.assertNotIn("504", reg.by_product_id)
         self.assertIn("501", reg.by_product_id)
+        self.assertIn("506", reg.by_product_id)
         self.assertEqual([x["pid"] for x in receipt["skipped_review"]], ["504"])
 
     def test_verification_failure_stops_before_install(self):

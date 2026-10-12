@@ -94,6 +94,9 @@ def same_name(a: str, b: str) -> bool:
 # "LOLYWAS VENTURES", "BABEEMA CONNECT ENT" to "BABEEMA CONNECT ENTERPRISES" without asking).
 GENERIC_WORDS = {"ENT", "ENTS", "ENTERPRISE", "ENTERPRISES", "VENTURE", "VENTURES", "LTD", "LIMITED", "NIG", "NIGERIA",
                  "NIGERIAN", "CO", "COY", "COMPANY", "INVOICE", "INTL", "INTERNATIONAL", "GLOBAL", "PLC", "AND", "THE"}
+# Owner rule: every typed variant of these business names is the same supplier, whoever entered the PO
+# (Marvin, 12 Oct 2026: "treat all suppliers under the name of GOD MIRACLE TRADING as one").
+OWNER_SAME_SUPPLIER = {"GOD MIRACLE TRADING": "70"}
 AUTO_LINK_SCORE = 0.85      # a near name is linked when the products agree too
 PRODUCT_AGREE = 0.5         # share of this PO's products the vendor has billed before
 PRODUCT_CONFLICT = 0.25     # another vendor at or above this share makes the evidence ambiguous
@@ -228,6 +231,12 @@ def auto_link(act: dict, name: str, sup: dict, pool: list, ranked, product_index
     ev_text = "; ".join(f"{n} of {total} products previously billed by {vid} {by_id[vid].get('DisplayName')}"
                         for vid, n, total in evidence[:3]) or "no product history found"
     core = core_name(name)
+    owner = OWNER_SAME_SUPPLIER.get(core)
+    if owner and owner in by_id:
+        act["state"], act["vendor_id"] = LINK, owner
+        act["detail"] = (f"'{core}' is always QBO vendor {owner} '{by_id[owner].get('DisplayName')}' (owner rule, "
+                         f"12 Oct 2026): linked automatically")
+        return True
     twins = [v for v in active if core and core_name(v.get("DisplayName", "")) == core]
     if len(twins) == 1:
         vid = str(twins[0].get("Id"))
