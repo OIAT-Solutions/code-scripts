@@ -349,6 +349,26 @@ def stock_movement_items(runs, errors):
     for record in records:
         marker = (record.payload.get("identity"), record.payload.get("movement_sha"))
         classified.setdefault(marker, record)
+    # Since 11 Oct 2026 QuickBooks follows EPOS Stock Take / Wastage on its own (stock_follow): an event that is
+    # posted, posts tonight, waits on a "Large stock adjustments" card, or predates 1 Oct needs no card here.
+    from code_scripts.akponora_ops import stock_follow as sf
+    try:
+        ledger = ops.ops_root() / sf.TOOL / "posted.json"
+        posted = set(json.loads(ledger.read_text())) if ledger.is_file() else set()
+    except (OSError, ValueError):
+        posted = set()
+        errors.append("The stock adjustment ledger could not be read. Some stock cards may already be done.")
+    cap = sf.settings()["cap"]
+
+    def handled(event, path):
+        if event["event_id"] in posted:
+            return True, ""
+        try:
+            kind, why = sf.classify({**event, "_day": sf.lagos_day(event["occurred_at_epos"], path)}, cap)
+        except (KeyError, ValueError, TypeError, ArithmeticError):
+            return False, ""
+        return bool(kind) and (not why or why.startswith("worth ") or why in ("before 1 October", "no quantity change")), why
+
     items, seen = [], set()
     for n, (run, path) in enumerate(sorted(reports, key=lambda pair: pair[1].stat().st_mtime, reverse=True)):
         try:
@@ -363,8 +383,11 @@ def stock_movement_items(runs, errors):
                 if identity in seen:
                     continue
                 seen.add(identity)
+                done, why = handled(event, path)
+                if done:
+                    continue
                 record = classified.get((identity, event["evidence_sha256"]))
-                reason = event["review_reason"]
+                reason = f"Not posted automatically: {why}." if why else event["review_reason"]
                 if record:
                     followup = {"delivery": "Purchase evidence and a bill are still required.",
                         "recount": "A verified count and a separately approved correction are still required.",
