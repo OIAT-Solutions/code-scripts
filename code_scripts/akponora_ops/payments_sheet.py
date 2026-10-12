@@ -229,7 +229,9 @@ def system_rows(qbo: dict) -> dict:
     day = lambda n: (EPOCH + timedelta(days=n)).isoformat() if isinstance(n, int) else ""  # noqa: E731
     pick = lambda rows: sorted((label(r[2], day(r[1]), r[3], r[0]) for r in rows), key=str.casefold)  # noqa: E731
     return {"credit": credit, "bills": bills,
-            "open_invoices": pick([r for r in credit if r[5] > 0]), "open_bills": pick(bills)}
+            "open_invoices": pick([r for r in credit if r[5] > 0]),
+            # staff pick only current bills; older ones are cleared through bank reconciliation (owner, 12 Oct 2026)
+            "open_bills": pick([r for r in bills if day(r[1]) >= FROM_DAY])}
 
 
 SEP = " · "

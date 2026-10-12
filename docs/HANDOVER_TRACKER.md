@@ -39,6 +39,7 @@ ssh -i ~/.ssh/oiat_server -o BatchMode=yes -o ConnectTimeout=20 oiatadmin@oiat-s
 **12 Oct (Claude), deployed:**
 - 11 Oct sales were held by 6 new products waiting for review (HAANSBRO NOREOS etc., flag "unexplained stock"). Owner yes: products created (e.g. 19487, 19488), 11 Oct sales re-run: 6 receipts, ₦3,238,750, MATCH.
 - Rule change (owner): "unexplained stock" is now a note only; such products are created automatically at qty 0 (stock follows EPOS stock takes). Zero cost, amount/master issues still wait.
+- Payments workbook: staff bill pick list shows only bills from 1 Oct 2026 (48 open, ₦15.6m); "Bills to pay" still lists all 804 open bills (₦240.3m). Workbook checked against live QBO 12 Oct: exact match. The 679 Jan–Aug bills (₦200.1m) and 77 Sep bills (₦24.6m) are almost certainly paid but never recorded: clear them in the bank reconciliation project (C) once Marvin sends statements; every posting needs an owner yes.
 - Owner rule: every "GOD MIRACLE TRADING…" supplier name is QBO vendor 70 (`OWNER_SAME_SUPPLIER` in `vendors.py`). GOD MIRACLE TRADING(IKENNA) linked → 70 (owner yes); Mexy's PO 4013 now releasable on the next run.
 
 **11 Oct (Claude), deployed:**

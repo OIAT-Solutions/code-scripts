@@ -164,6 +164,16 @@ class PaymentsSheetTests(unittest.TestCase):
         self.assertEqual(sheet.bodies[(ps.LISTS, "B")], [["Mrs VERA AKPOREHA · 5 Oct 2026 · ₦58,200.00 · CR261005-389764"]])
         self.assertEqual(sheet.bodies[(ps.LISTS, "C")], [["UNCLE SAM'S BAKERY & CAFE · 3 Oct 2026 · ₦72,000.00 · EPOS-PO-3976"]])
 
+    def test_bill_pick_list_is_october_onward_but_bills_tab_keeps_all(self):
+        sheet = FakeSheet()
+        self.qbo.bills["70001"] = {"Id": "70001", "DocNumber": "OLD-1", "TxnDate": "2026-08-14", "TotalAmt": 5000,
+                                   "Balance": 5000, "VendorRef": {"value": "9", "name": "OLD SUPPLIER"}}
+        r = self.run_(sheet)
+        self.assertEqual([x[0] for x in sheet.bodies[(ps.LISTS, "C")]],
+                         ["UNCLE SAM'S BAKERY & CAFE · 3 Oct 2026 · ₦72,000.00 · EPOS-PO-3976"])
+        self.assertEqual([x[0] for x in sheet.bodies[(ps.BILLS, "A")]], ["OLD-1", "EPOS-PO-3976"])
+        self.assertEqual(r["open_bills"], 1)
+
     def test_system_tabs_write_real_dates(self):
         sheet = FakeSheet()
         self.run_(sheet)
