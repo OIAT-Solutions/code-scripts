@@ -64,8 +64,8 @@ class StockFollowTests(unittest.TestCase):
 
     def test_rules(self):
         cases = [(event("a"), "ST", ""), (event("b", reason="Wastage", qty="-2"), "WS", ""),
-                 (event("c", reason="New Stock"), "", "not Stock Take or Wastage"),
-                 (event("d", reason="n/a"), "", "not Stock Take or Wastage"),
+                 (event("c", reason="New Stock"), "NA", ""), (event("d", reason="n/a"), "NA", ""),
+                 (event("d2", reason="Returns"), "", "is not Stock Take, Wastage"),
                  (event("e", holds=["child unit"]), "ST", "not certain"),
                  (event("f", value="-₦150,000.00"), "ST", "over the N100,000 limit")]
         evs = sf.collect([self.capture([c[0] for c in cases])])
@@ -73,6 +73,14 @@ class StockFollowTests(unittest.TestCase):
             k, w = sf.classify(evs[e["event_id"]], self.s["cap"])
             self.assertEqual(k, kind)
             self.assertIn(why, w) if why else self.assertEqual(w, "")
+
+    def test_no_reason_changes_post_to_shrinkage_labelled_na(self):
+        # owner 12 Oct 2026: n/a / New Stock post without approval, findable by "NA" for bank reconciliation
+        evs = sf.collect([self.capture([event("n", reason="n/a", qty="24")])])
+        sf.plan(evs, self.tmp / "na", s=self.s, approve_over_cap=False)
+        p = json.loads((self.tmp / "na/payloads.jsonl").read_text().splitlines()[0])
+        self.assertEqual((p["DocNumber"][:2], p["AdjustAccountRef"]["value"]), ("NA", "82"))
+        self.assertIn("no EPOS reason", p["PrivateNote"])
 
     def test_lagos_day_by_capture_zone(self):
         self.assertEqual(sf.lagos_day("08/10/2026 23:30:00", "daily/x"), "2026-10-09")  # UTC 23:30 -> Lagos 00:30
@@ -86,7 +94,7 @@ class StockFollowTests(unittest.TestCase):
         self.assertEqual((s["status"], s["events"], s["adjustments"]), (sf.READY, 2, 2))
         pl = [json.loads(x) for x in (out / "payloads.jsonl").read_text().splitlines()]
         self.assertEqual({p["AdjustAccountRef"]["value"] for p in pl}, {"82", "83"})
-        self.assertTrue(all(p["DocNumber"][:2] in ("ST", "WS") and len(p["DocNumber"]) <= 21 for p in pl))
+        self.assertTrue(all(p["DocNumber"][:2] in ("ST", "WS", "NA") and len(p["DocNumber"]) <= 21 for p in pl))
         with self.assertRaises(sf.StopPost):
             sf.post(out, client=self.qbo, approval_ref="yes", expect_sha="0" * 64)
         r = sf.post(out, client=self.qbo, approval_ref="owner yes", expect_sha=s["payloads_sha256"])

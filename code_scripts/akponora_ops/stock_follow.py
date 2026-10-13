@@ -6,7 +6,11 @@ Staff use two EPOS reasons: ``Stock Take`` (a recount before a new PO: EPOS corr
 * Stock Take -> account 82 Inventory Shrinkage (count difference), DocNumber ``ST<yymmdd>-<hash>``
 * Wastage    -> account 83 Stock Wastage, DocNumber ``WS<yymmdd>-<hash>`` (hash of the event ids: re-runs give
   the same number, so an adjustment can never be posted twice)
-* anything else (New Stock, Returns, "System" with no reason, ...), a line whose product/unit is not
+* no reason (EPOS "n/a", usually a back-office edit shown as "System"), New Stock, New Product
+             -> account 82 too, DocNumber ``NA<yymmdd>-<hash>`` (owner, 12 Oct 2026: may be stock already in
+             the store, may be a delivery without a PO; posted without approval and kept findable by "NA"
+             so bank reconciliation can trace it if money does not add up)
+* anything else (Returns, ...), a line whose product/unit is not
   certain (``holds`` / no quantity), or one worth more than the cap (N100,000 by EPOS cost) is not posted
   automatically: over-cap Stock Take/Wastage go to a plan the owner approves in Needs your attention;
   the rest stay as classification cards.
@@ -40,7 +44,8 @@ from code_scripts.akponora_ops.common import COMPANY, REALM, dump_json, state_di
 TOOL = "stock_follow"
 LAGOS = ZoneInfo("Africa/Lagos")
 FLOOR = "2026-10-01"
-KINDS = {"stock take": ("ST", "82"), "wastage": ("WS", "83")}
+KINDS = {"stock take": ("ST", "82"), "wastage": ("WS", "83"),
+         "n/a": ("NA", "82"), "": ("NA", "82"), "new stock": ("NA", "82"), "new product": ("NA", "82")}
 CAP_ENV, POST_ENV = "OIAT_COMPANY_A_STOCK_FOLLOW_CAP", "OIAT_COMPANY_A_STOCK_FOLLOW_POST"
 ST_ACCT_ENV, WS_ACCT_ENV = "OIAT_COMPANY_A_STOCK_FOLLOW_ST_ACCOUNT", "OIAT_COMPANY_A_STOCK_FOLLOW_WS_ACCOUNT"
 MAX_LINES = 100
@@ -72,7 +77,8 @@ def settings(env=None) -> dict:
     env = os.environ if env is None else env
     return {"cap": money(env.get(CAP_ENV)) or Decimal("100000"),
             "post": str(env.get(POST_ENV, "1")).strip().lower() not in {"0", "false", "no", "off"},
-            "accounts": {"ST": str(env.get(ST_ACCT_ENV) or "82"), "WS": str(env.get(WS_ACCT_ENV) or "83")}}
+            "accounts": {"ST": str(env.get(ST_ACCT_ENV) or "82"), "WS": str(env.get(WS_ACCT_ENV) or "83"),
+                         "NA": str(env.get(ST_ACCT_ENV) or "82")}}
 
 
 # ---------------------------------------------------------------- events
@@ -107,7 +113,7 @@ def classify(e: dict, cap: Decimal) -> tuple[str, str]:
     """(kind 'ST'/'WS' or '', why it is not automatic or '')."""
     kind = KINDS.get(str(e.get("epos_reason") or "").strip().casefold())
     if not kind:
-        return "", f"EPOS reason '{e.get('epos_reason')}' is not Stock Take or Wastage"
+        return "", f"EPOS reason '{e.get('epos_reason')}' is not Stock Take, Wastage, New Stock or no reason"
     if e.get("holds") or e.get("canonical_qty_change") in (None, "") or not e.get("qbo_item_id"):
         return kind[0], "product or unit not certain: " + "; ".join(e.get("holds") or ["no QuickBooks quantity"])
     if Decimal(str(e["canonical_qty_change"])) == 0:
@@ -149,7 +155,8 @@ def build_payloads(events: list[dict], s: dict, *, tag: str) -> list[dict]:
             lines = [{"DetailType": "ItemAdjustmentLineDetail", "Description": "; ".join(v["refs"])[:4000],
                       "ItemAdjustmentLineDetail": {"ItemRef": {"value": item}, "QtyDiff": float(v["qty"])}}
                      for item, v in per_item.items() if v["qty"] != 0]
-            what = "Stock count correction (EPOS Stock Take)" if kind == "ST" else "Stock wastage (EPOS Wastage)"
+            what = {"ST": "Stock count correction (EPOS Stock Take)", "WS": "Stock wastage (EPOS Wastage)",
+                    "NA": "Stock change with no EPOS reason (n/a, New Stock, New Product)"}[kind]
             out.append({"TxnDate": day, "DocNumber": doc, "AdjustAccountRef": {"value": s["accounts"][kind]},
                         "PrivateNote": (f"{what} {day} | {doc} | events {','.join(e['event_id'][:10] for e in chunk)} "
                                         f"| created by {TOOL}")[:4000],
@@ -276,7 +283,7 @@ def nightly(movements_summary: Path, out: Path, *, client=None, write_client=Non
     if p["status"] != READY or not s["post"] or dry_run or write_client is None:
         res["note"] = "nothing new" if p["status"] != READY else "planned, not posted (posting off or dry run)"
         return res
-    r = post(Path(out), client=write_client, approval_ref="Marvin chat yes 2026-10-11: QBO follows EPOS Stock Take/Wastage",
+    r = post(Path(out), client=write_client, approval_ref="Marvin chat yes 2026-10-11/12: QBO follows EPOS Stock Take, Wastage and no-reason changes",
              expect_sha=p["payloads_sha256"])
     res["posted"] = r["results"]
     res["warnings"] = r["warnings"]

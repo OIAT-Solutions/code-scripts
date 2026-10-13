@@ -298,7 +298,7 @@ def stock_follow_items(errors):
             span = f"{days[0]} to {days[-1]}" if len(days) > 1 else (days[0] if days else "")
             reason = (f"{summary.get('events')} EPOS stock adjustment(s) ({span}): {summary.get('added_units')} unit(s) added, "
                       f"{summary.get('removed_units')} removed, net N{summary.get('value_net')} at EPOS cost. Approving posts "
-                      f"{summary.get('adjustments')} QuickBooks stock adjustment(s): Stock Take to Inventory Shrinkage, "
+                      f"{summary.get('adjustments')} QuickBooks stock adjustment(s): Stock Take and no-reason (NA) changes to Inventory Shrinkage, "
                       "Wastage to Stock Wastage. The line list is under Details.")
             item = make_item("stock_follow", path.parent.name, summary.get("title") or "Stock adjustments", reason, run,
                              path.parent.name, approve=bool(summary.get("payloads_sha256")), skip=True,
