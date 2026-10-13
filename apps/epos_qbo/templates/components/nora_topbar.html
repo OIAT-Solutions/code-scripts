@@ -3,5 +3,5 @@
 <div class="nora-header-title">{{ company_tab_label }}</div><div class="nora-header-right"><span class="nora-timezone">Lagos · WAT (UTC+1)</span><span class="nora-operator">OIAT operator</span>
 <button type="button" id="nora-theme" class="nora-icon-button" aria-label="Switch to dark mode" title="Switch to dark mode"><iconify-icon icon="solar:moon-linear" width="19" aria-hidden="true"></iconify-icon></button>
 <span class="nora-avatar">{{ request.user.username|first|upper }}</span></div></header>
-<div class="nora-breadcrumb"><span>Nora Mini Mart</span><span aria-hidden="true">/</span><span>{{ company_tab_label }}</span></div></div>
+<div class="nora-breadcrumb"><span>{% if company_key == 'company_a' %}Nora Mart{% elif company_key == 'company_b' %}Goldplates{% else %}{{ company_data.display_name }}{% endif %}</span><span aria-hidden="true">/</span><span>{{ company_tab_label }}</span></div></div>
 <div id="nora-scrim" class="nora-scrim" hidden><button type="button" aria-label="Close navigation"></button></div><aside id="nora-mobile-sidebar" class="nora-sidebar nora-sidebar-mobile" aria-label="Mobile navigation">{% include "components/nora_sidebar_content.html" %}</aside>

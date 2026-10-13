@@ -149,7 +149,7 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LOGIN_URL = "/login/"
-LOGIN_REDIRECT_URL = "/epos-qbo/dashboard/"
+LOGIN_REDIRECT_URL = "/epos-qbo/companies/company_a/"  # Nora workspace (13 Oct 2026); agency overview is one click away
 LOGOUT_REDIRECT_URL = "/login/"
 
 # Portal workspace selector cards.

@@ -3756,7 +3756,7 @@ def company_detail(request, company_key):
     from .services.company_workspace import page_context
     context.update(page_context(company, request, _company_inventory_enabled(company),
                                 {company_key: company_data.get("token_info", {})}))
-    if company_key == "company_a":
+    if company_key == "company_a" or context.get("company_tab") == "sales":  # Goldplates: sales in the new layout
         from django.utils import timezone as django_timezone
         context["nora_now"] = django_timezone.now()
         context["nora_sales_recent"] = list(context.get("company_nora_runs", []))[:5]

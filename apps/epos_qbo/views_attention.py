@@ -55,6 +55,11 @@ def approval_reference(user):
     return attention_actions.approval_reference(user)
 
 
+def nora_shell(request):
+    from .services.company_workspace import shell_context
+    return shell_context(request, "attention")
+
+
 @login_required
 @require_GET
 def inbox(request):
@@ -66,6 +71,7 @@ def inbox(request):
     context.update(items=items, errors=errors, blockers=attention.blockers(), recent_actions=recent,
                    can_approve=permission(request.user, "approve"), can_run=permission(request.user, "daily"),
                    can_refresh=request.user.has_perm("epos_qbo.can_trigger_runs"), rechecking=recheck_running())
+    context.update(nora_shell(request))
     return render(request, "epos_qbo/attention.html", context)
 
 
@@ -232,6 +238,7 @@ def confirm(request):
     context.update(title=title, description=description, item=item, token=token, action=action, facts=facts,
                    button=button, approval_actor=attention_actions.actor_name(request.user),
                    approval_preview=approval_reference(request.user), reason_max=REASON_MAX)
+    context.update(nora_shell(request))
     return render(request, "epos_qbo/attention_confirm.html", context)
 
 

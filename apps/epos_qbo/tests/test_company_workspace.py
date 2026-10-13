@@ -49,7 +49,7 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertIn('tab=purchases',choices['company_a'])
         self.assertIn('tab=sales',choices['company_b'])
         self.assertEqual(response.context['company_key'], 'company_a')
-        self.assertContains(response, 'Nora Mini Mart')
+        self.assertContains(response, 'Nora Mart')
         self.assertContains(response, 'Akponora Ventures Ltd')
         self.assertContains(response, 'Goldplates')
         self.assertIn('tab=sales', choices['company_b'])
@@ -115,7 +115,9 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertNotContains(nora, 'GOLDPLATES FEASTHOUSE')
         goldplates = self.client.get(reverse('epos_qbo:company-detail', args=['company_b']), {'tab':'sales'})
         self.assertEqual(goldplates.status_code, 200)
-        self.assertEqual(goldplates.templates[0].name, 'epos_qbo/company_detail.html')
+        # 13 Oct 2026: Goldplates sales also use the new layout, so the company switcher keeps you in it
+        self.assertEqual(goldplates.templates[0].name, 'epos_qbo/nora_workspace.html')
+        self.assertContains(goldplates, 'Goldplates Feasthouse Ltd.')
         self.assertContains(goldplates, '₦999.00')
 
     def test_nora_sales_filter_searches_real_dates_and_does_not_replace_confirmed_value(self):

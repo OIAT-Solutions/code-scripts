@@ -104,9 +104,30 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
         nora_categories=[dict(kind=kind, label=label, count=decision_counts[kind])
                          for kind, label in category_labels.items() if decision_counts[kind]],
         nora_sales_trend=trend_rows,
-        nora_workspace=(key == ops.COMPANY_KEY))
+        nora_workspace=(key == ops.COMPANY_KEY or active == "sales"))
     return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab":t})) for t in tabs],
         company_key=key, company_tab=active, company_tab_label=TAB_LABELS[active], company_choices=choices,
         company_sales_page=sales_page, company_decisions=decisions, company_record_errors=errors,
         company_history_url=reverse("epos_qbo:runs") + "?" + urlencode({"company":key}),
         company_tab_query=urlencode({"tab":active}))
+
+
+def shell_context(request, active="attention"):
+    """The Nora Mart sidebar/topbar for pages outside the company workspace view (Review queue, confirmation)."""
+    from ..views import _company_inventory_enabled
+    company = CompanyConfigRecord.objects.filter(company_key=ops.COMPANY_KEY).first()
+    if company is None:
+        return {}
+    tabs = available_tabs(company, request.user, _company_inventory_enabled(company))
+    base = reverse("epos_qbo:company-detail", args=[ops.COMPANY_KEY])
+    choices = [dict(name=o.display_name, key=o.company_key,
+                    url=reverse("epos_qbo:company-detail", args=[o.company_key]))
+               for o in CompanyConfigRecord.objects.filter(is_active=True).order_by("display_name")]
+    try:
+        position = next(iter(experience.home_context(ops.COMPANY_KEY)["home_rows"]), None)
+    except Exception:  # the shell must never break the page it wraps
+        position = None
+    return dict(nora_workspace=True, company_key=ops.COMPANY_KEY, company_data={"display_name": company.display_name},
+                company_choices=choices, company_position=position or {}, company_tab=active,
+                company_tab_label=TAB_LABELS.get(active, "Review queue"),
+                company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab": t})) for t in tabs])
