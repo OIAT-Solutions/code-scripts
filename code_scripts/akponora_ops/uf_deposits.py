@@ -105,8 +105,8 @@ ENABLED_ENV = "OIAT_COMPANY_A_UF_DEPOSIT_ENABLED"
 AUTO_ENV = "OIAT_COMPANY_A_UF_AUTO_POST"
 REF_ENV = "OIAT_COMPANY_A_UF_APPROVAL_REF"
 TOL_ENV = "OIAT_COMPANY_A_UF_TOLERANCE"
-# Owner decision (Marvin, 6 Oct 2026): when the till sheet is MORE than the day's sales (within the tolerance),
-# every bank is deposited to match the sheet to the kobo and the extra is credited to this Other Income account.
+# Owner decision (Marvin, 6 Oct 2026; 13 Oct: also over the tolerance, flagged on the portal, not held): when the
+# till sheet is MORE than the day's sales, every bank is deposited to match the sheet to the kobo and the extra is credited to this Other Income account.
 OVERAGE_ENV = "OIAT_COMPANY_A_UF_OVERAGE_ACCOUNT"
 OVERAGE_ACCOUNT_DEFAULT = "800100 - Till Overage"
 OVERAGE_ID = "OVERAGE"
@@ -744,7 +744,11 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     diff = e["sheet_total"] - e["receipts_total"]
     tol = tolerance(e["receipts_total"], s)
     overage, overage_acct = Decimal(0), None
-    if abs(diff) > tol:
+    over_limit = diff > tol  # owner, 13 Oct 2026: a sheet OVER sales is banked anyway and flagged, not held
+    if over_limit:
+        e["flags"] = [f"till sheet {naira(e['sheet_total'])} is {naira(diff)} over EPOS sales {naira(e['receipts_total'])}, "
+                      f"more than the {naira(tol)} limit"]
+    if abs(diff) > tol and not over_limit:
         reasons.append(f"sheet total {naira(e['sheet_total'])} vs receipts {naira(e['receipts_total'])}: "
                        f"difference {naira(diff)} is over the tolerance {naira(tol)}")
     elif diff > 0 and not rec["pending"] and not (
@@ -761,8 +765,8 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
             overage = diff - fixed_overage(ctx, day, overage_acct)
             e["overage"] = diff
             warns.append(f"till sheet {naira(e['sheet_total'])} is {naira(diff)} over the receipts "
-                         f"{naira(e['receipts_total'])} (within {naira(tol)}); banks follow the sheet, "
-                         f"{naira(diff)} to {overage_acct.get('Name')}")
+                         f"{naira(e['receipts_total'])} ({'OVER' if over_limit else 'within'} {naira(tol)}); "
+                         f"banks follow the sheet, {naira(diff)} to {overage_acct.get('Name')}")
     elif diff:
         warns.append(f"sheet total {naira(e['sheet_total'])} vs receipts {naira(e['receipts_total'])} "
                      f"(difference {naira(diff)}, within {naira(tol)}); deposits follow the receipts")
@@ -959,7 +963,7 @@ def day_summary(e: dict, banks: dict) -> dict:
     num = lambda b: banks.get(b, {}).get("number", b)  # noqa: E731
     return {
         "day": e["day"], "status": e["status"], "state": day_state(e["status"], e.get("hold_kind", "")),
-        "reasons": e["reasons"], "warnings": e["warnings"],
+        "reasons": e["reasons"], "warnings": e["warnings"], "flags": e.get("flags", []),
         "sheet_total": money(e["sheet_total"]), "receipts_total": money(e["receipts_total"]),
         "receipts": {k: len(v) for k, v in e["receipts"].items()},
         "sheet_by_bank": {num(b): money(v) for b, v in sorted(e["sheet_by_bank"].items(), key=lambda kv: num(kv[0]))},

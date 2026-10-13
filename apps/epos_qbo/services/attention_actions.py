@@ -96,6 +96,8 @@ def exclusion_key(item):
         return "vendor", item["extra"]["vendor"].get("epos_name", "")
     if item["kind"] == "bill":
         return "bill", item["identity"]
+    if item["kind"] == "flag":
+        return "flag_seen", item["identity"]
     raise ValueError("This item can't be added to the don't-ask-again list")
 
 

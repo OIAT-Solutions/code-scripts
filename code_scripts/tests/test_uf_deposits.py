@@ -380,18 +380,26 @@ class GateTests(NoNetwork):
 
     def test_tolerance_gate(self):
         sheet = google({"Oct 2026": block("2026-10-01", DAY1)})  # sheet 3,200,000
-        low = [sr(601, "2026-10-01", 3000000.0, "Transfer")]
-        d = self.plan(FakeQBO(low), sheet, ["2026-10-01"])["days"][0]
+        high = [sr(601, "2026-10-01", 3400000.0, "Transfer")]  # sales well OVER the sheet: money missing, held
+        d = self.plan(FakeQBO(high), sheet, ["2026-10-01"])["days"][0]
         self.assertEqual(d["status"], ufd.HOLD)
         self.assertTrue(any("over the tolerance" in r for r in d["reasons"]))
+        # sheet well OVER sales (owner, 13 Oct 2026): banked as the sheet says, flagged, not held
+        low = [sr(601, "2026-10-01", 3000000.0, "Transfer")]
+        d = self.plan(FakeQBO(low), sheet, ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.READY, d["reasons"])
+        day = json.loads((Path(d["dir"]) / "summary.json").read_text())
+        self.assertIn("more than the", day["flags"][0])
+        self.assertEqual(Decimal(day["overage"]), Decimal("200000.00"))
         # 3,199,500 vs 3,200,000: within max(1000, 0.5%) -> READY with a warning
         d = self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"])["days"][0]
         self.assertEqual(d["status"], ufd.READY, d["reasons"])
         self.assertTrue(any("within" in w for w in d["warnings"]))
-        # both limits configurable: N100 and 0.001% -> the N500 difference holds
+        # both limits configurable: N100 and 0.001% -> the N500 sheet excess is banked but flagged
         d = self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"],
                       **{ufd.TOL_ENV: "100", ufd.TOL_PCT_ENV: "0.001"})["days"][0]
-        self.assertEqual(d["status"], ufd.HOLD)
+        self.assertEqual(d["status"], ufd.READY, d["reasons"])
+        self.assertTrue(json.loads((Path(d["dir"]) / "summary.json").read_text())["flags"])
 
     def test_sheet_over_sales_holds_when_overage_account_is_missing(self):
         sheet = google({"Oct 2026": block("2026-10-01", DAY1)})
@@ -442,9 +450,8 @@ class GateTests(NoNetwork):
         self.assertEqual((s["tol_abs"], s["tol_pct"]), (Decimal("100"), Decimal("0.001")))
         self.assertFalse(s["auto_flag"])  # only the tolerance keys are honoured from the file
         d = self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"])["days"][0]
-        self.assertEqual(d["status"], ufd.HOLD)
-        self.assertEqual(d["state"], ufd.HELD)
-        self.assertTrue(any("over the tolerance" in r for r in d["reasons"]))
+        self.assertEqual(d["status"], ufd.READY, d["reasons"])  # sheet over sales: banked, flagged
+        self.assertTrue(json.loads((Path(d["dir"]) / "summary.json").read_text())["flags"])
         self.overrides.unlink()  # back to the env defaults on the next run, no restart
         self.assertEqual(self.plan(FakeQBO(DAY1_RECEIPTS), sheet, ["2026-10-01"])["days"][0]["status"], ufd.READY)
         with mock.patch.dict(os.environ, {ufd.TOL_ENV: "50"}):
@@ -741,7 +748,7 @@ class ScheduledTests(NoNetwork):
 
     def test_non_sheet_hold_is_held_and_later_day_posts(self):
         fake, source = self.two_days()
-        fake.receipts["501"]["TotalAmt"] = 10.0  # 1 Oct receipts far below the sheet
+        fake.receipts["501"]["TotalAmt"] = 10000000.0  # 1 Oct receipts far above the sheet: money missing
         res = self.scheduled(fake, source, **AUTO)
         self.assertEqual([d["status"] for d in res["days"]], [ufd.HELD, ufd.DEPOSITED])
         self.assertTrue(any("over the tolerance" in r for r in res["days"][0]["reasons"]))

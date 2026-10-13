@@ -269,6 +269,39 @@ def deposit_items(seen, errors):
     return out
 
 
+def flag_items(seen_flags, errors):
+    """Information only (owner, 13 Oct 2026): banked days whose till sheet was well over EPOS sales. Never blocks;
+    "Seen, clear this flag" records it in the don't-ask-again list (kind flag_seen)."""
+    from .deposits import plan_folders
+    out, done = [], set()
+    state_file = ops.ops_root() / "uf_deposits/days.json"
+    try:
+        state = document(state_file).get("days", {}) if state_file.exists() else {}
+    except (OSError, ValueError):
+        state = {}
+    for path in plan_folders():
+        try:
+            summary = document(path)
+            day = str(summary.get("day") or path.parent.name)
+            if day in done or not ops.DATE_RE.fullmatch(day):
+                continue
+            done.add(day)
+            identity = f"deposit:{day}"
+            banked = (state.get(day, {}).get("status") == "DEPOSITED"
+                      or any(document(p).get("complete") for p in path.parent.glob("post_*.json")))
+            if not summary.get("flags") or identity in seen_flags or not banked:
+                continue  # an unbanked day already has its Banking card
+            run = ops.Run(business_date=day, run_id="run_portal_plan", path=path.parent.parent, dry_run=False, status="review")
+            item = make_item("flag", identity, f"Check · banking {day}", "Banked as the till sheet says, nothing is held. "
+                             + "; ".join(summary["flags"]) + ". The extra went to Till Overage: worth asking the store why.",
+                             run, path.parent.name, exclude=True, extra={"summary": summary})
+            item["details_url"] = reverse("epos_qbo:company-detail", args=["company_a"]) + "?tab=deposits&day=" + day + "#deposit-details"
+            out.append(item)
+        except (OSError, ValueError, TypeError, KeyError, ops.EvidenceError):
+            errors.append("A banking flag could not be read safely.")
+    return out
+
+
 # ----------------------------------------------------------------------------- inbox
 def bill_plans(runs):
     """(run, bills folder) newest first: daily-run plans and portal re-checks (``portal_reads/<job>/bills``)."""
@@ -420,9 +453,9 @@ def inbox():
     items += deposit_items(seen, errors)
     from . import exclusions
     try:
-        excluded = {kind: {r["key"] for r in exclusions.rows() if r["kind"] == kind} for kind in ("product", "vendor", "bill", "repeat_ok")}
+        excluded = {kind: {r["key"] for r in exclusions.rows() if r["kind"] == kind} for kind in ("product", "vendor", "bill", "repeat_ok", "flag_seen")}
     except (OSError, ValueError, csv.Error):
-        excluded = {"product": set(), "vendor": set(), "bill": set(), "repeat_ok": set()}
+        excluded = {"product": set(), "vendor": set(), "bill": set(), "repeat_ok": set(), "flag_seen": set()}
         errors.append("The don't-ask-again list could not be read. Excluded items may appear here.")
     try:
         mapped_products = mapped_product_ids()
@@ -431,6 +464,7 @@ def inbox():
         mapped_products, mapped_vendors = set(), []
         errors.append("The product or supplier lists could not be read. Review items may be out of date.")
     runs = ops.list_runs()
+    items += flag_items(excluded["flag_seen"], errors)
     items += stock_movement_items(runs, errors)
     items += stock_adjust_items(errors)
     items += stock_follow_items(errors)

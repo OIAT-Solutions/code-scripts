@@ -530,6 +530,21 @@ class DepositTests(RegisterFixtures, TestCase):
                        [{"Till sheet line": "Moniepoint POS 1", "Terminal / TID": "2KUD", "QBO account number": "4000850527", "QBO account Id": "77", "Kind": "card", "Active": "yes", "Note": ""},
                         {"Till sheet line": "Petty cash", "Terminal / TID": "", "QBO account number": "1000", "QBO account Id": "78", "Kind": "cash", "Active": "yes", "Note": ""}])
 
+    def test_sheet_over_sales_is_a_flag_once_banked_and_can_be_cleared(self):
+        # owner, 13 Oct 2026: a till sheet well over EPOS sales is banked anyway and only flagged
+        flagged = dict(DAY_SUMMARY, flags=["till sheet N4,517,250.00 is N535,250.00 over EPOS sales N3,982,000.00"])
+        self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02"),
+                      files={"uf/2026-10-01/summary.json": json.dumps(flagged)})
+        self.write_days({"2026-10-01": {"status": "READY", "reason": "", "updated_at": "2026-10-02T18:00:00+00:00"}})
+        kinds = lambda: [i["kind"] for i in attention.inbox()[0]]  # noqa: E731
+        self.assertNotIn("flag", kinds())  # not banked yet: the Banking card is enough
+        self.write_days({"2026-10-01": {"status": "DEPOSITED", "reason": "", "updated_at": "2026-10-02T19:00:00+00:00"}})
+        item = next(i for i in attention.inbox()[0] if i["kind"] == "flag")
+        self.assertFalse(item["approve"])
+        self.assertTrue(item["exclude"])
+        self.assertIn("N535,250.00 over EPOS sales", item["reason"])
+        self.assertEqual(attention_actions.exclusion_key(item), ("flag_seen", "deposit:2026-10-01"))
+
     def test_page_renders_without_any_deposit_files(self):
         response = self.client.get(self.page, {"tab": "deposits"})
         self.assertEqual(response.status_code, 200)

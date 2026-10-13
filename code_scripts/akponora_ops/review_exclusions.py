@@ -48,7 +48,7 @@ FILE_NAME = "review_exclusions.csv"
 HISTORY_NAME = "review_exclusions_history.csv"
 COLUMNS = ["kind", "key", "reason", "added_by", "added_at", "expires_at"]
 HISTORY_COLUMNS = ["ts", "action", "kind", "key", "reason", "actor", "expires_at", "previous", "file_sha256_after"]
-KINDS = ("product", "vendor", "bill", "routine_repeat", "repeat_ok")
+KINDS = ("product", "vendor", "bill", "routine_repeat", "repeat_ok", "flag_seen")  # flag_seen: portal flag read
 PO_PREFIX = "EPOS-PO-"
 TZ = ZoneInfo("Africa/Lagos")
 
