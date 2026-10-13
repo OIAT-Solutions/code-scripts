@@ -39,3 +39,24 @@ html.dark .nora-workspace-body .nora-content-wrap h1,.dark .nora-workspace-body 
 html.dark .nora-company-switcher>summary,.dark .nora-company-switcher>summary{background:#202a39;border-color:#3a465b}
 html.dark .nora-company-switcher .nora-mark,html.dark .nora-choice-mark,.dark .nora-company-switcher .nora-mark,.dark .nora-choice-mark{background:#e3eae6;color:#141c19}
 html.dark .nora-company-switcher .nora-mark.is-gp,html.dark .nora-choice-mark.is-gp,.dark .nora-choice-mark.is-gp{background:#9a6b1e;color:#fff8ec}
+/* Review queue side panel (Claude, 13 Oct) */
+.nora-drawer{position:fixed;inset:0 0 0 auto;margin:0;width:520px;max-width:100vw;height:100dvh;max-height:100dvh;border:0;padding:22px 24px 30px;background:#fff;color:var(--nora-ink);box-shadow:-10px 0 50px #20243a1f;overflow-y:auto}
+.nora-drawer::backdrop{background:#24284040}
+.nora-drawer-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.nora-drawer-body h2{font-size:19px;line-height:1.35;font-weight:650;letter-spacing:-.3px;margin:6px 0 10px}
+.nora-drawer-body p{font-size:13.5px;line-height:1.65}
+.nora-drawer-body .portal-eyebrow{font-size:11px;color:var(--nora-muted);letter-spacing:.5px;font-weight:600}
+.nora-drawer-body .flex{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.nora-drawer .btn{display:inline-flex;align-items:center;min-height:38px;padding:0 14px;border-radius:7px;font-size:13px;font-weight:550}
+.nora-drawer .btn-secondary{border:1px solid #e2e5ef;background:#fff;color:#4e5364}
+.nora-drawer .btn-primary{border:1px solid var(--nora-blue);background:var(--nora-blue);color:#fff}
+.nora-drawer .portal-link{display:inline-flex;align-items:center;min-height:38px;color:var(--nora-blue);font-size:13px}
+.nora-queue-page .queue-reason{white-space:normal;min-width:240px;color:var(--nora-muted)}
+.nora-queue-page button.nora-details{border:0;background:none;color:var(--nora-blue);cursor:pointer;font:inherit;padding:4px}
+html.dark .nora-drawer,.dark .nora-drawer{background:#1a2230;color:var(--nora-ink)}
+html.dark .nora-drawer .btn-secondary,.dark .nora-drawer .btn-secondary{background:#202a39;color:var(--nora-ink);border-color:#3a465b}
+@media(max-width:760px){.nora-drawer{width:100vw;padding:18px 18px 28px}}
+
+.nora-queue-page .queue-row{cursor:pointer}.nora-queue-page .queue-row:hover td{background:#f8f9fd}html.dark .nora-queue-page .queue-row:hover td{background:#202a39}
+@media(max-width:760px){.nora-queue-page .queue-reason,.nora-queue-page th:nth-child(4){display:none}}
+.nora-queue-page td:first-child{white-space:normal;min-width:170px}

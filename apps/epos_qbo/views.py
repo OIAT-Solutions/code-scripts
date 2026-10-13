@@ -3753,6 +3753,11 @@ def company_detail(request, company_key):
             back_label="Companies",
         )
     )
+    if company_key == "company_a" and request.GET.get("tab") == "attention":
+        # one Review queue: the table + side-panel page; keep the workflow filter
+        target = reverse("epos_qbo:attention")
+        kind = request.GET.get("kind", "")
+        return redirect(target + (f"?kind={kind}" if kind and kind.isidentifier() else ""))
     from .services.company_workspace import page_context
     context.update(page_context(company, request, _company_inventory_enabled(company),
                                 {company_key: company_data.get("token_info", {})}))

@@ -16,6 +16,13 @@ QUEUE_KIND_GROUPS = {"stock": {"stock_movement", "stock_adjust", "stock_follow"}
                      "purchases": {"bill", "vendor"}}
 
 
+def tab_url(base, tab, key):
+    """Nora Mart's Review queue is the table + side-panel page (attention.html), not a workspace tab."""
+    if tab == "attention" and key == ops.COMPANY_KEY:
+        return reverse("epos_qbo:attention")
+    return base + "?" + urlencode({"tab": tab})
+
+
 def available_tabs(company, user, inventory_enabled=False):
     if company.company_key == ops.COMPANY_KEY:
         return ["overview", "attention", "sales", "purchases", "products", "deposits", "runs", "schedules", "settings"]
@@ -105,7 +112,7 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
                          for kind, label in category_labels.items() if decision_counts[kind]],
         nora_sales_trend=trend_rows,
         nora_workspace=(key == ops.COMPANY_KEY or active == "sales"))
-    return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab":t})) for t in tabs],
+    return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=tab_url(base, t, key)) for t in tabs],
         company_key=key, company_tab=active, company_tab_label=TAB_LABELS[active], company_choices=choices,
         company_sales_page=sales_page, company_decisions=decisions, company_record_errors=errors,
         company_history_url=reverse("epos_qbo:runs") + "?" + urlencode({"company":key}),
@@ -130,4 +137,4 @@ def shell_context(request, active="attention"):
     return dict(nora_workspace=True, company_key=ops.COMPANY_KEY, company_data={"display_name": company.display_name},
                 company_choices=choices, company_position=position or {}, company_tab=active,
                 company_tab_label=TAB_LABELS.get(active, "Review queue"),
-                company_tabs=[dict(key=t, label=TAB_LABELS[t], url=base + "?" + urlencode({"tab": t})) for t in tabs])
+                company_tabs=[dict(key=t, label=TAB_LABELS[t], url=tab_url(base, t, ops.COMPANY_KEY)) for t in tabs])

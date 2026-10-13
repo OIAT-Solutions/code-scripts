@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}{% if company_key == 'company_a' %}Nora Mart{% else %}Goldplates{% endif %} · OIAT{% endblock %}
-{% block head_extra %}<link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=3">{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=5">{% endblock %}
 {% block sidebar %}{% include "components/nora_sidebar.html" %}{% endblock %}
 {% block topbar %}{% include "components/nora_topbar.html" %}{% endblock %}
 {% block content %}
@@ -50,4 +50,4 @@
 {% endif %}
 </div>
 {% endblock %}
-{% block body_extra %}{{ block.super }}<script src="{% static 'js/nora_workspace.js' %}?v=3"></script>{% endblock %}
+{% block body_extra %}{{ block.super }}<script src="{% static 'js/nora_workspace.js' %}?v=5"></script>{% endblock %}

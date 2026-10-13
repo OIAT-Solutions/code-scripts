@@ -1,10 +1,38 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}Needs your attention · OIAT Portal{% endblock %}
 {% block sidebar %}{% if nora_workspace %}{% include "components/nora_sidebar.html" %}{% else %}{{ block.super }}{% endif %}{% endblock %}
-{% block head_extra %}{{ block.super }}{% if nora_workspace %}<link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=3">{% endif %}{% endblock %}
+{% block head_extra %}{{ block.super }}{% if nora_workspace %}<link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=5">{% endif %}{% endblock %}
 {% block topbar %}{% if nora_workspace %}{% include "components/nora_topbar.html" %}{% else %}{% include "components/topbar.html" %}{% endif %}{% endblock %}
-{% block body_extra %}{{ block.super }}{% if nora_workspace %}<script src="{% static 'js/nora_workspace.js' %}?v=3"></script>{% endif %}{% endblock %}
+{% block body_extra %}{{ block.super }}{% if nora_workspace %}<script src="{% static 'js/nora_workspace.js' %}?v=5"></script>{% endif %}{% endblock %}
 {% block content %}
+{% if nora_workspace %}
+<div class="nora-workspace nora-queue-page">
+{% for error in errors %}<p role="alert" class="nora-message error">{{ error }}</p>{% endfor %}
+<div class="nora-page-heading"><div><h1>Review queue</h1><p>Open a record to see what was found and what each action does.</p></div>
+{% if can_refresh %}<form method="post" action="{% url 'epos_qbo:attention-refresh' %}">{% csrf_token %}<button type="submit" class="nora-button" {% if rechecking %}disabled{% endif %} title="Checks bills and banking again. Nothing is posted.">{% if rechecking %}Checking…{% else %}Refresh{% endif %}</button></form>{% endif %}</div>
+<section class="nora-panel"><div class="nora-panel-head"><div><h2>Open tasks</h2><p>{{ items|length }} record{{ items|length|pluralize }}</p></div></div>
+<div class="nora-toolbar"><label class="nora-search"><span class="sr-only">Search records</span><input id="queue-search" placeholder="Search records…" autocomplete="off"></label><label><span class="sr-only">Workflow</span><select id="queue-kind"><option value="all">All workflows</option><option value="stock">Stock</option><option value="purchases">Purchases</option><option value="product">Products</option><option value="deposit">Banking</option><option value="flag">Flags</option></select></label></div>
+<div class="nora-table-scroll"><table class="nora-table"><thead><tr><th>Record</th><th>Workflow</th><th>Date</th><th>Why it is here</th><th></th></tr></thead><tbody>
+{% for item in items %}<tr class="queue-row" data-key="{{ item.key }}" data-group="{% if item.kind == 'stock_movement' or item.kind == 'stock_adjust' or item.kind == 'stock_follow' %}stock{% elif item.kind == 'bill' or item.kind == 'vendor' %}purchases{% else %}{{ item.kind }}{% endif %}" data-text="{{ item.title|lower }} {{ item.reason|lower }} {{ item.date }}"><td><strong>{{ item.title }}</strong></td><td>{% if item.kind == 'product' %}Products{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Purchases{% elif item.kind == 'deposit' %}Banking{% elif item.kind == 'flag' %}<span class="nora-status neutral">Flag</span>{% elif item.kind == 'hold' %}Sales{% else %}Stock{% endif %}</td><td>{{ item.date|default:'—' }}</td><td class="queue-reason">{{ item.reason|truncatechars:110 }}</td><td><button type="button" class="nora-details queue-open" data-key="{{ item.key }}">Details</button></td></tr>
+{% empty %}<tr><td colspan="5" class="nora-empty">Nothing is waiting for you.</td></tr>{% endfor %}
+<tr id="queue-none" hidden><td colspan="5" class="nora-empty">No records match these filters.</td></tr>
+</tbody></table></div></section>
+<section class="nora-panel"><div class="nora-panel-head"><div><h2>Recent decisions</h2><p>What was approved or skipped in the portal</p></div></div><div class="nora-table-scroll"><table class="nora-table"><thead><tr><th>Decision</th><th>By</th><th>When</th><th>Result</th></tr></thead><tbody>
+{% for record in recent_actions %}<tr><td><a href="{% url 'epos_qbo:run-detail' record.job_id %}"><strong>{{ record.action_label }}</strong> · {{ record.payload.title|default:"Review action" }}</a></td><td>{{ record.actor }}</td><td>{{ record.created_at|date:'j M H:i' }}</td><td>{{ record.result }}</td></tr>{% empty %}<tr><td colspan="4" class="nora-empty">No portal decisions yet.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% for item in items %}<dialog class="nora-drawer" id="item-{{ item.key }}" aria-labelledby="t-{{ item.key }}"><div class="nora-drawer-head"><span class="nora-status neutral">Review</span><button type="button" class="nora-icon-button nora-drawer-close" aria-label="Close details">✕</button></div><div class="nora-drawer-body" id="t-{{ item.key }}">{% include "components/attention_item_body.html" with drawer=True %}</div></dialog>{% endfor %}
+</div>
+<script>
+(function(){const rows=[...document.querySelectorAll('.queue-row')],q=document.getElementById('queue-search'),k=document.getElementById('queue-kind'),none=document.getElementById('queue-none');
+const p=new URLSearchParams(location.search);if(p.get('kind')&&k){k.value=[...k.options].some(o=>o.value===p.get('kind'))?p.get('kind'):'all'}
+function filter(){const t=(q.value||'').toLowerCase(),g=k.value;let n=0;rows.forEach(r=>{const show=(g==='all'||r.dataset.group===g)&&(!t||r.dataset.text.includes(t));r.hidden=!show;if(show)n++});if(none)none.hidden=n>0||!rows.length}
+if(q){q.addEventListener('input',filter);k.addEventListener('change',filter);filter()}
+function open(key){const d=document.getElementById('item-'+key);if(d&&d.showModal){d.showModal();history.replaceState(null,'','#item-'+key)}}
+rows.forEach(r=>r.addEventListener('click',e=>{if(!e.target.closest('a'))open(r.dataset.key)}));
+document.querySelectorAll('.nora-drawer').forEach(d=>{d.querySelector('.nora-drawer-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{if(e.target===d)d.close()});d.addEventListener('close',()=>history.replaceState(null,'',location.pathname+location.search))});
+if(location.hash.startsWith('#item-'))open(location.hash.slice(6));})();
+</script>
+{% else %}
 {% include "components/attention_banners.html" %}
 <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
   <div><h1 class="text-2xl font-semibold">Needs your attention</h1><p class="text-sm text-slate-500 mt-2">Decisions waiting for you. Each shows what was found and what happens when you approve it.</p></div>
@@ -15,33 +43,12 @@
 <div class="space-y-4">
 {% for item in items %}
 <article id="item-{{ item.key }}" class="portal-panel p-5">
-<p class="portal-eyebrow mb-2">{{ item.company }} · {% if item.kind == 'product' %}New product{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Bill{% elif item.kind == 'deposit' %}Banking{% elif item.kind == 'stock_movement' %}Stock adjustment{% elif item.kind == 'stock_adjust' %}Stock correction{% elif item.kind == 'stock_follow' %}Stock adjustments{% else %}Sales{% endif %}{% if item.date %} · {{ item.date }}{% endif %}</p>
-<h2 class="font-semibold break-words">{{ item.title }}</h2>
-<p class="text-sm mt-2 break-words">{{ item.reason }}</p>
-{% if item.kind == 'stock_movement' %}<p class="portal-muted mt-2">EPOS {{ item.extra.event.transfer_id }} · {{ item.extra.event.occurred_at_epos }} · {{ item.extra.event.staff }} · Quantity change: {{ item.extra.event.canonical_qty_change|default_if_none:'Needs unit review' }}</p>{% endif %}
-{% if item.kind == 'stock_movement' %}<p class="text-sm mt-2">Delivery: check the supplier invoice and PO before recording a bill. Count correction or loss: verify the count and use a separately approved stock correction. Do not record the same delivery twice.</p>{% for hold in item.extra.event.holds %}<p class="text-sm mt-2 text-amber-800 dark:text-amber-300">{{ hold }}</p>{% endfor %}{% endif %}
-{% if item.kind == 'vendor' and item.extra.check %}<p class="text-sm mt-2 {% if item.extra.check.ok %}text-emerald-800 dark:text-emerald-300{% else %}text-amber-800 dark:text-amber-300{% endif %}">{% if item.extra.check.ok %}Checked with QuickBooks: ready to approve.{% elif item.extra.check.result.problems %}QuickBooks check found a problem: {{ item.extra.check.result.problems|join:'; ' }}{% else %}The last QuickBooks check did not finish. Check again.{% endif %}</p>{% endif %}
-<div class="flex flex-wrap items-center gap-3 mt-4">
-{% if can_approve and item.kind == 'stock_movement' %}
-<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=delivery">Record as delivery</a>
-<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=recount">Record as count correction</a>
-<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=loss">Record as loss</a>
-{% endif %}
-{% if can_approve and item.preview %}<a class="btn {% if item.approve %}btn-secondary{% else %}btn-primary{% endif %}" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=preview">{% if item.extra.check %}Check again{% else %}Check with QuickBooks{% endif %}</a>{% endif %}
-{% if can_approve and item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=approve">{% if item.kind == 'hold' %}Clear hold{% elif item.kind == 'product' %}Approve product{% elif item.kind == 'vendor' %}Approve supplier{% elif item.kind == 'deposit' %}Approve banking{% elif item.kind == 'stock_adjust' %}Approve stock correction{% elif item.kind == 'stock_follow' %}Approve and post to QuickBooks{% else %}Approve bill{% endif %}</a>{% endif %}
-{% if can_approve and item.extra.repeat_ok %}<a class="btn btn-primary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=repeat_ok">Approve this order</a>{% endif %}
-{% if can_approve and item.extra.routine %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=routine">Approve and mark supplier as routine</a>{% endif %}
-{% if can_approve and item.skip %}<a class="btn btn-secondary" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=skip">{% if item.kind == 'bill' %}Skip for this plan{% else %}Skip for now{% endif %}</a>{% endif %}
-{% if can_approve and item.exclude %}<a class="portal-link" href="{% url 'epos_qbo:attention-confirm' %}?key={{ item.key }}&amp;action=exclude">{% if item.kind == 'bill' %}Handled outside, never post{% else %}Don't ask again{% endif %}</a>{% endif %}
-{% if can_run and item.kind == 'deposit' and not item.approve %}<a class="btn btn-primary" href="{% url 'epos_qbo:runs' %}?run_company=company_a&amp;run_step=uf&amp;run_date={{ item.date }}">Run banking for this day</a>{% endif %}
-<a class="portal-link" href="{{ item.details_url }}">Open details</a>
-</div>
-{% if not item.approve and not item.preview and not item.extra.repeat_ok and not item.extra.routine and item.kind != 'stock_movement' %}<p class="portal-muted mt-3">{% if item.kind == 'product' %}This product can't be approved here yet. Fix it in EPOS; the next daily product check plans it again.{% elif item.kind == 'flag' %}Information only: nothing is held.{% else %}This can't be approved as it is. Fix the source and run a new preview first.{% endif %}</p>{% endif %}
-<details class="mt-4 text-sm"><summary class="cursor-pointer portal-link">Details</summary><pre class="portal-code mt-2">{{ item.extra }}</pre></details>
+{% include "components/attention_item_body.html" %}
 </article>
 {% empty %}<div class="portal-panel p-6"><h2 class="font-semibold">Nothing is waiting for you</h2><p class="portal-muted mt-2">This reflects the recorded daily runs. Check the red banners for missing sales days.</p></div>{% endfor %}
 </div>
 <section class="mt-8"><h2 class="text-lg font-semibold mb-3">Recent decisions</h2>
 {% for record in recent_actions %}<div class="border-b border-slate-200 dark:border-slate-700 py-3 text-sm"><a class="underline font-medium" href="{% url 'epos_qbo:run-detail' record.job_id %}">{{ record.action_label }} · {{ record.payload.title|default:"Review action" }} · {{ record.actor }}</a><p>{{ record.reason }}</p><p class="text-slate-500">{{ record.created_at }} · {{ record.job.get_status_display }} · {{ record.result }}</p></div>{% empty %}<p class="text-sm text-slate-500">No portal decisions yet.</p>{% endfor %}
 </section>
+{% endif %}
 {% endblock %}

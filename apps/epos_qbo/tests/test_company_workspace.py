@@ -90,8 +90,12 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
 
     def test_all_workspace_reads_are_get_only_and_do_not_dispatch_tools(self):
         with mock.patch('apps.epos_qbo.services.job_runner.dispatch_next_queued_job') as dispatch, mock.patch('apps.epos_qbo.services.attention_actions.execute') as execute:
-            for tab in ('overview','attention','sales','purchases','products','deposits','runs','schedules','settings'):
+            for tab in ('overview','sales','purchases','products','deposits','runs','schedules','settings'):
                 self.assertEqual(self.client.get(self.url,{'tab':tab}).status_code,200)
+            # 13 Oct 2026: Nora Mart's Review queue is the table + side-panel page
+            self.assertRedirects(self.client.get(self.url,{'tab':'attention','kind':'stock'}),
+                                 reverse('epos_qbo:attention')+'?kind=stock', fetch_redirect_response=False)
+            self.assertEqual(self.client.get(reverse('epos_qbo:attention')).status_code,200)
             self.assertEqual(self.client.post(self.url).status_code,405)
             self.assertEqual(self.client.post(reverse('epos_qbo:companies-list')).status_code,405)
             dispatch.assert_not_called()
@@ -147,11 +151,10 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
                           identity=f'item-{n}', company_key='company_a') for n in range(17)]
         with mock.patch('apps.epos_qbo.services.attention.inbox', return_value=(decisions, [])), \
              mock.patch('apps.epos_qbo.services.experience.inbox', return_value=(decisions, [])):
-            response = self.client.get(self.url, {'tab':'attention', 'kind':'stock', 'q':'stock record'})
-        page = response.context['company_queue_page']
-        self.assertEqual(page.paginator.count, 17)
-        self.assertTrue(page.has_next())
-        self.assertContains(response, 'kind=stock&amp;queue_page=2')
+            response = self.client.get(reverse('epos_qbo:attention'))
+        # every record is a table row with a side panel; the workflow filter groups the stock kinds
+        self.assertEqual(response.content.decode().count('data-group="stock"'), 17)
+        self.assertContains(response, 'class="nora-drawer" id="item-stock-16"')
         self.assertEqual(company_workspace.QUEUE_KIND_GROUPS['stock'], {'stock_movement', 'stock_adjust', 'stock_follow'})
 
     def test_directory_business_filters_search_and_home_agree(self):
