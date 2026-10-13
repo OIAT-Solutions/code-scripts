@@ -69,6 +69,18 @@ class StockMovementPortalTests(CompanyAOpsFixtureMixin, TestCase):
         ledger.write_text(json.dumps({"event3": {"adjustment": "1", "doc": "ST261010-x"}}))
         self.assertEqual([i["extra"]["event"]["event_id"] for i in self.kinds()], ["event1"])
 
+    def test_products_quickbooks_does_not_count_get_no_card(self):
+        self.event["epos_product_id"] = "777"
+        (self.folder / "movements/summary.json").write_text(json.dumps(self.report))
+        mapping = self.tmp / "mappings/company_a/approved.csv"
+        mapping.parent.mkdir(parents=True, exist_ok=True)
+        old = mapping.read_text() if mapping.is_file() else ""
+        mapping.write_text("EPOS Product ID,Target QBO Item Type\n777,NonInventory\n")
+        try:
+            self.assertEqual(self.kinds(), [])
+        finally:
+            mapping.write_text(old) if old else mapping.unlink()
+
     def test_an_older_incomplete_capture_raises_no_warning(self):
         # 9 Oct 2026: four stale red banners came from captures older than the latest clean one
         self.write_report("2026-10-01", ["Transfer 1: unexpected detail columns"], age=-120)

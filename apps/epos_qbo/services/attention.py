@@ -359,9 +359,14 @@ def stock_movement_items(runs, errors):
         posted = set()
         errors.append("The stock adjustment ledger could not be read. Some stock cards may already be done.")
     cap = sf.settings()["cap"]
+    try:  # products QuickBooks does not count (meat, fish, rice by weight...): their EPOS stock edits change nothing there
+        not_counted = {r.get("EPOS Product ID") for r in rows(ops.state_root() / "mappings/company_a/approved.csv")
+                       if r.get("Target QBO Item Type") == "NonInventory"}
+    except (OSError, ValueError, csv.Error):
+        not_counted = set()
 
     def handled(event, path):
-        if event["event_id"] in posted:
+        if event["event_id"] in posted or (event.get("epos_product_id") or "") in not_counted:
             return True, ""
         try:
             kind, why = sf.classify({**event, "_day": sf.lagos_day(event["occurred_at_epos"], path)}, cap)
