@@ -1,4 +1,4 @@
-<p class="nora-service-label">EPOS → QuickBooks service</p><details class="nora-company-switcher">
+<details class="nora-company-switcher">
     <summary aria-label="Current company: {% if company_key == 'company_a' %}Nora Mart{% elif company_key == 'company_b' %}Goldplates{% else %}{{ company_data.display_name }}{% endif %}. Switch company">
         <span class="nora-mark{% if company_key == 'company_b' %} is-gp{% endif %}" aria-hidden="true">{% if company_key == 'company_a' %}NM{% elif company_key == 'company_b' %}GP{% else %}{{ company_data.display_name|slice:':2'|upper }}{% endif %}</span>
         <span class="nora-brand-copy">{% if company_key == 'company_a' %}Nora Mart<small>Akponora Ventures Ltd.</small>{% elif company_key == 'company_b' %}Goldplates<small>Goldplates Feasthouse Ltd.</small>{% else %}{{ company_data.display_name }}{% endif %}</span>
