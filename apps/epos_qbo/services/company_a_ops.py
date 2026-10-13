@@ -576,6 +576,7 @@ def guard_alerts(runs: list[Run] | None = None) -> dict | None:
                 pass
             info["by_check"] = [{"severity": sev, "check": check, "count": n}
                                 for (sev, check), n in sorted(counter.items(), key=lambda kv: (kv[0][0] != "ALERT", -kv[1], kv[0][1]))]
+            info["alert"] = max(info["alert"], sum(n for (sev, _), n in counter.items() if sev == "ALERT"))
         return info
     return None
 

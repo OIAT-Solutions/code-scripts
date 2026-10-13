@@ -402,6 +402,13 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertContains(response, 'id="company-a-holds-alerts"')
         self.assertContains(response, "akp_mapping_mismatch")
 
+    def test_guard_warnings_alone_are_not_a_red_box(self):
+        # 13 Oct 2026: 20 negative-stock warnings showed as a red "Stock check" box on the overview
+        self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS),
+                      files={"guard/alerts.csv": "severity,check,entity,id,detail\nWARN,akp_negative_stock,Item,1,x\n"})
+        response = self.client.get(reverse("epos_qbo:company-detail", args=["company_a"]))
+        self.assertNotContains(response, "Stock check found a problem")
+
     def test_runs_page_lists_company_a_runs(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
         response = self.client.get(reverse("epos_qbo:runs"))

@@ -5,7 +5,7 @@
 {% block topbar %}{% if nora_workspace %}{% include "components/nora_topbar.html" %}{% else %}{% include "components/topbar.html" %}{% endif %}{% endblock %}
 {% block body_extra %}{{ block.super }}{% if nora_workspace %}<script src="{% static 'js/nora_workspace.js' %}?v=5"></script>{% endif %}{% endblock %}
 {% block content %}
-{% if nora_workspace %}
+{% if nora_workspace %}{% load tz %}{% timezone "Africa/Lagos" %}
 <div class="nora-workspace nora-queue-page">
 {% for error in errors %}<p role="alert" class="nora-message error">{{ error }}</p>{% endfor %}
 <div class="nora-page-heading"><div><h1>Review queue</h1><p>Open a record to see what was found and what each action does.</p></div>
@@ -32,6 +32,7 @@ rows.forEach(r=>r.addEventListener('click',e=>{if(!e.target.closest('a'))open(r.
 document.querySelectorAll('.nora-drawer').forEach(d=>{d.querySelector('.nora-drawer-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{if(e.target===d)d.close()});d.addEventListener('close',()=>history.replaceState(null,'',location.pathname+location.search))});
 if(location.hash.startsWith('#item-'))open(location.hash.slice(6));})();
 </script>
+{% endtimezone %}
 {% else %}
 {% include "components/attention_banners.html" %}
 <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
