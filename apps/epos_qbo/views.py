@@ -3734,6 +3734,7 @@ def company_detail(request, company_key):
 
     context = {
         "company_data": company_data,
+        "company_key": company_key,
         "recent_runs": recent_runs,
         "recent_artifacts": recent_artifacts,
     }
@@ -3755,6 +3756,17 @@ def company_detail(request, company_key):
     from .services.company_workspace import page_context
     context.update(page_context(company, request, _company_inventory_enabled(company),
                                 {company_key: company_data.get("token_info", {})}))
+    if company_key == "company_a":
+        from django.utils import timezone as django_timezone
+        context["nora_now"] = django_timezone.now()
+        context["nora_sales_recent"] = list(context.get("company_nora_runs", []))[:5]
+        latest_confirmed_day = context.get("company_position", {}).get("latest")
+        context["nora_latest_confirmed_row"] = next(
+            (row for row in context.get("company_nora_runs", []) if row.get("day") == latest_confirmed_day and row.get("confirmed")), None
+        )
+        context["nora_sales_confirmed"] = sum(1 for row in context.get("company_nora_runs", []) if row.get("confirmed"))
+        context["nora_open_tasks"] = context.get("company_position", {}).get("waiting", context.get("company_queue_count", 0))
+        return render(request, "epos_qbo/nora_workspace.html", context)
     return render(request, "epos_qbo/company_detail.html", context)
 
 

@@ -24,7 +24,7 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         return self.make_run(day, stamp, _summary(day, dry=dry, steps=[_step('sales', counts={'mode':'post','reconcile_status':'MATCH','qbo_total':amount})]))
 
     def test_tabs_follow_company_capabilities_and_settings_permission(self):
-        self.assertEqual(company_workspace.available_tabs(self.a, self.user), ['sales','purchases','products','deposits'])
+        self.assertEqual(company_workspace.available_tabs(self.a, self.user), ['overview','attention','sales','purchases','products','deposits','runs','schedules','settings'])
         self.assertEqual(company_workspace.available_tabs(self.b, self.user), ['sales'])
         self.assertEqual(company_workspace.available_tabs(self.b, self.user, True), ['sales'])  # products: Akponora only
         self.user.user_permissions.add(Permission.objects.get(codename='can_edit_companies'))
@@ -34,16 +34,25 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
     def test_unsupported_or_unpermitted_tab_falls_back_to_sales_without_config(self):
         self.a.config_json={'secret_config_marker':'do-not-display'}
         self.a.save()
-        for key, tab in [('company_a','settings'),('company_b','purchases'),('company_a','wrong')]:
+        for key, tab in [('company_b','purchases'),('company_a','wrong')]:
             response=self.client.get(reverse('epos_qbo:company-detail',args=[key]), {'tab':tab})
             self.assertEqual(response.context['company_tab'],'sales')
             self.assertNotContains(response,'do-not-display')
+        response=self.client.get(self.url, {'tab':'settings'})
+        self.assertEqual(response.context['company_tab'],'settings')
+        self.assertNotContains(response,'do-not-display')
+        self.assertNotContains(response,'Manage company settings')
 
     def test_switching_company_retains_only_supported_tab(self):
         response=self.client.get(self.url,{'tab':'purchases'})
         choices={c['key']:c['url'] for c in response.context['company_choices']}
         self.assertIn('tab=purchases',choices['company_a'])
         self.assertIn('tab=sales',choices['company_b'])
+        self.assertEqual(response.context['company_key'], 'company_a')
+        self.assertContains(response, 'Nora Mini Mart')
+        self.assertContains(response, 'Akponora Ventures Ltd')
+        self.assertContains(response, 'Goldplates')
+        self.assertIn('tab=sales', choices['company_b'])
 
     def test_company_sales_agree_with_home_and_keep_confirmed_amount(self):
         self.make_sales()
@@ -81,7 +90,7 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
 
     def test_all_workspace_reads_are_get_only_and_do_not_dispatch_tools(self):
         with mock.patch('apps.epos_qbo.services.job_runner.dispatch_next_queued_job') as dispatch, mock.patch('apps.epos_qbo.services.attention_actions.execute') as execute:
-            for tab in ('sales','purchases','products','deposits'):
+            for tab in ('overview','attention','sales','purchases','products','deposits','runs','schedules','settings'):
                 self.assertEqual(self.client.get(self.url,{'tab':tab}).status_code,200)
             self.assertEqual(self.client.post(self.url).status_code,405)
             self.assertEqual(self.client.post(reverse('epos_qbo:companies-list')).status_code,405)
@@ -89,6 +98,59 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
             execute.assert_not_called()
         self.assertEqual(RunJob.objects.count(),0)
         self.assertEqual(PortalReviewAction.objects.count(),0)
+
+    def test_nora_dashboard_uses_company_a_records_and_keeps_company_b_workspace(self):
+        self.make_sales(day='2026-10-02', amount='123.00')
+        b_job = RunJob.objects.create(company_key='company_b', target_date='2026-10-02', scope=RunJob.SCOPE_SINGLE,
+                                      status=RunJob.STATUS_SUCCEEDED)
+        RunArtifact.objects.create(company_key='company_b', target_date='2026-10-02', run_job=b_job,
+            kind=RunArtifact.KIND_SALES_UPLOAD, reconcile_status='MATCH', reconcile_qbo_total='999.00',
+            upload_stats_json={'dry_run': False})
+        nora = self.client.get(self.url, {'tab':'overview'})
+        self.assertEqual(nora.status_code, 200)
+        self.assertTrue(nora.context['nora_workspace'])
+        self.assertContains(nora, 'Nora Mart Operations')
+        self.assertContains(nora, '₦123.00')
+        self.assertNotContains(nora, '₦999.00')
+        self.assertNotContains(nora, 'GOLDPLATES FEASTHOUSE')
+        goldplates = self.client.get(reverse('epos_qbo:company-detail', args=['company_b']), {'tab':'sales'})
+        self.assertEqual(goldplates.status_code, 200)
+        self.assertEqual(goldplates.templates[0].name, 'epos_qbo/company_detail.html')
+        self.assertContains(goldplates, '₦999.00')
+
+    def test_nora_sales_filter_searches_real_dates_and_does_not_replace_confirmed_value(self):
+        self.make_sales(day='2026-10-02', stamp='run_170000Z', amount='123.00')
+        self.make_run('2026-10-02','run_180000Z',_summary('2026-10-02',status='failed',steps=[_step('sales',status='failed')]))
+        self.make_sales(day='2026-10-03', stamp='run_190000Z', amount='456.00')
+        response=self.client.get(self.url, {'tab':'sales', 'q':'2026-10-02'})
+        self.assertEqual(response.context['company_sales_page'].paginator.count, 1)
+        row=response.context['company_sales_page'][0]
+        self.assertEqual(row['amount_label'], '₦123.00')
+        self.assertTrue(row['latest_issue'])
+
+    def test_overview_chart_uses_real_confirmed_amounts_and_zero_has_no_bar(self):
+        self.make_sales(day='2026-10-02', amount='0.00')
+        self.make_sales(day='2026-10-03', amount='100.00')
+        response = self.client.get(self.url, {'tab':'overview', 'q':'not-used'})
+        points = {point['day'].isoformat(): point for point in response.context['nora_sales_trend']}
+        self.assertEqual(points['2026-10-02']['amount'], '₦0.00')
+        self.assertEqual(points['2026-10-02']['height'], 0)
+        self.assertEqual(points['2026-10-03']['amount'], '₦100.00')
+        self.assertGreater(points['2026-10-03']['height'], 0)
+        self.assertContains(response, 'style="height:0%"')
+
+    def test_review_queue_groups_stock_kinds_and_preserves_filters_in_pagination(self):
+        decisions = [dict(kind='stock_adjust' if n % 2 else 'stock_follow', date='2026-10-02',
+                          key=f'stock-{n}', title=f'Stock record {n}', reason='Review stock count',
+                          identity=f'item-{n}', company_key='company_a') for n in range(17)]
+        with mock.patch('apps.epos_qbo.services.attention.inbox', return_value=(decisions, [])), \
+             mock.patch('apps.epos_qbo.services.experience.inbox', return_value=(decisions, [])):
+            response = self.client.get(self.url, {'tab':'attention', 'kind':'stock', 'q':'stock record'})
+        page = response.context['company_queue_page']
+        self.assertEqual(page.paginator.count, 17)
+        self.assertTrue(page.has_next())
+        self.assertContains(response, 'kind=stock&amp;queue_page=2')
+        self.assertEqual(company_workspace.QUEUE_KIND_GROUPS['stock'], {'stock_movement', 'stock_adjust', 'stock_follow'})
 
     def test_directory_business_filters_search_and_home_agree(self):
         self.make_sales()
@@ -106,7 +168,7 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         response=self.client.get(self.url,{'tab':'sales','page':2})
         self.assertEqual(response.context['company_sales_page'].number,2)
         self.assertEqual(len(response.context['company_sales_page']),2)
-        self.assertContains(response,'tab=sales&amp;page=1')
+        self.assertContains(response,'tab=sales&amp;q=&amp;status=all&amp;page=1')
 
     def test_banking_tab_has_no_recent_work_list(self):
         self.make_run('2026-10-02', 'run_170000Z', _summary('2026-10-02', steps=[

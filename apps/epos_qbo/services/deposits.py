@@ -331,8 +331,19 @@ def context(request):
             errors.append("The bank breakdown for this day could not be read.")
     receipts = (selected or {}).get("summary", {}).get("receipts") if selected else None
     missing = sorted(report.get("missing") or [])
+    deposit_query = request.GET.get("q", "").strip()[:160].casefold()
+    deposit_filter = request.GET.get("status", "all")
+    if deposit_filter not in {"all", "ready", "review", "banked", "incomplete"}:
+        deposit_filter = "all"
+    visible_rows = [row for row in rows if
+        (not deposit_query or deposit_query in " ".join([row["date"], row["label"], row["message"], row["sales"], row["sheet"]]).casefold())
+        and (deposit_filter == "all" or deposit_filter == "ready" and row["status"] == "READY"
+             or deposit_filter == "review" and (row["status"] == "HELD" or row["outside"])
+             or deposit_filter == "banked" and row["status"] == "DEPOSITED"
+             or deposit_filter == "incomplete" and row["status"] == "WAITING_SHEET")]
     return dict(
-        deposit_page=Paginator(rows, 20).get_page(request.GET.get("page")), deposit_has_records=has_records,
+        deposit_page=Paginator(visible_rows, 20).get_page(request.GET.get("page")), deposit_has_records=has_records,
+        deposit_query=deposit_query, deposit_filter=deposit_filter, deposit_count=len(visible_rows),
         deposit_selected=selected, deposit_banks=banks, deposit_transfer=r.money(transfer) if transfer else "",
         deposit_receipts=[(k, v) for k, v in receipts.items() if isinstance(v, (int, float))] if isinstance(receipts, dict) else [],
         deposit_errors=list(dict.fromkeys(errors)), deposit_balance=r.money(balance) if balance is not None else "",

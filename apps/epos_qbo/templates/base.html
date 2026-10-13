@@ -388,18 +388,18 @@
 </head>
 
 <body data-debug-beacon="{% if ui_debug_beacon_enabled %}1{% else %}0{% endif %}"
-    class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200">
+    class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200{% if nora_workspace %} nora-workspace-body{% endif %}">
 
-    {% include "components/sidebar.html" %}
+    {% block sidebar %}{% include "components/sidebar.html" %}{% endblock %}
 
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <main class="flex-1 md:ml-64 overflow-y-auto h-screen bg-slate-50 dark:bg-slate-900">
+    <main class="flex-1 md:ml-64 overflow-y-auto h-screen bg-slate-50 dark:bg-slate-900{% if nora_workspace %} nora-main{% endif %}">
         {% block topbar %}{% endblock %}
 
-        <div class="py-12 px-6 md:px-8 max-w-7xl mx-auto space-y-8">
-            {% if messages %}
+        <div class="py-12 px-6 md:px-8 max-w-7xl mx-auto space-y-8{% if nora_workspace %} nora-content-wrap{% endif %}">
+            {% if messages and not nora_workspace %}
             <div class="space-y-2">
                 {% for message in messages %}
                 <div class="rounded-md border px-3 py-2 text-sm

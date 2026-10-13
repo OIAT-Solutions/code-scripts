@@ -1,0 +1,18 @@
+<p class="nora-service-label">EPOS → QuickBooks service</p><details class="nora-company-switcher">
+    <summary aria-label="Current company: {{ company_data.display_name }}. Switch company">
+        <span class="nora-mark" aria-hidden="true">{% if company_key == 'company_a' %}NM{% else %}GP{% endif %}</span>
+        <span class="nora-brand-copy">{{ company_data.display_name|default:'Nora Mini Mart' }}<small>{% if company_key == 'company_a' %}Akponora Ventures Ltd{% else %}Goldplates{% endif %}</small></span>
+        <iconify-icon class="nora-switch-chevron" icon="solar:alt-arrow-down-linear" width="16" aria-hidden="true"></iconify-icon>
+    </summary>
+    <div class="nora-company-options" role="group" aria-label="Available companies">
+    {% for choice in company_choices %}<a href="{{ choice.url }}"{% if choice.key == company_key %} aria-current="true"{% endif %}><span class="nora-choice-mark">{% if choice.key == 'company_a' %}NM{% else %}GP{% endif %}</span><span>{{ choice.name }}<small>{% if choice.key == 'company_a' %}Akponora Ventures Ltd{% else %}Goldplates{% endif %}</small></span>{% if choice.key == company_key %}<span aria-label="Selected">✓</span>{% endif %}</a>{% endfor %}
+    </div>
+</details>
+<nav class="nora-nav" aria-label="Nora Mart operations">
+{% for tab in company_tabs %}<a href="{{ tab.url }}" class="nora-nav-link{% if tab.key == company_tab %} is-active{% endif %}" {% if tab.key == company_tab %}aria-current="page"{% endif %} title="{{ tab.label }}">
+<iconify-icon icon="{% if tab.key == 'overview' %}solar:widget-2-linear{% elif tab.key == 'attention' %}solar:inbox-linear{% elif tab.key == 'sales' %}solar:chart-2-linear{% elif tab.key == 'purchases' %}solar:cart-large-2-linear{% elif tab.key == 'products' %}solar:box-linear{% elif tab.key == 'deposits' %}solar:banknote-2-linear{% elif tab.key == 'runs' %}solar:calendar-linear{% elif tab.key == 'schedules' %}solar:clock-circle-linear{% else %}solar:settings-linear{% endif %}" width="20" aria-hidden="true"></iconify-icon>
+<span class="nora-nav-label">{{ tab.label }}</span>{% if tab.key == 'attention' and company_position.waiting %}<span class="nora-nav-count">{{ company_position.waiting }}</span>{% endif %}</a>{% endfor %}
+</nav>
+<div class="nora-sidebar-bottom"><a href="{% url 'core-home' %}" class="nora-agency-link" title="Return to OIAT agency overview"><span aria-hidden="true">↗</span><span class="nora-nav-label">OIAT agency overview</span></a>
+<div class="nora-profile"><span class="nora-avatar">{{ request.user.username|first|upper }}</span><span class="nora-profile-copy">{{ request.user.get_full_name|default:request.user.username }}<small>OIAT operator</small></span></div>
+<button type="button" class="nora-icon-button nora-collapse" aria-label="Collapse sidebar" title="Collapse sidebar" aria-expanded="true"><iconify-icon icon="solar:sidebar-minimalistic-linear" width="19" aria-hidden="true"></iconify-icon></button></div>
