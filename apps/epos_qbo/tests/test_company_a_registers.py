@@ -532,7 +532,7 @@ class DepositTests(RegisterFixtures, TestCase):
 
     def test_sheet_over_sales_is_a_flag_once_banked_and_can_be_cleared(self):
         # owner, 13 Oct 2026: a till sheet well over EPOS sales is banked anyway and only flagged
-        flagged = dict(DAY_SUMMARY, flags=["till sheet N4,517,250.00 is N535,250.00 over EPOS sales N3,982,000.00"])
+        flagged = dict(DAY_SUMMARY, sheet_total="4517250.00", receipts_total="3982000.00", flags=["till sheet N4,517,250.00 is N535,250.00 over EPOS sales N3,982,000.00"])
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02"),
                       files={"uf/2026-10-01/summary.json": json.dumps(flagged)})
         self.write_days({"2026-10-01": {"status": "READY", "reason": "", "updated_at": "2026-10-02T18:00:00+00:00"}})
@@ -542,7 +542,7 @@ class DepositTests(RegisterFixtures, TestCase):
         item = next(i for i in attention.inbox()[0] if i["kind"] == "flag")
         self.assertFalse(item["approve"])
         self.assertTrue(item["exclude"])
-        self.assertIn("N535,250.00 over EPOS sales", item["reason"])
+        self.assertEqual(item["title"], "Sales breakdown > EPOS sales by N535,250.00 · 2026-10-01")
         self.assertEqual(attention_actions.exclusion_key(item), ("flag_seen", "deposit:2026-10-01"))
 
     def test_page_renders_without_any_deposit_files(self):

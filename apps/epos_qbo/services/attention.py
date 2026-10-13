@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from django.urls import reverse
@@ -292,8 +293,10 @@ def flag_items(seen_flags, errors):
             if not summary.get("flags") or identity in seen_flags or not banked:
                 continue  # an unbanked day already has its Banking card
             run = ops.Run(business_date=day, run_id="run_portal_plan", path=path.parent.parent, dry_run=False, status="review")
-            item = make_item("flag", identity, f"Check · banking {day}", "Banked as the till sheet says, nothing is held. "
-                             + "; ".join(summary["flags"]) + ". The extra went to Till Overage: worth asking the store why.",
+            sheet, sales = Decimal(str(summary.get("sheet_total") or 0)), Decimal(str(summary.get("receipts_total") or 0))
+            item = make_item("flag", identity, f"Sales breakdown > EPOS sales by N{sheet - sales:,.2f} · {day}",
+                             f"Sales breakdown N{sheet:,.2f}, EPOS sales N{sales:,.2f}. Banked as the sales breakdown "
+                             "says; the extra went to Till Overage. Nothing is held: worth asking the store why.",
                              run, path.parent.name, exclude=True, extra={"summary": summary})
             item["details_url"] = reverse("epos_qbo:company-detail", args=["company_a"]) + "?tab=deposits&day=" + day + "#deposit-details"
             out.append(item)
