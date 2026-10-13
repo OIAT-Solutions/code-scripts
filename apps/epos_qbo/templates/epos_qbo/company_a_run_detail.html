@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ business_company }} · {{ business_day|date:"j F Y" }} · OIAT Portal{% endblock %}
-{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="space-y-6">
 <div><h1 class="text-3xl font-semibold tracking-tight">{{ business_company }}</h1><p class="portal-muted mt-3">Work for {{ business_day|date:"j F Y" }}{% if run.dry_run %} · Preview — nothing posted{% endif %}</p></div>

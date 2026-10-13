@@ -7,7 +7,7 @@ from django.urls import reverse
 from ..models import CompanyConfigRecord
 from . import attention, company_a_ops as ops, experience
 
-TAB_LABELS = {"overview": "Overview", "attention": "Review queue", "sales": "Sales",
+TAB_LABELS = {"admin": "Admin", "overview": "Overview", "attention": "Review queue", "sales": "Sales",
               "purchases": "Purchases", "products": "Products & stock", "deposits": "Banking",
               "runs": "Daily runs", "schedules": "Schedules", "settings": "Settings"}
 STEP_TABS = {"purchases": {"bills"}, "products": {"catalogue", "guard"}, "deposits": {"uf", "deposits", "uf_deposits"}}
@@ -111,7 +111,7 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
         nora_categories=[dict(kind=kind, label=label, count=decision_counts[kind])
                          for kind, label in category_labels.items() if decision_counts[kind]],
         nora_sales_trend=trend_rows,
-        nora_workspace=(key == ops.COMPANY_KEY or active == "sales"))
+        nora_workspace=(key == ops.COMPANY_KEY or active == "sales"), nora_messages_inline=True)
     return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=tab_url(base, t, key)) for t in tabs],
         company_key=key, company_tab=active, company_tab_label=TAB_LABELS[active], company_choices=choices,
         company_sales_page=sales_page, company_decisions=decisions, company_record_errors=errors,

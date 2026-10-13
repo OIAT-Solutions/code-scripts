@@ -21,27 +21,8 @@ def logout_view(request):
 
 @login_required
 def home(request):
-    """Show available solution workspaces."""
-    solutions = []
-    for item in getattr(settings, "PORTAL_SOLUTIONS", []):
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").strip()
-        description = str(item.get("description") or "").strip()
-        url_name = str(item.get("url_name") or "").strip()
-        if not (name and description and url_name):
-            continue
-        try:
-            href = reverse(url_name)
-        except Exception:
-            continue
-        solutions.append({
-            "name": name,
-            "description": description,
-            "href": href,
-        })
-    return render(request, "core/home.html", {"solutions": solutions})
-
+    """Portal home (13 Oct 2026): straight to the Nora Mart workspace."""
+    return redirect("epos_qbo:company-detail", company_key="company_a")
 
 @login_required
 def coming_soon(request, feature: str):

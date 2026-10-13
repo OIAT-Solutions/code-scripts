@@ -127,13 +127,6 @@ class ExperienceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertContains(response,'Choose valid dates')
         self.assertEqual(len(response.context['daily_page']),0)
 
-    def test_shared_navigation_has_no_company_specific_or_logs_entries(self):
-        response = self.client.get(reverse('epos_qbo:overview'))
-        self.assertContains(response,'Main navigation')
-        self.assertNotContains(response,'Company A daily')
-        self.assertNotContains(response,'>Logs<')
-        self.assertNotContains(response,'>API Tokens<')
-        self.assertNotContains(response,'>Quick Sync<')
 
     def test_logs_bookmark_redirect_preserves_dates_and_company(self):
         response = self.client.get(reverse('epos_qbo:logs'), {'company_key':'company_b','date_from':'2026-10-01','date_to':'2026-10-03'})
@@ -150,11 +143,6 @@ class ExperienceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(self.client.get(reverse('epos_qbo:admin-home')).status_code,200)
         self.assertEqual(self.client.post(reverse('epos_qbo:admin-home')).status_code,405)
 
-    def test_clear_all_company_filter_overrides_saved_preference(self):
-        from apps.epos_qbo.models import DashboardUserPreference
-        DashboardUserPreference.objects.create(user=self.user, default_overview_company_key='company_a')
-        response = self.client.get(reverse('epos_qbo:overview'), {'company':''})
-        self.assertEqual(len(response.context['home_rows']),2)
 
     def test_old_company_a_sales_remain_available_without_becoming_october_evidence(self):
         self.artifact(date(2026,9,30), company='company_a')
@@ -246,13 +234,6 @@ class ExperienceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(row['latest'], date(2026,10,1))
         self.assertEqual(row['missing'][-2:], [date(2026,10,2),date(2026,10,3)])
 
-    def test_home_missing_day_link_uses_singular(self):
-        self.sales('2026-10-01')
-        self.sales('2026-10-03')
-        with mock.patch('apps.epos_qbo.services.experience.timezone.now', return_value=self.now):
-            response = self.client.get(reverse('epos_qbo:overview'), {'company':'company_a'})
-        self.assertContains(response, 'View 1 missing day</summary>')
-        self.assertNotContains(response, '1 days have')
 
     def test_imported_and_daily_evidence_for_same_day_do_not_double_count(self):
         self.imported_sales(date(2026,10,3), company='company_a')

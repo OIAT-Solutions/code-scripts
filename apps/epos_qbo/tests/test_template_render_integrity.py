@@ -72,17 +72,3 @@ class TemplateRenderIntegrityTests(TestCase):
                 self.assertEqual(response.status_code, 200, msg=f"unexpected status for {url}")
                 self._assert_no_unresolved_template_tokens(response.content.decode("utf-8"))
 
-    def test_sidebar_renders_companies_count_and_user_identity_values(self):
-        with (
-            mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=self._token_payload()),
-        ):
-            response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-
-        self.assertIn("Main navigation", html)
-        self.assertIn("Marvin Operator", html)
-        self.assertNotIn("{{ company_count", html)
-        self.assertNotIn("request.user.get_full_name", html)

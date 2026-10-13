@@ -157,15 +157,6 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertContains(response, 'class="nora-drawer" id="item-stock-16"')
         self.assertEqual(company_workspace.QUEUE_KIND_GROUPS['stock'], {'stock_movement', 'stock_adjust', 'stock_follow'})
 
-    def test_directory_business_filters_search_and_home_agree(self):
-        self.make_sales()
-        response=self.client.get(reverse('epos_qbo:companies-list'),{'search':'Akponora','state':'attention'})
-        self.assertEqual([r['company_key'] for r in response.context['directory_rows']],['company_a'])
-        self.assertEqual(response.context['directory_rows'][0]['latest'],date(2026,10,2))
-        self.assertContains(response,'Open company')
-        self.assertNotContains(response,'Trigger sync')
-        response=self.client.get(reverse('epos_qbo:companies-list'),{'state':'current'})
-        self.assertEqual(response.context['directory_rows'],[])
 
     def test_sales_pagination_keeps_company_and_tab(self):
         for day in range(1,18):

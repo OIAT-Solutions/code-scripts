@@ -186,48 +186,4 @@ class ReconciledRevenueOverviewTemplateTests(TestCase):
             "environment": "production",
         }
 
-    def test_home_does_not_display_old_company_a_artifacts_as_daily_sales(self):
-        run = RunJob.objects.create(
-            scope=RunJob.SCOPE_SINGLE,
-            company_key="company_a",
-            status=RunJob.STATUS_SUCCEEDED,
-        )
-        RunArtifact.objects.create(
-            run_job=run,
-            company_key="company_a",
-            target_date=date(2026, 2, 13),
-            processed_at=timezone.make_aware(datetime(2026, 2, 13, 20, 0, 0)),
-            source_path="/tmp/match.json",
-            source_hash="hash-match",
-            reconcile_status="MATCH",
-            reconcile_epos_total=5000.0,
-            reconcile_qbo_total=5000.0,
-            reconcile_epos_count=20,
-            reconcile_qbo_count=20,
-        )
 
-        with (
-            mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=self._token_payload()),
-        ):
-            response = self.client.get(reverse("epos_qbo:overview"), {"revenue_period": "90d"})
-
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn("Confirmed sales", html)
-        self.assertIn("No confirmed sales record yet", html)
-        self.assertNotIn("₦5,000.00", html)  # Old Company A artifacts do not establish October daily outcomes.
-
-    def test_overview_renders_empty_state_for_no_reconciled_data(self):
-        with (
-            mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=self._token_payload()),
-        ):
-            response = self.client.get(reverse("epos_qbo:overview"))
-
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn("No confirmed sales record yet", html)
-        self.assertIn("Not fully confirmed", html)

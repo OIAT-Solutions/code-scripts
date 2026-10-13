@@ -365,30 +365,8 @@ class CompanyAPortalIntegrationTests(CompanyAOpsFixtureMixin, TestCase):
         response = self.client.get(reverse("epos_qbo:schedules"), {"state": "history"})
         self.assertFalse(any(r["name"] == "Daily routine" for r in response.context["schedule_display_rows"]))
 
-    def test_overview_card_without_hold(self):
-        self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
-        # Pin "now" to 3 Oct: the card shows the amount of the expected day (2 Oct), not of today's date.
-        from datetime import datetime as _dt, timezone as _tz
-        with mock.patch("django.utils.timezone.now", return_value=_dt(2026, 10, 3, 12, tzinfo=_tz.utc)):
-            response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'data-company-a-row="true"')
-        self.assertContains(response, "Last confirmed sales:")
-        self.assertContains(response, "₦812,345.50")
-        self.assertNotContains(response, "Sales are paused")
 
-    def test_overview_card_with_hold(self):
-        self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS))
-        self.make_hold()
-        response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertContains(response, "Sales are paused")
-        self.assertContains(response, "Review the reason")
-        self.assertNotContains(response, "MISMATCH")
 
-    def test_overview_without_any_company_a_evidence_hides_card(self):
-        response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'id="company-a-card"')
 
     def test_company_detail_has_holds_and_alerts(self):
         self.make_run("2026-10-02", "run_170000Z", _summary("2026-10-02", steps=OK_STEPS),

@@ -384,22 +384,25 @@
         }
     </style>
 
+    
+    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=6">
     {% block head_extra %}{% endblock %}
 </head>
 
 <body data-debug-beacon="{% if ui_debug_beacon_enabled %}1{% else %}0{% endif %}"
-    class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200{% if nora_workspace %} nora-workspace-body{% endif %}">
+    class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200 nora-workspace-body">
 
-    {% block sidebar %}{% include "components/sidebar.html" %}{% endblock %}
+    
+    {% block sidebar %}{% include "components/nora_sidebar.html" %}{% endblock %}
 
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <main class="flex-1 md:ml-64 overflow-y-auto h-screen bg-slate-50 dark:bg-slate-900{% if nora_workspace %} nora-main{% endif %}">
-        {% block topbar %}{% endblock %}
-
-        <div class="py-12 px-6 md:px-8 max-w-7xl mx-auto space-y-8{% if nora_workspace %} nora-content-wrap{% endif %}">
-            {% if messages and not nora_workspace %}
+    <main class="flex-1 md:ml-64 overflow-y-auto h-screen bg-slate-50 dark:bg-slate-900 nora-main">
+        {% block topbar %}{% include "components/nora_topbar.html" %}{% endblock %}
+        
+        <div class="py-12 px-6 md:px-8 max-w-7xl mx-auto space-y-8 nora-content-wrap">
+            {% if messages and not nora_messages_inline %}
             <div class="space-y-2">
                 {% for message in messages %}
                 <div class="rounded-md border px-3 py-2 text-sm
@@ -446,6 +449,8 @@
         window.addEventListener('themeChange', syncThemeLabel);
     </script>
 
+    
+    <script src="{% static 'js/nora_workspace.js' %}?v=6"></script>
     {% block body_extra %}{% endblock %}
 </body>
 

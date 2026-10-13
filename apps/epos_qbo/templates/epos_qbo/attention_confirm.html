@@ -1,9 +1,7 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}Confirm · OIAT Portal{% endblock %}
-{% block sidebar %}{% if nora_workspace %}{% include "components/nora_sidebar.html" %}{% else %}{{ block.super }}{% endif %}{% endblock %}
-{% block head_extra %}{{ block.super }}{% if nora_workspace %}<link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=5">{% endif %}{% endblock %}
-{% block topbar %}{% if nora_workspace %}{% include "components/nora_topbar.html" %}{% else %}{% include "components/topbar.html" %}{% endif %}{% endblock %}
-{% block body_extra %}{{ block.super }}{% if nora_workspace %}<script src="{% static 'js/nora_workspace.js' %}?v=5"></script>{% endif %}{% endblock %}
+{% block head_extra %}{{ block.super }}{% endblock %}
+{% block body_extra %}{{ block.super }}{% endblock %}
 {% block content %}
 <div class="portal-panel p-6 space-y-5">
 <div><h1 class="text-2xl font-semibold break-words">{{ title }}</h1></div>

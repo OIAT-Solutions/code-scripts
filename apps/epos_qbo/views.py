@@ -1452,55 +1452,15 @@ def _overview_context(revenue_period: str = "7d", company_key: str | None = None
 
 @login_required
 def overview(request):
-    _ensure_company_records()
-    revenue_period_param = request.GET.get("revenue_period")
-    company_param = request.GET.get("company")
-    if "company" in request.GET or (revenue_period_param or "").strip():
-        revenue_period = _normalize_revenue_period(revenue_period_param)
-        company_key = (company_param or "").strip() or None
-    else:
-        company_key, revenue_period = _get_user_overview_defaults(request)
-    context = _overview_context(revenue_period, company_key=company_key)
-    from .services.experience import home_context
-    context.update(home_context(company_key or "", token_health={c["company_key"]: c.get("token_status", {}) for c in context["companies"]}))
-    from .services.attention import blockers
-    context["blockers"] = blockers()
-    context["quick_sync_target_date"] = _quick_sync_default_target_date()
-    context["quick_sync_timezone"] = context.get("business_timezone_display", get_business_timezone_display())
-    context["dashboard_timezone_display"] = get_dashboard_timezone_display()
-    context["company_a_card"] = company_a_views.safe_overview_card()
-    context.update(_nav_context())
-    context.update(
-        _breadcrumb_context(
-            [
-                {"label": "Home", "url": None},
-            ],
-            show_overview_actions=False,
-        )
-    )
-    return render(request, "dashboard/overview.html", context)
+    """Old agency page (removed 13 Oct 2026): the Nora Mart workspace is the portal's home."""
+    return redirect("epos_qbo:company-detail", company_key="company_a")
 
 
 @login_required
 @require_GET
 def overview_panels(request):
-    _ensure_company_records()
-    revenue_period_param = request.GET.get("revenue_period")
-    company_param = request.GET.get("company")
-    if "company" in request.GET or (revenue_period_param or "").strip():
-        revenue_period = _normalize_revenue_period(revenue_period_param)
-        company_key = (company_param or "").strip() or None
-    else:
-        company_key, revenue_period = _get_user_overview_defaults(request)
-    context = _overview_context(revenue_period, company_key=company_key)
-    from .services.experience import home_context
-    context.update(home_context(company_key or "", token_health={c["company_key"]: c.get("token_status", {}) for c in context["companies"]}))
-    from .services.attention import blockers
-    context["blockers"] = blockers()
-    response = render(request, "components/overview_refresh.html", context)
-    response["Cache-Control"] = "no-store"
-    response["Pragma"] = "no-cache"
-    return response
+    """Old agency page (removed 13 Oct 2026): the Nora Mart workspace is the portal's home."""
+    return redirect("epos_qbo:company-detail", company_key="company_a")
 
 
 def _scheduler_env_for_display():
@@ -3610,97 +3570,8 @@ def _batch_preload_companies_data(companies: list) -> dict:
 @login_required
 @require_GET
 def companies_list(request):
-    """Companies management page with search, filter, sort; HTMX partial for list."""
-    _ensure_company_records()
-    search = request.GET.get("search", "").strip()
-    filter_status = request.GET.get("filter", "all")
-    sort_by = request.GET.get("sort", "name")
-    view_mode = request.GET.get("view", "cards")
-
-    companies = CompanyConfigRecord.objects.filter(is_active=True)
-    if search:
-        companies = companies.filter(
-            Q(display_name__icontains=search) | Q(company_key__icontains=search)
-        )
-    companies = list(companies)
-
-    if not companies:
-        companies_data = []
-    else:
-        preloaded_maps = _batch_preload_companies_data(companies)
-        companies_data = []
-        for company in companies:
-            ck = company.company_key
-            preloaded = {
-                "latest_activity_job": preloaded_maps["latest_activity_jobs"].get(ck),
-                "latest_sales_job": preloaded_maps["latest_sales_jobs"].get(ck),
-                "latest_inventory_job": preloaded_maps["latest_inventory_jobs"].get(ck),
-                "latest_sales_artifact": preloaded_maps["latest_sales_artifacts"].get(ck),
-                "latest_inventory_artifact": preloaded_maps["latest_inventory_artifacts"].get(ck),
-                "artifacts_today": preloaded_maps["artifacts_today_by_key"].get(ck, []),
-                "latest_successful_sales_artifact": preloaded_maps[
-                    "latest_successful_sales_artifacts"
-                ].get(ck),
-                "token_info": preloaded_maps["token_info_by_key"].get(ck),
-                "sales_reconcile_statuses_by_company_job": preloaded_maps[
-                    "sales_reconcile_statuses_by_company_job"
-                ],
-            }
-            company_data = _enrich_company_data(
-                company,
-                preloaded_maps["latest_activity_jobs"].get(ck),
-                preloaded=preloaded,
-            )
-            companies_data.append(company_data)
-
-    if filter_status != "all":
-        companies_data = [
-            c
-            for c in companies_data
-            if c["status"].get("canonical_level", c["status"]["level"]) == filter_status
-        ]
-    companies_data = _sort_companies_data(companies_data, sort_by)
-    summary = _calculate_companies_summary(companies_data)
-    from .services import experience
-    health = {c["company"].company_key: c.get("token_info", {}) for c in companies_data}
-    positions = experience.home_context(token_health=health)["home_rows"]
-    keys = {c["company"].company_key for c in companies_data}
-    directory_rows = [r for r in positions if r["company_key"] in keys]
-    for row in directory_rows:
-        connection = health.get(row["company_key"], {})
-        row["connection_label"] = "Connected" if connection.get("connection_state") == "connected" else "Connection needs attention" if connection.get("severity") == "critical" else "Connection not checked"
-    state = request.GET.get("state", "")
-    if state == "attention":
-        directory_rows = [r for r in directory_rows if r["tone"] in {"danger", "warning"}]
-    elif state == "current":
-        directory_rows = [r for r in directory_rows if r["label"] == "Up to date"]
-    if sort_by == "last_run":
-        directory_rows.sort(key=lambda r: r["latest"] or date.min, reverse=True)
-
-    context = {"directory_rows": directory_rows, "directory_state": state,
-
-        "companies_data": companies_data,
-        "search": search,
-        "filter_status": filter_status,
-        "sort_by": sort_by,
-        "view_mode": view_mode,
-        "summary": summary,
-    }
-    context.update(_nav_context())
-    context.update(
-        _breadcrumb_context(
-            [
-                {"label": "Dashboard", "url": reverse("epos_qbo:overview")},
-                {"label": "Companies", "url": None},
-            ],
-            back_url=reverse("epos_qbo:overview"),
-            back_label="Overview",
-        )
-    )
-
-    if request.headers.get("HX-Request"):
-        return render(request, "components/company_directory.html", context)
-    return render(request, "epos_qbo/companies.html", context)
+    """Old agency page (removed 13 Oct 2026): the Nora Mart workspace is the portal's home."""
+    return redirect("epos_qbo:company-detail", company_key="company_a")
 
 
 @login_required

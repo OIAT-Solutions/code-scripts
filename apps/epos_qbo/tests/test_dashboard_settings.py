@@ -331,30 +331,7 @@ class OverviewUserPrefsTests(TestCase):
         )
         self.client.login(username="operator", password="pw12345")
 
-    def test_overview_uses_user_prefs_when_no_get_params(self):
-        DashboardUserPreference.objects.create(
-            user=self.user,
-            default_revenue_period="30d",
-            default_overview_company_key="company_a",
-        )
-        response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        # Context should have company filtered to company_a and revenue_period 30d
-        self.assertIn(b"Company A", response.content)
-        self.assertEqual(response.context["revenue_period"], "30d")
 
-    def test_overview_uses_get_params_when_provided(self):
-        DashboardUserPreference.objects.create(
-            user=self.user,
-            default_revenue_period="30d",
-            default_overview_company_key="company_a",
-        )
-        response = self.client.get(
-            reverse("epos_qbo:overview") + "?revenue_period=7d&company=company_b"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"company_b", response.content)
-        self.assertEqual(response.context["revenue_period"], "7d")
 
     def test_overview_defaults_fallback_when_user_prefs_lookup_errors(self):
         request = mock.Mock(user=self.user)

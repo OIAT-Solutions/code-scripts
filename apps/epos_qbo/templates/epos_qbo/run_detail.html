@@ -2,9 +2,6 @@
 
 {% block title %}{{ job.friendly_title }} • EPOS → QBO{% endblock %}
 
-{% block topbar %}
-{% include "components/topbar.html" %}
-{% endblock %}
 
 {% block content %}
 <div class="space-y-6" data-run-id="{{ job.id }}" data-run-status="{{ job.status }}">

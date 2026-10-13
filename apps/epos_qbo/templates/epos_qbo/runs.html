@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Daily runs · OIAT Portal{% endblock %}
-{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div data-active-runs='{{ active_run_ids_json|safe }}' class="space-y-6">
 <div class="flex flex-wrap items-end justify-between gap-5"><div><h1 class="text-3xl font-semibold tracking-tight">Daily runs</h1><p class="portal-muted mt-3">What ran for each company and day, and what still needs attention. Start a run from here.</p></div><div class="flex flex-wrap gap-3"><a href="{% url 'epos_qbo:attention' %}" class="btn btn-secondary">Review waiting items</a>{% if perms.epos_qbo.can_trigger_runs %}<button type="button" class="btn btn-primary" data-open-run>Run</button>{% else %}<button type="button" class="btn btn-primary opacity-50 cursor-not-allowed" disabled title="Ask an admin for the 'Can trigger runs' permission">Run</button>{% endif %}</div></div>

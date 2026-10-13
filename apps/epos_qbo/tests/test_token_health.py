@@ -126,58 +126,6 @@ class TokenHealthViewsTests(TestCase):
             "environment": "production",
         }
 
-    def test_overview_never_shows_unknown_green(self):
-        with (
-            mock.patch("apps.epos_qbo.views.load_tokens_batch", return_value={}),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=None),
-        ):
-            response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertNotRegex(html, r'text-emerald-600">\s*Unknown')
-        self.assertIn("QuickBooks connection needs attention", html)
 
-    def test_companies_page_never_shows_valid_0d(self):
-        tokens = self._token_payload(
-            access_delta=timedelta(minutes=30),
-            refresh_delta=timedelta(days=30),
-        )
-        with (
-            mock.patch("apps.epos_qbo.views.load_tokens_batch", return_value={}),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=tokens),
-        ):
-            response = self.client.get(reverse("epos_qbo:companies-list"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertNotIn("Valid (0d)", html)
-        self.assertIn("Connected", html)
 
-    def test_invalid_or_missing_text_not_shown_for_valid_refresh(self):
-        tokens = self._token_payload(
-            access_delta=timedelta(minutes=-5),
-            refresh_delta=timedelta(days=25),
-        )
-        with (
-            mock.patch("apps.epos_qbo.views.load_tokens_batch", return_value={}),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=tokens),
-        ):
-            response = self.client.get(reverse("epos_qbo:companies-list"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertNotIn("QBO token is invalid or missing", html)
-        self.assertNotIn("QBO re-authentication required", html)
 
-    def test_reauth_text_shown_when_refresh_missing(self):
-        tokens = self._token_payload(
-            access_delta=timedelta(minutes=15),
-            refresh_delta=timedelta(days=20),
-            refresh_token=None,
-        )
-        with (
-            mock.patch("apps.epos_qbo.views.load_tokens_batch", return_value={}),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=tokens),
-        ):
-            response = self.client.get(reverse("epos_qbo:companies-list"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn("QuickBooks connection needs attention", html)

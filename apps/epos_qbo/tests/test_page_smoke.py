@@ -60,9 +60,15 @@ class PageSmokeTests(TestCase):
                                     status=RunJob.STATUS_SUCCEEDED, inventory_options_json={"mode": "audit_only"})
         RunArtifact.objects.create(company_key="company_a", run_job=job, source_path="/x/inventory_pipeline_1.json",
                                    upload_stats_json={"report_type": "inventory_pipeline"})
-        for url in (f"/epos-qbo/runs/{job.id}/", "/epos-qbo/runs/", "/epos-qbo/", "/epos-qbo/companies/company_a/"):
+        for url in (f"/epos-qbo/runs/{job.id}/", "/epos-qbo/runs/", "/epos-qbo/companies/company_a/"):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200, url)
+
+    def test_old_pages_redirect_to_the_nora_workspace(self):
+        # 13 Oct 2026: the new layout is the only one; old home, dashboard and company list are gone
+        for url in ("/", "/epos-qbo/", "/epos-qbo/dashboard/", "/epos-qbo/dashboard/panels/", "/epos-qbo/companies/"):
+            with self.subTest(url=url):
+                self.assertRedirects(self.client.get(url), "/epos-qbo/companies/company_a/", fetch_redirect_response=False)
 
 
 class RunEntryPointTests(TestCase):

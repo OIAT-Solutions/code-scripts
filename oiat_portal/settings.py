@@ -114,6 +114,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.epos_qbo.context_processors.dashboard_timezone",
+                "apps.epos_qbo.context_processors.nora_shell",
             ],
         },
     },

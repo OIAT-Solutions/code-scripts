@@ -1,6 +1,5 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}{{ company_data.company.display_name }} · OIAT Portal{% endblock %}
-{% block topbar %}{% include "components/topbar.html" %}{% endblock %}
 {% block content %}
 <div class="space-y-6">
 <div class="flex flex-wrap items-end justify-between gap-5"><div><h1 class="text-3xl font-semibold tracking-tight">{{ company_data.company.display_name }}</h1><p class="portal-muted mt-3">{% if company_data.company.company_key == "company_a" %}Sales, bills, credit sales, stock and banking for this company.{% else %}Daily sales sent to QuickBooks for this company.{% endif %}</p></div>

@@ -1,11 +1,9 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}Needs your attention · OIAT Portal{% endblock %}
-{% block sidebar %}{% if nora_workspace %}{% include "components/nora_sidebar.html" %}{% else %}{{ block.super }}{% endif %}{% endblock %}
-{% block head_extra %}{{ block.super }}{% if nora_workspace %}<link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=5">{% endif %}{% endblock %}
-{% block topbar %}{% if nora_workspace %}{% include "components/nora_topbar.html" %}{% else %}{% include "components/topbar.html" %}{% endif %}{% endblock %}
-{% block body_extra %}{{ block.super }}{% if nora_workspace %}<script src="{% static 'js/nora_workspace.js' %}?v=5"></script>{% endif %}{% endblock %}
+{% block head_extra %}{{ block.super }}{% endblock %}
+{% block body_extra %}{{ block.super }}{% endblock %}
 {% block content %}
-{% if nora_workspace %}{% load tz %}{% timezone "Africa/Lagos" %}
+{% load tz %}{% timezone "Africa/Lagos" %}
 <div class="nora-workspace nora-queue-page">
 {% for error in errors %}<p role="alert" class="nora-message error">{{ error }}</p>{% endfor %}
 <div class="nora-page-heading"><div><h1>Review queue</h1><p>Open a record to see what was found and what each action does.</p></div>
@@ -33,23 +31,4 @@ document.querySelectorAll('.nora-drawer').forEach(d=>{d.querySelector('.nora-dra
 if(location.hash.startsWith('#item-'))open(location.hash.slice(6));})();
 </script>
 {% endtimezone %}
-{% else %}
-{% include "components/attention_banners.html" %}
-<div class="flex flex-wrap items-center justify-between gap-4 mb-6">
-  <div><h1 class="text-2xl font-semibold">Needs your attention</h1><p class="text-sm text-slate-500 mt-2">Decisions waiting for you. Each shows what was found and what happens when you approve it.</p></div>
-  <div class="flex flex-wrap items-center gap-3">{% if can_refresh %}<form method="post" action="{% url 'epos_qbo:attention-refresh' %}">{% csrf_token %}<button type="submit" class="btn btn-secondary" {% if rechecking %}disabled{% endif %} title="Checks bills and banking again. Nothing is posted.">{% if rechecking %}Checking…{% else %}Refresh{% endif %}</button></form>{% endif %}<a href="{% url 'epos_qbo:runs' %}?company=company_a" class="btn btn-secondary">View daily runs</a></div>
-</div>
-{% for error in errors %}<p role="alert" class="border border-red-300 bg-red-50 text-red-900 dark:bg-red-950/30 dark:text-red-200 dark:border-red-900 rounded-lg p-4 mb-4">{{ error }}</p>{% endfor %}
-
-<div class="space-y-4">
-{% for item in items %}
-<article id="item-{{ item.key }}" class="portal-panel p-5">
-{% include "components/attention_item_body.html" %}
-</article>
-{% empty %}<div class="portal-panel p-6"><h2 class="font-semibold">Nothing is waiting for you</h2><p class="portal-muted mt-2">This reflects the recorded daily runs. Check the red banners for missing sales days.</p></div>{% endfor %}
-</div>
-<section class="mt-8"><h2 class="text-lg font-semibold mb-3">Recent decisions</h2>
-{% for record in recent_actions %}<div class="border-b border-slate-200 dark:border-slate-700 py-3 text-sm"><a class="underline font-medium" href="{% url 'epos_qbo:run-detail' record.job_id %}">{{ record.action_label }} · {{ record.payload.title|default:"Review action" }} · {{ record.actor }}</a><p>{{ record.reason }}</p><p class="text-slate-500">{{ record.created_at }} · {{ record.job.get_status_display }} · {{ record.result }}</p></div>{% empty %}<p class="text-sm text-slate-500">No portal decisions yet.</p>{% endfor %}
-</section>
-{% endif %}
 {% endblock %}
