@@ -99,3 +99,6 @@ html.dark .nora-collapse{color:#bdc6d8;background:#202a39}
 
 html.dark .nora-icon-button:hover{background:#29364b;color:#e6ecff}
 html.dark .nora-status{background:#303c50;color:#d9e2f1}html.dark .nora-status.success{background:#1d3c30;color:#9bdcba}html.dark .nora-status.warning{background:#46351d;color:#f3d39a}html.dark .nora-status.danger{background:#462630;color:#ffbdc8}
+
+/* Keep stock and banking status labels legible on one line. */
+.nora-workspace-body .portal-status{width:max-content;max-width:none;white-space:nowrap;border-radius:5px;padding:4px 8px;font-size:12px;font-weight:500;line-height:1.4}
