@@ -14,7 +14,7 @@
             button.setAttribute('aria-expanded', String(expanded));
             button.setAttribute('aria-label', expanded ? 'Collapse sidebar' : 'Expand sidebar');
             button.title = expanded ? 'Collapse sidebar' : 'Expand sidebar';
-            button.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (expanded ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6') + '"/></svg>';
+            button.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (expanded ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6') + '"/></svg>';
         });
     }
 
