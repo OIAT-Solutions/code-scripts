@@ -89,6 +89,8 @@
     }
 
     // HTMX only enhances marked read-only table controls. Full-page links remain the fallback.
+    if (!window.noraPaginationEventsBound) {
+    window.noraPaginationEventsBound = true;
     var pageRequests = new WeakMap();
     function pageFeedback(message, error) {
         var feedback = document.getElementById('portal-page-feedback');
@@ -120,6 +122,7 @@
     document.addEventListener('htmx:afterSwap', function (event) {
         var target = event.detail.target;
         if (!target || !target.matches('[data-page-region]')) return;
+        target = document.getElementById(target.id) || target;
         target.removeAttribute('aria-busy');
         var saved = pageRequests.get(event.detail.xhr);
         var main = document.querySelector('.nora-main');
@@ -138,6 +141,8 @@
         if (event.detail.failed) pageFeedback('Could not load records. Please try again.', true);
         pageRequests.delete(event.detail.xhr);
     });
+
+    }
 
     if (menu) menu.addEventListener('click', function () {
         if (mobileSidebar.classList.contains('is-open')) closeMobile();

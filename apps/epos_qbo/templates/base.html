@@ -390,7 +390,8 @@
     </style>
 
     
-    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=partial-pages-1">
+    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=partial-pages-2">
+    <script src="{% static 'js/vendor/htmx-2.0.2.min.js' %}" defer></script>
     {% block head_extra %}{% endblock %}
 </head>
 
@@ -431,7 +432,6 @@
     <!-- Alpine.js -->
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <!-- HTMX -->
-    <script src="{% static 'js/vendor/htmx-2.0.2.min.js' %}"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -456,7 +456,7 @@
 
     
     <p id="portal-page-feedback" role="status" aria-live="polite" class="sr-only"></p>
-    <script src="{% static 'js/nora_workspace.js' %}?v=partial-pages-1"></script>
+    <script src="{% static 'js/nora_workspace.js' %}?v=partial-pages-2"></script>
     {% block body_extra %}{% endblock %}
 </body>
 
