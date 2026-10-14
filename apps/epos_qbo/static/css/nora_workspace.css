@@ -158,3 +158,6 @@ html.nora-brand-theme .nora-avatar{background:#e5edf4;color:#183b5b}
 html.nora-brand-theme .nora-icon-button:hover{background:#ffeddf;color:#8c3c08}
 html.nora-brand-theme :is(button,a,input,select):focus-visible{outline-color:#d46a21}
 html.nora-brand-theme .nora-workspace :is(.nora-details,.portal-link,.text-blue-600,.text-indigo-600){color:#9c460b}
+/* Money in the headline cards never breaks mid-number; it shrinks to fit (Claude, 14 Oct) */
+.nora-metric strong{overflow-wrap:normal;white-space:nowrap;font-size:clamp(17px,1.9vw,24px)}
+@media(max-width:700px){.nora-metric strong{font-size:clamp(16px,5.2vw,20px)}}
