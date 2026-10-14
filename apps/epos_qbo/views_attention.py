@@ -28,6 +28,8 @@ ACTION_LABELS = {"approve": "Approved", "skip": "Skipped", "exclude": "Don't ask
                  "preview": "QuickBooks check", "daily": "Daily run"}
 
 EXCLUDE_TEXT = {
+    "flag": "Mark this flag as seen. It is information only: nothing was held and nothing is posted. "
+            "The flag leaves the review queue.",
     "product": "Don't ask about this product again. It won't be set up in QuickBooks. If it is sold on the till, "
                "that day's sales still stop until it is set up.",
     "vendor": "Don't ask about this supplier again. It is never created automatically, and its bills wait with "

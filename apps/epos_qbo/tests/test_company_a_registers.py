@@ -544,6 +544,10 @@ class DepositTests(RegisterFixtures, TestCase):
         self.assertTrue(item["exclude"])
         self.assertEqual(item["title"], "Sales breakdown > EPOS sales by N535,250.00 · 2026-10-01")
         self.assertEqual(attention_actions.exclusion_key(item), ("flag_seen", "deposit:2026-10-01"))
+        # 14 Oct 2026: the confirm page for "Seen, clear this flag" crashed (no wording for flags)
+        page = self.client.get(reverse("epos_qbo:attention-confirm"), {"key": item["key"], "action": "exclude"})
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Mark this flag as seen")
 
     def test_page_renders_without_any_deposit_files(self):
         response = self.client.get(self.page, {"tab": "deposits"})
