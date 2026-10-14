@@ -33,20 +33,25 @@ def available_tabs(company, user, inventory_enabled=False):
     return tabs
 
 
+def switcher_choices(request):
+    """Default to each company's first supported tab; browser history may restore a valid tab."""
+    from ..views import _company_inventory_enabled
+    choices = []
+    for other in CompanyConfigRecord.objects.filter(is_active=True).order_by("display_name"):
+        allowed = available_tabs(other, request.user, _company_inventory_enabled(other))
+        choices.append(dict(name=other.display_name, key=other.company_key, tabs=allowed,
+            url=reverse("epos_qbo:company-detail", args=[other.company_key]) + "?" + urlencode({"tab": allowed[0]})))
+    return choices
+
+
 def page_context(company, request, inventory_enabled=False, token_health=None):
     key = company.company_key
     tabs = available_tabs(company, request.user, inventory_enabled)
     active = request.GET.get("tab", "overview" if key == ops.COMPANY_KEY else "sales")
     if active not in tabs:
-        active = "sales"
+        active = tabs[0]
     base = reverse("epos_qbo:company-detail", args=[key])
-    # Switching company retains the tab only when that company supports it.
-    from ..views import _company_inventory_enabled
-    choices = []
-    for other in CompanyConfigRecord.objects.filter(is_active=True).order_by("display_name"):
-        allowed = available_tabs(other, request.user, _company_inventory_enabled(other))
-        choices.append(dict(name=other.display_name, key=other.company_key,
-            url=reverse("epos_qbo:company-detail", args=[other.company_key]) + "?" + urlencode({"tab": active if active in allowed else "sales"})))
+    choices = switcher_choices(request)
     home = experience.home_context(key, token_health=token_health)
     position = next(iter(home["home_rows"]), None)
     history = experience.daily_rows(key, include_previews=False) if active in {"overview", "attention", "sales", "runs"} or (key != ops.COMPANY_KEY and active == "sales") else []
@@ -144,9 +149,7 @@ def shell_context(request, active="attention"):
         return {}
     tabs = available_tabs(company, request.user, _company_inventory_enabled(company))
     base = reverse("epos_qbo:company-detail", args=[ops.COMPANY_KEY])
-    choices = [dict(name=o.display_name, key=o.company_key,
-                    url=reverse("epos_qbo:company-detail", args=[o.company_key]))
-               for o in CompanyConfigRecord.objects.filter(is_active=True).order_by("display_name")]
+    choices = switcher_choices(request)
     try:
         position = next(iter(experience.home_context(ops.COMPANY_KEY)["home_rows"]), None)
     except Exception:  # the shell must never break the page it wraps

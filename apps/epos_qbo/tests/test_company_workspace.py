@@ -31,28 +31,37 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.user = User.objects.get(pk=self.user.pk)
         self.assertIn('settings', company_workspace.available_tabs(self.a,self.user))
 
-    def test_unsupported_or_unpermitted_tab_falls_back_to_sales_without_config(self):
+    def test_unsupported_tab_falls_back_to_first_supported_page_without_config(self):
         self.a.config_json={'secret_config_marker':'do-not-display'}
         self.a.save()
         for key, tab in [('company_b','purchases'),('company_a','wrong')]:
             response=self.client.get(reverse('epos_qbo:company-detail',args=[key]), {'tab':tab})
-            self.assertEqual(response.context['company_tab'],'sales')
+            self.assertEqual(response.context['company_tab'], 'overview' if key == 'company_a' else 'sales')
             self.assertNotContains(response,'do-not-display')
         response=self.client.get(self.url, {'tab':'settings'})
         self.assertEqual(response.context['company_tab'],'settings')
         self.assertNotContains(response,'do-not-display')
         self.assertNotContains(response,'Manage company settings')
 
-    def test_switching_company_retains_only_supported_tab(self):
+    def test_switching_company_defaults_to_own_first_supported_page(self):
         response=self.client.get(self.url,{'tab':'purchases'})
         choices={c['key']:c['url'] for c in response.context['company_choices']}
-        self.assertIn('tab=purchases',choices['company_a'])
+        self.assertIn('tab=overview',choices['company_a'])
         self.assertIn('tab=sales',choices['company_b'])
         self.assertEqual(response.context['company_key'], 'company_a')
         self.assertContains(response, 'Nora Mart')
         self.assertContains(response, 'Akponora Ventures Ltd')
         self.assertContains(response, 'Goldplates')
         self.assertIn('tab=sales', choices['company_b'])
+
+    def test_switcher_exposes_only_allowed_restore_tabs_on_workspace_and_queue(self):
+        for url in [self.url, reverse('epos_qbo:attention')]:
+            response = self.client.get(url)
+            choices = {c['key']: c for c in response.context['company_choices']}
+            self.assertEqual(choices['company_b']['tabs'], ['sales'])
+            self.assertIn('tab=overview', choices['company_a']['url'])
+            self.assertContains(response, 'data-navigation-user="%s"' % self.user.pk)
+            self.assertContains(response, 'data-company-tabs="sales"')
 
     def test_company_sales_agree_with_home_and_keep_confirmed_amount(self):
         self.make_sales()

@@ -47,6 +47,28 @@
         });
     });
 
+    // Remember navigation per signed-in user and company, never copy the outgoing tab.
+    document.querySelectorAll('.nora-company-switcher').forEach(function (switcher) {
+        var prefix = 'nora-ops-last-tab:' + switcher.dataset.navigationUser + ':';
+        var current = switcher.dataset.companyKey;
+        var active = switcher.dataset.activeTab;
+        var ownLink = Array.from(switcher.querySelectorAll('.nora-company-options a')).find(function (link) {
+            return link.dataset.companyKey === current;
+        });
+        try {
+            if (ownLink && ownLink.dataset.companyTabs.split(',').includes(active)) {
+                localStorage.setItem(prefix + current, active);
+            }
+            switcher.querySelectorAll('.nora-company-options a').forEach(function (link) {
+                var saved = localStorage.getItem(prefix + link.dataset.companyKey);
+                if (!saved || !link.dataset.companyTabs.split(',').includes(saved)) return;
+                var target = new URL(link.href);
+                target.searchParams.set('tab', saved);
+                link.href = target.href;
+            });
+        } catch (e) { /* With storage unavailable, server-provided first-page links still work. */ }
+    });
+
     var themeButton = document.getElementById('nora-theme');
     if (themeButton) {
         function updateThemeButton() {
