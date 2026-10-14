@@ -54,6 +54,15 @@ class ExperienceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(len(row['attempts']), 2)
         self.assertEqual(row['amount'], Decimal('100.00'))
 
+    def test_banking_only_reruns_are_not_sales_attempts(self):
+        # 14 Oct 2026: 9 Oct showed "4 attempts" and "Sales posting has not been confirmed" after banking-only re-runs
+        self.sales('2026-10-09', stamp='run_170000Z')
+        self.make_run('2026-10-09', 'run_220000Z', _summary('2026-10-09', steps=[_step('sales', status='skipped'), _step('uf')]))
+        row = experience.daily_rows('company_a', date(2026,10,9), date(2026,10,9))[0]
+        self.assertEqual((len(row['attempts']), len(row['sales_attempts'])), (2, 1))
+        self.assertIn('run_170000Z', row['sales_latest']['url'])
+        self.assertTrue(row['confirmed'])
+
     def test_missing_amount_is_not_displayed_as_zero(self):
         self.sales('2026-10-03', amount=None)
         self.assertEqual(self.home('company_a')['home_sales'], 'Not fully confirmed')

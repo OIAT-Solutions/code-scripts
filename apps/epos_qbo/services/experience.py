@@ -129,7 +129,9 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
         add("company_a", day, dict(url=reverse("epos_qbo:company-a-run-detail", args=[run.business_date, run.run_id]),
             label=label, message=message, tone=tone, when=run.finished_at, order=run.run_id.replace("_dry", ""),
             confirmed=verified_sales(run), amount=money(run.step("sales").counts.get("qbo_total")) if verified_sales(run) else None,
-            preview=run.dry_run, state={"ok":"succeeded", "review":"review", "failed":"failed"}.get(run.status,"unknown")))
+            preview=run.dry_run, state={"ok":"succeeded", "review":"review", "failed":"failed"}.get(run.status,"unknown"),
+            # 14 Oct 2026: banking-only or other partial re-runs are not sales attempts (the Sales table counts these)
+            sales=bool(run.step("sales")) and run.step("sales").status not in ("skipped", "disabled")))
 
     artifact_query = RunArtifact.objects.filter(kind=RunArtifact.KIND_SALES_UPLOAD)
     if company_key:
@@ -178,6 +180,8 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
         row.update(confirmed=bool(confirmed), amount=confirmed["amount"] if confirmed else None)
         row["amount_label"] = money_label(row["amount"])
         row["latest"] = row["attempts"][0]
+        row["sales_attempts"] = [a for a in row["attempts"] if a.get("sales", True)]
+        row["sales_latest"] = row["sales_attempts"][0] if row["sales_attempts"] else row["latest"]
         row["label"] = "Sales confirmed" if confirmed else row["latest"]["label"]
         row["tone"] = "success" if confirmed else row["latest"]["tone"]
         row["latest_issue"] = bool(confirmed and row["latest"]["tone"] in {"danger", "warning"})
