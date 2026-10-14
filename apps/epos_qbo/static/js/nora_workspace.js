@@ -14,7 +14,7 @@
             button.setAttribute('aria-expanded', String(expanded));
             button.setAttribute('aria-label', expanded ? 'Collapse sidebar' : 'Expand sidebar');
             button.title = expanded ? 'Collapse sidebar' : 'Expand sidebar';
-            button.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16' + (expanded ? 'M15 9l-3 3 3 3' : 'M12 9l3 3-3 3') + '"/></svg>';
+            button.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + (expanded ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6') + '"/></svg>';
         });
     }
 
@@ -76,6 +76,17 @@
             closeMobile();
             if (menu) menu.focus();
         }
+    });
+    document.querySelectorAll('.nora-open-dialog').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var dialog = document.getElementById(button.dataset.dialog);
+            if (dialog && typeof dialog.showModal === 'function') dialog.showModal();
+        });
+    });
+    document.querySelectorAll('.nora-schedule-dialog').forEach(function (dialog) {
+        var close = dialog.querySelector('.nora-close-dialog');
+        if (close) close.addEventListener('click', function () { dialog.close(); });
+        dialog.addEventListener('click', function (event) { if (event.target === dialog) dialog.close(); });
     });
     window.addEventListener('resize', function () {
         if (window.innerWidth > 700) closeMobile();

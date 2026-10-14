@@ -6,7 +6,7 @@ from django.contrib.auth.models import Permission, User
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.epos_qbo.models import CompanyConfigRecord, RunArtifact, RunJob, PortalReviewAction
+from apps.epos_qbo.models import CompanyConfigRecord, RunArtifact, RunJob, RunSchedule, PortalReviewAction
 from apps.epos_qbo.services import company_workspace, experience, messages, company_a_ops
 from apps.epos_qbo.tests.test_company_a_ops import CompanyAOpsFixtureMixin, _summary, _step
 
@@ -144,6 +144,34 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(points['2026-10-03']['amount'], '₦100.00')
         self.assertGreater(points['2026-10-03']['height'], 0)
         self.assertContains(response, 'style="height:0%"')
+
+    def test_schedule_details_and_new_schedule_preserve_permission_and_records(self):
+        schedule = RunSchedule.objects.create(name='Nora daily routine', company_key='company_a',
+            scope=RunJob.SCOPE_COMPANY_A_DAILY, cron_expr='0 18 * * *', timezone_name='Africa/Lagos', enabled=True)
+        before_jobs = RunJob.objects.count()
+        response = self.client.get(self.url, {'tab':'schedules'})
+        self.assertContains(response, f'data-dialog="schedule-{schedule.id}"')
+        self.assertContains(response, 'Africa/Lagos')
+        self.assertNotContains(response, 'New schedule')
+        self.assertNotContains(response, 'Manage schedules')
+        self.user.user_permissions.add(Permission.objects.get(codename='can_manage_schedules'))
+        response = self.client.get(self.url, {'tab':'schedules'})
+        self.assertContains(response, 'New schedule')
+        self.assertContains(response, '?create=1&amp;company=company_a#schedule-management')
+        self.assertEqual(RunSchedule.objects.count(), 1)
+        self.assertEqual(RunJob.objects.count(), before_jobs)
+        schedule.refresh_from_db()
+        self.assertTrue(schedule.enabled)
+
+    def test_chart_uses_readable_scale_without_losing_full_amounts(self):
+        self.make_sales(day='2026-10-02', amount='5280950.00')
+        response = self.client.get(self.url, {'tab':'overview'})
+        self.assertEqual(response.context['nora_trend_total'], '₦5,280,950.00')
+        self.assertEqual(response.context['nora_trend_ticks'][0], '₦6m')
+        point = next(p for p in response.context['nora_sales_trend'] if p['confirmed'])
+        self.assertEqual(point['compact'], '₦5.28m')
+        self.assertAlmostEqual(point['height'], 5280950 / 6000000 * 100)
+        self.assertContains(response, '2 October 2026: ₦5,280,950.00')
 
     def test_review_queue_groups_stock_kinds_and_preserves_filters_in_pagination(self):
         decisions = [dict(kind='stock_adjust' if n % 2 else 'stock_follow', date='2026-10-02',

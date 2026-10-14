@@ -2073,10 +2073,15 @@ def schedules_page(request):
             next_run=schedule.next_fire_at if schedule.enabled and not row["one_time_completed"] else None,
             last_run=row["last_run_at"], outcome=row["last_result_label"]))
 
+    create_company = next((c.company_key for c in companies if c.company_key == request.GET.get("company")), "")
+    create_workflow = RunScheduleForm.WORKFLOW_DAILY_ROUTINE if create_company == "company_a" else RunScheduleForm.WORKFLOW_SALES
     context = {
         "schedule_view": state,
         "schedule_display_rows": [r for r in display_rows if r["state"] == state],
         "schedule_form": RunScheduleForm(initial=_schedule_create_initial()),
+        "schedule_create_open": request.GET.get("create") == "1",
+        "schedule_create_company": create_company,
+        "schedule_create_workflow": create_workflow,
         "schedule_rows": schedule_rows,
         "schedule_sections": _group_schedule_rows(schedule_rows),
         "recent_events": recent_events,

@@ -1,5 +1,6 @@
 """Company tabs over existing records; no remote calls, edits or posting tools."""
 from urllib.parse import urlencode
+from decimal import Decimal, ROUND_CEILING
 
 from django.core.paginator import Paginator
 from django.urls import reverse
@@ -94,15 +95,31 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
                        "deposit": "Banking", "hold": "Sales pause", "flag": "Other records"}
     decision_counts = {kind: sum(1 for item in all_decisions if item["kind"] in QUEUE_KIND_GROUPS.get(kind, {kind}))
                        for kind in category_labels}
-    trend_rows = []
+    trend_rows, trend_ticks = [], []
+    trend_total = Decimal(0)
     if key == ops.COMPANY_KEY:
         recent_days = [row for row in all_history if row.get("day")][:7]
-        max_value = max((row["amount"] for row in recent_days if row.get("confirmed") and row.get("amount") is not None), default=None)
+        max_value = max((row["amount"] for row in recent_days if row.get("confirmed") and row.get("amount") is not None), default=Decimal(0))
+        # Four equal intervals, rounded up to a readable step. Zero stays zero.
+        unit = Decimal(500000) if max_value >= 1000000 else Decimal(1000) if max_value >= 1000 else Decimal(1)
+        step = max(unit, (max_value / 4 / unit).to_integral_value(rounding=ROUND_CEILING) * unit)
+        ceiling = step * 4
+        def compact(value):
+            if value >= 1000000:
+                return "₦" + format(value / 1000000, ".2f").rstrip("0").rstrip(".") + "m"
+            if value >= 1000:
+                return "₦" + format(value / 1000, ".1f").rstrip("0").rstrip(".") + "k"
+            return experience.money_label(value)
+        trend_ticks = [compact(step * index) for index in (4, 3, 2, 1, 0)]
         for row in reversed(recent_days):
             amount = row.get("amount") if row.get("confirmed") else None
-            height = (0 if amount == 0 else max(6, int(float(amount / max_value) * 100))) if amount is not None and max_value else 0
+            if amount is not None:
+                trend_total += amount
             trend_rows.append(dict(day=row["day"], amount=row["amount_label"] if amount is not None else "Not confirmed",
-                                   height=height, confirmed=amount is not None))
+                compact=compact(amount) if amount is not None else "—",
+                height=0 if not amount else float(max(Decimal(0), amount) / ceiling * 100), confirmed=amount is not None))
+    if not any(point["confirmed"] for point in trend_rows):
+        trend_ticks = []
     register_context.update(company_queue_page=queue_page, company_queue_count=len(decisions),
         company_queue_query=queue_query, company_queue_filter=queue_filter, company_sales_query=sales_query,
         company_sales_filter=sales_filter, company_sales_count=len(history), company_nora_schedules=nora_schedules,
@@ -110,7 +127,7 @@ def page_context(company, request, inventory_enabled=False, token_health=None):
         company_decision_counts=decision_counts,
         nora_categories=[dict(kind=kind, label=label, count=decision_counts[kind])
                          for kind, label in category_labels.items() if decision_counts[kind]],
-        nora_sales_trend=trend_rows,
+        nora_sales_trend=trend_rows, nora_trend_ticks=trend_ticks, nora_trend_total=experience.money_label(trend_total) if any(point["confirmed"] for point in trend_rows) else "Not confirmed",
         nora_workspace=(key == ops.COMPANY_KEY or active == "sales"), nora_messages_inline=True)
     return dict(**register_context, company_position=position, company_tabs=[dict(key=t, label=TAB_LABELS[t], url=tab_url(base, t, key)) for t in tabs],
         company_key=key, company_tab=active, company_tab_label=TAB_LABELS[active], company_choices=choices,

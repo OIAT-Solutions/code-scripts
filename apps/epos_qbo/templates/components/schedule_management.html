@@ -1,11 +1,11 @@
 
 <div class="space-y-8"
      x-data="{
-        showCreate: false,
+        showCreate: {{ schedule_create_open|yesno:"true,false" }},
         createRunType: '{{ schedule_type_recurring }}',
-        createWorkflow: '{{ workflow_sales }}',
-        createTarget: '{{ company_target_all }}',
-        createCompanyKey: '',
+        createWorkflow: '{{ schedule_create_workflow|default:workflow_sales|escapejs }}',
+        createTarget: '{% if schedule_create_company %}{{ company_target_one }}{% else %}{{ company_target_all }}{% endif %}',
+        createCompanyKey: '{{ schedule_create_company|escapejs }}',
      }">
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

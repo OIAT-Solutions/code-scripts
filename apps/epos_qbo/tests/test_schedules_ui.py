@@ -43,6 +43,25 @@ class SchedulesUiTests(TestCase):
         self.assertTrue(active.enabled)
         self.assertEqual(response.content.decode().count('<h1'), 1)
 
+    def test_create_deep_link_opens_existing_form_for_requested_company_without_creating(self):
+        before = RunSchedule.objects.count()
+        response = self.client.get(reverse('epos_qbo:schedules'), {'create':'1','company':'company_a'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['schedule_create_open'])
+        self.assertEqual(response.context['schedule_create_company'], 'company_a')
+        self.assertEqual(response.context['schedule_create_workflow'], 'daily_routine')
+        self.assertContains(response, "createWorkflow: 'daily_routine'")
+        self.assertContains(response, 'id="schedule-management" open')
+        self.assertContains(response, 'showCreate: true')
+        self.assertContains(response, "createTarget: 'one'")
+        self.assertEqual(RunSchedule.objects.count(), before)
+        self.assertEqual(RunJob.objects.count(), 0)
+
+    def test_create_deep_link_ignores_unknown_company(self):
+        response = self.client.get(reverse('epos_qbo:schedules'), {'create':'1','company':"unknown'company"})
+        self.assertEqual(response.context['schedule_create_company'], '')
+        self.assertNotContains(response, "createCompanyKey: 'unknown")
+
     def _create_payload(self) -> dict[str, str]:
         return {
             "name": "Daily all companies",

@@ -131,7 +131,7 @@ class ProductsAndStockTests(RegisterFixtures, TestCase):
         response = self.client.get(self.page, {"tab": "products"})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "No stock check yet")
-        self.assertContains(response, "Update products &amp; stock")
+        self.assertContains(response, "Refresh EPOS &amp; QuickBooks")
         self.assertEqual(response.context["stock_errors"], [])
 
     def test_unreadable_snapshot_is_reported_not_crashed(self):
