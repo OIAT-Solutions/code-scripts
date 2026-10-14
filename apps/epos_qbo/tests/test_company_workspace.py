@@ -217,6 +217,8 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
             self.assertEqual(html.count('id="portal-results"'), 1, tab)
             self.assertIn('hx-history="false"', html)
             for form in re.findall(r'<form\b[^>]*>', html):
+                if 'data-page-controls' in form:
+                    self.assertIn('action="%s"' % self.url, form)
                 if 'method="post"' in form:
                     self.assertNotIn('hx-boost', form)
                     self.assertNotIn('hx-target', form)
