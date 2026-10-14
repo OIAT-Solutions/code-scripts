@@ -60,6 +60,9 @@ class ExperienceTests(CompanyAOpsFixtureMixin, TestCase):
         self.make_run('2026-10-09', 'run_220000Z', _summary('2026-10-09', steps=[_step('sales', status='skipped'), _step('uf')]))
         row = experience.daily_rows('company_a', date(2026,10,9), date(2026,10,9))[0]
         self.assertEqual((len(row['attempts']), len(row['sales_attempts'])), (2, 1))
+        self.artifact('2026-10-09', company='company_a')  # the imported upload record of that same posting
+        row = experience.daily_rows('company_a', date(2026,10,9), date(2026,10,9))[0]
+        self.assertEqual(len(row['sales_attempts']), 1)
         self.assertIn('run_170000Z', row['sales_latest']['url'])
         self.assertTrue(row['confirmed'])
 

@@ -173,14 +173,16 @@ def daily_rows(company_key="", start=None, end=None, include_previews=True):
         add(artifact.company_key, artifact.target_date, dict(url=url,
             label="Sales confirmed" if confirmed else "Needs review", message="Sales totals match QuickBooks." if confirmed else "Sales posting has not been confirmed.",
             tone="success" if confirmed else "warning", when=artifact.processed_at, order=str(artifact.processed_at or ""),
-            confirmed=confirmed, amount=money(artifact.reconcile_qbo_total) if confirmed else None, preview=False, state="succeeded" if confirmed else "review"))
+            confirmed=confirmed, amount=money(artifact.reconcile_qbo_total) if confirmed else None, preview=False, state="succeeded" if confirmed else "review",
+            copy=True))  # the uploaded-file record of a posting; the run that posted it is the attempt
     for row in groups.values():
         row["attempts"].sort(key=lambda a: (a["when"].isoformat() if a["when"] else "", a["order"]), reverse=True)
         confirmed = next((a for a in row["attempts"] if a["confirmed"]), None)
         row.update(confirmed=bool(confirmed), amount=confirmed["amount"] if confirmed else None)
         row["amount_label"] = money_label(row["amount"])
         row["latest"] = row["attempts"][0]
-        row["sales_attempts"] = [a for a in row["attempts"] if a.get("sales", True)]
+        runs = [a for a in row["attempts"] if not a.get("copy")]
+        row["sales_attempts"] = [a for a in (runs or row["attempts"]) if a.get("sales", True)]
         row["sales_latest"] = row["sales_attempts"][0] if row["sales_attempts"] else row["latest"]
         row["label"] = "Sales confirmed" if confirmed else row["latest"]["label"]
         row["tone"] = "success" if confirmed else row["latest"]["tone"]
