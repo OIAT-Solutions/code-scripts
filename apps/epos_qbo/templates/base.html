@@ -7,23 +7,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}EPOS → QBO Automation Dashboard{% endblock %}</title>
 
-    <!-- Theme: light/dark only, MUST run before Tailwind so first paint uses correct theme (no flash) -->
+    <!-- Theme: light/dark/company, MUST run before Tailwind so first paint uses correct theme (no flash) -->
     <script>
         (function() {
             var key = 'dashboard_theme';
-            function normalize(v) { return v === 'dark' ? 'dark' : 'light'; }
+            var hasBrandTheme = '{{ company_key|escapejs }}' === 'company_a';
+            function normalize(v) { return v === 'dark' || (v === 'brand' && hasBrandTheme) ? v : 'light'; }
             var v = normalize(localStorage.getItem(key) || 'light');
             document.documentElement.classList.toggle('dark', v === 'dark');
+            document.documentElement.classList.toggle('nora-brand-theme', v === 'brand');
             window.applyDashboardTheme = function(value) {
                 var cur = normalize(value !== undefined ? value : localStorage.getItem(key));
                 if (value !== undefined) localStorage.setItem(key, cur);
                 document.documentElement.classList.toggle('dark', cur === 'dark');
+                document.documentElement.classList.toggle('nora-brand-theme', cur === 'brand');
                 try { window.dispatchEvent(new CustomEvent('themeChange')); } catch (e) {}
                 return cur;
             };
             window.getDashboardTheme = function() { return normalize(localStorage.getItem(key)); };
             window.cycleDashboardTheme = function() {
-                var next = window.getDashboardTheme() === 'dark' ? 'light' : 'dark';
+                var modes = hasBrandTheme ? ['light', 'dark', 'brand'] : ['light', 'dark'];
+                var next = modes[(modes.indexOf(window.getDashboardTheme()) + 1) % modes.length];
                 window.applyDashboardTheme(next);
             };
         })();
@@ -385,7 +389,7 @@
     </style>
 
     
-    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=readability-2">
+    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=nora-brand-1">
     {% block head_extra %}{% endblock %}
 </head>
 
@@ -450,7 +454,7 @@
     </script>
 
     
-    <script src="{% static 'js/nora_workspace.js' %}?v=readability-2"></script>
+    <script src="{% static 'js/nora_workspace.js' %}?v=nora-brand-1"></script>
     {% block body_extra %}{% endblock %}
 </body>
 

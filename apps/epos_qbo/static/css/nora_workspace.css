@@ -125,3 +125,36 @@ html.dark .nora-schedule-dialog{background:#1a2230}
 .nora-collapse{display:grid;place-items:center;border:0;background:transparent;color:var(--nora-muted)}.nora-collapse:hover{background:var(--nora-blue-soft);color:var(--nora-blue)}
 .nora-preview-footer{max-width:1580px;margin:0 auto;width:100%;padding:0 30px 24px;color:var(--nora-muted);font-size:12px;box-sizing:border-box}.nora-preview-footer>div{border-top:1px solid var(--nora-line);padding-top:14px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 @media(max-width:700px){.nora-chart{grid-template-columns:40px minmax(0,1fr);padding-inline:12px;gap:6px}.nora-chart .nora-trend{gap:4px}.nora-chart .nora-trend-value{font-size:10px}.nora-chart .nora-trend-date{font-size:10px}.nora-trend-total{font-size:12px}.nora-preview-footer{padding-inline:14px}.nora-schedule-dialog{padding:20px}.nora-schedule-facts>div{grid-template-columns:100px minmax(0,1fr)}}
+
+/* Nora Mini Mart identity; the source logo stays intact. */
+.nora-mark:has(.nora-company-logo),.nora-choice-mark:has(.nora-company-logo){background:#fff2e8;overflow:hidden;border:1px solid #ecd9c9}
+.nora-company-logo{display:block;width:100%;height:100%;object-fit:contain;transform:scale(1.65)}
+html.nora-brand-theme .nora-workspace-body{--nora-blue:#9c460b;--nora-blue-soft:#ffeddf;--nora-ink:#102c49;--nora-muted:#646d76;--nora-line:#e7ddd2;--nora-bg:#faf5ee;background:var(--nora-bg);color:var(--nora-ink)}
+html.nora-brand-theme .nora-sidebar{background:#102c49;border-color:#29445f;color:#f6eee5}
+html.nora-brand-theme .nora-sidebar .nora-nav-link{color:#d8e2ec}
+html.nora-brand-theme .nora-sidebar .nora-nav-link:hover{background:#1d3c5b}
+html.nora-brand-theme .nora-sidebar .nora-nav-link.is-active{background:#ff903f;color:#102c49;font-weight:650}
+html.nora-brand-theme .nora-sidebar .nora-brand-copy{color:#fff6ed}
+html.nora-brand-theme .nora-sidebar .nora-brand-copy small,html.nora-brand-theme .nora-sidebar .nora-profile small,html.nora-brand-theme .nora-sidebar .nora-switch-chevron{color:#b9cadb}
+html.nora-brand-theme .nora-sidebar .nora-profile{border-color:#29445f}
+html.nora-brand-theme .nora-sidebar .nora-collapse{color:#d8e2ec}
+html.nora-brand-theme .nora-company-switcher>summary{background:transparent;border-color:#36506a}
+html.nora-brand-theme .nora-company-switcher>summary:hover,html.nora-brand-theme .nora-company-switcher[open]>summary{background:#1d3c5b}
+html.nora-brand-theme .nora-company-options{background:#fffdf9}
+html.nora-brand-theme .nora-company-options a:hover,html.nora-brand-theme .nora-company-options a[aria-current=true]{background:#ffeddf}
+html.nora-brand-theme .nora-topbar-wrap,html.nora-brand-theme .nora-panel,html.nora-brand-theme .nora-metric,html.nora-brand-theme .nora-workspace-body .portal-panel{background:#fffdf9}
+html.nora-brand-theme .nora-breadcrumb{border-color:var(--nora-line)}
+html.nora-brand-theme .nora-metric-highlight{background:#102c49;border-color:#102c49;color:#fff6ed}
+html.nora-brand-theme .nora-metric-highlight .nora-label,html.nora-brand-theme .nora-metric-highlight small{color:#d5e0eb}
+html.nora-brand-theme .nora-primary,html.nora-brand-theme .nora-workspace .btn-primary{background:#102c49;border-color:#102c49;color:#fff6ed}
+html.nora-brand-theme .nora-primary:hover,html.nora-brand-theme .nora-workspace .btn-primary:hover{background:#1d3c5b}
+html.nora-brand-theme .nora-trend-bar{background:#f58b3d}
+html.nora-brand-theme .nora-trend-point:hover .nora-trend-bar{background:#c9641e}
+html.nora-brand-theme .nora-table th,html.nora-brand-theme .portal-table thead{background:#f6eee4;color:#5d6269}
+html.nora-brand-theme .nora-table td{color:#3b4d60}
+html.nora-brand-theme .nora-category{color:#526171}
+html.nora-brand-theme .nora-table tbody tr:hover{background:#fff5e9}
+html.nora-brand-theme .nora-avatar{background:#e5edf4;color:#183b5b}
+html.nora-brand-theme .nora-icon-button:hover{background:#ffeddf;color:#8c3c08}
+html.nora-brand-theme :is(button,a,input,select):focus-visible{outline-color:#d46a21}
+html.nora-brand-theme .nora-workspace :is(.nora-details,.portal-link,.text-blue-600,.text-indigo-600){color:#9c460b}

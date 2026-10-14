@@ -50,10 +50,13 @@
     var themeButton = document.getElementById('nora-theme');
     if (themeButton) {
         function updateThemeButton() {
-            var dark = document.documentElement.classList.contains('dark');
-            themeButton.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
-            themeButton.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
-            themeButton.innerHTML = '<iconify-icon icon="solar:' + (dark ? 'sun-2' : 'moon') + '-linear" width="19" aria-hidden="true"></iconify-icon>';
+            var current = typeof window.getDashboardTheme === 'function' ? window.getDashboardTheme() : 'light';
+            var brandedCompany = document.querySelector('.nora-company-switcher > summary .nora-company-logo') !== null;
+            var next = current === 'light' ? 'dark' : current === 'dark' && brandedCompany ? 'Nora Mart' : 'light';
+            var label = 'Switch to ' + next + ' mode';
+            themeButton.setAttribute('aria-label', label);
+            themeButton.title = label;
+            themeButton.innerHTML = '<iconify-icon icon="solar:' + (next === 'dark' ? 'moon' : next === 'Nora Mart' ? 'palette' : 'sun-2') + '-linear" width="19" aria-hidden="true"></iconify-icon>';
         }
         themeButton.addEventListener('click', function () {
             if (typeof window.cycleDashboardTheme === 'function') window.cycleDashboardTheme();
