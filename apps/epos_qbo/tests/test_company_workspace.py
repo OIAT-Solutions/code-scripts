@@ -202,6 +202,24 @@ class CompanyWorkspaceTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertEqual(response.context['company_sales_page'].number,2)
         self.assertEqual(len(response.context['company_sales_page']),2)
         self.assertContains(response,'tab=sales&amp;q=&amp;status=all&amp;page=1')
+        self.assertContains(response, 'hx-select="#portal-results"')
+        partial = self.client.get(self.url, {'tab': 'sales', 'page': 2}, HTTP_HX_REQUEST='true', HTTP_HX_TARGET='portal-results')
+        self.assertEqual(partial.context['company_sales_page'].number, 2)
+        self.assertEqual(len(partial.context['company_sales_page']), 2)
+
+    def test_partial_pagination_has_one_target_and_does_not_boost_write_forms(self):
+        import re
+        self.user.user_permissions.add(Permission.objects.get(codename='can_trigger_runs'))
+        for tab in ['sales', 'purchases', 'products', 'deposits', 'runs']:
+            response = self.client.get(self.url, {'tab': tab}, HTTP_HX_REQUEST='true', HTTP_HX_TARGET='portal-results')
+            html = response.content.decode()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(html.count('id="portal-results"'), 1, tab)
+            self.assertIn('hx-history="false"', html)
+            for form in re.findall(r'<form\b[^>]*>', html):
+                if 'method="post"' in form:
+                    self.assertNotIn('hx-boost', form)
+                    self.assertNotIn('hx-target', form)
 
     def test_banking_tab_has_no_recent_work_list(self):
         self.make_run('2026-10-02', 'run_170000Z', _summary('2026-10-02', steps=[

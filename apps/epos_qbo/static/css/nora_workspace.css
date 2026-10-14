@@ -161,3 +161,9 @@ html.nora-brand-theme .nora-workspace :is(.nora-details,.portal-link,.text-blue-
 /* Money in the headline cards never breaks mid-number; it shrinks to fit (Claude, 14 Oct) */
 .nora-metric strong{overflow-wrap:normal;white-space:nowrap;font-size:clamp(17px,1.9vw,24px)}
 @media(max-width:700px){.nora-metric strong{font-size:clamp(16px,5.2vw,20px)}}
+
+[data-page-region]{position:relative;outline:none}
+[data-page-region].htmx-request::before{content:"Loading records…";position:absolute;top:10px;right:14px;z-index:20;border:1px solid var(--nora-line);border-radius:7px;padding:7px 11px;background:#fff;color:var(--nora-ink);font-size:13px;box-shadow:0 3px 12px #102c4914}
+html.dark [data-page-region].htmx-request::before{background:#202a39}
+[data-page-region].htmx-request [data-page-controls]{pointer-events:none;opacity:.65}
+.portal-page-error{position:fixed;bottom:20px;right:20px;z-index:90;max-width:calc(100vw - 40px);padding:12px 16px;border:1px solid #e7b5b5;border-radius:8px;background:#fff4f4;color:#8d343b;font-size:14px}

@@ -88,6 +88,57 @@
         updateThemeButton();
     }
 
+    // HTMX only enhances marked read-only table controls. Full-page links remain the fallback.
+    var pageRequests = new WeakMap();
+    function pageFeedback(message, error) {
+        var feedback = document.getElementById('portal-page-feedback');
+        if (!feedback) return;
+        feedback.className = error ? 'portal-page-error' : 'sr-only';
+        feedback.textContent = message;
+    }
+    document.addEventListener('htmx:beforeRequest', function (event) {
+        var target = event.detail.target;
+        if (!target || !target.matches('[data-page-region]')) return;
+        var main = document.querySelector('.nora-main');
+        pageRequests.set(event.detail.xhr, {mainScroll: main ? main.scrollTop : 0, windowScroll: window.scrollY});
+        target.setAttribute('aria-busy', 'true');
+        pageFeedback('Loading records…', false);
+    });
+    document.addEventListener('htmx:beforeSwap', function (event) {
+        var target = event.detail.target;
+        if (!target || !target.matches('[data-page-region]')) return;
+        var xhr = event.detail.xhr;
+        if (xhr.status >= 200 && xhr.status < 300) {
+            var response = new DOMParser().parseFromString(xhr.responseText, 'text/html');
+            if (!response.getElementById(target.id)) {
+                // An expired session redirects to sign-in; never insert that page inside a table.
+                event.detail.shouldSwap = false;
+                window.location.assign(xhr.responseURL || window.location.href);
+            }
+        }
+    });
+    document.addEventListener('htmx:afterSwap', function (event) {
+        var target = event.detail.target;
+        if (!target || !target.matches('[data-page-region]')) return;
+        target.removeAttribute('aria-busy');
+        var saved = pageRequests.get(event.detail.xhr);
+        var main = document.querySelector('.nora-main');
+        if (saved) {
+            if (main) main.scrollTop = saved.mainScroll;
+            window.scrollTo(0, saved.windowScroll);
+        }
+        target.focus({preventScroll: true});
+        var page = target.textContent.match(/Page\s+\d+\s+of\s+\d+/);
+        pageFeedback('Records updated.' + (page ? ' ' + page[0] + '.' : ''), false);
+    });
+    document.addEventListener('htmx:afterRequest', function (event) {
+        if (!pageRequests.has(event.detail.xhr)) return;
+        var target = document.getElementById('portal-results');
+        if (target) target.removeAttribute('aria-busy');
+        if (event.detail.failed) pageFeedback('Could not load records. Please try again.', true);
+        pageRequests.delete(event.detail.xhr);
+    });
+
     if (menu) menu.addEventListener('click', function () {
         if (mobileSidebar.classList.contains('is-open')) closeMobile();
         else openMobile();

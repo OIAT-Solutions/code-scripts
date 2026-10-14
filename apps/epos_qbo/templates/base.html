@@ -38,6 +38,7 @@
 
             function isPrefetchable(anchor) {
                 if (!anchor || !anchor.href) return false;
+                if (anchor.closest('[data-page-controls]')) return false;
                 if (anchor.dataset && anchor.dataset.noPrefetch === 'true') return false;
                 if (anchor.target && anchor.target !== '_self') return false;
                 if (anchor.hasAttribute('download')) return false;
@@ -389,11 +390,11 @@
     </style>
 
     
-    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=nora-switch-1">
+    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=partial-pages-1">
     {% block head_extra %}{% endblock %}
 </head>
 
-<body data-debug-beacon="{% if ui_debug_beacon_enabled %}1{% else %}0{% endif %}"
+<body hx-history="false" data-debug-beacon="{% if ui_debug_beacon_enabled %}1{% else %}0{% endif %}"
     class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200 nora-workspace-body">
 
     
@@ -454,7 +455,8 @@
     </script>
 
     
-    <script src="{% static 'js/nora_workspace.js' %}?v=nora-switch-1"></script>
+    <p id="portal-page-feedback" role="status" aria-live="polite" class="sr-only"></p>
+    <script src="{% static 'js/nora_workspace.js' %}?v=partial-pages-1"></script>
     {% block body_extra %}{% endblock %}
 </body>
 
