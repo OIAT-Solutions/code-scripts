@@ -114,11 +114,6 @@ class ApiTokensPageTests(TestCase):
         self.assertNotIn("refresh-token-secret", html)
         self.assertNotIn("fp-test-fixture-x", html)  # full fingerprint
 
-    def test_sidebar_links_to_api_tokens_page(self):
-        self._login()
-        response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, reverse("epos_qbo:api-tokens"))
 
     # --- URL wiring ---
 

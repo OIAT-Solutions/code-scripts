@@ -7,23 +7,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}EPOS → QBO Automation Dashboard{% endblock %}</title>
 
-    <!-- Theme: light/dark only, MUST run before Tailwind so first paint uses correct theme (no flash) -->
+    <!-- Theme: light/dark/company, MUST run before Tailwind so first paint uses correct theme (no flash) -->
     <script>
         (function() {
             var key = 'dashboard_theme';
-            function normalize(v) { return v === 'dark' ? 'dark' : 'light'; }
+            var hasBrandTheme = '{{ company_key|escapejs }}' === 'company_a';
+            function normalize(v) { return v === 'dark' || (v === 'brand' && hasBrandTheme) ? v : 'light'; }
             var v = normalize(localStorage.getItem(key) || 'light');
             document.documentElement.classList.toggle('dark', v === 'dark');
+            document.documentElement.classList.toggle('nora-brand-theme', v === 'brand');
             window.applyDashboardTheme = function(value) {
                 var cur = normalize(value !== undefined ? value : localStorage.getItem(key));
                 if (value !== undefined) localStorage.setItem(key, cur);
                 document.documentElement.classList.toggle('dark', cur === 'dark');
+                document.documentElement.classList.toggle('nora-brand-theme', cur === 'brand');
                 try { window.dispatchEvent(new CustomEvent('themeChange')); } catch (e) {}
                 return cur;
             };
             window.getDashboardTheme = function() { return normalize(localStorage.getItem(key)); };
             window.cycleDashboardTheme = function() {
-                var next = window.getDashboardTheme() === 'dark' ? 'light' : 'dark';
+                var modes = hasBrandTheme ? ['light', 'dark', 'brand'] : ['light', 'dark'];
+                var next = modes[(modes.indexOf(window.getDashboardTheme()) + 1) % modes.length];
                 window.applyDashboardTheme(next);
             };
         })();
@@ -34,6 +38,7 @@
 
             function isPrefetchable(anchor) {
                 if (!anchor || !anchor.href) return false;
+                if (anchor.closest('[data-page-controls]')) return false;
                 if (anchor.dataset && anchor.dataset.noPrefetch === 'true') return false;
                 if (anchor.target && anchor.target !== '_self') return false;
                 if (anchor.hasAttribute('download')) return false;
@@ -73,8 +78,8 @@
         })();
     </script>
     <!-- Tailwind (compiled static CSS) -->
-    <link rel="preload" href="{% static 'css/tailwind.css' %}" as="style">
-    <link rel="stylesheet" href="{% static 'css/tailwind.css' %}">
+    <link rel="preload" href="{% static 'css/tailwind.css' %}?v=portal-company-tabs" as="style">
+    <link rel="stylesheet" href="{% static 'css/tailwind.css' %}?v=portal-company-tabs">
 
     <!-- Iconify Icons -->
     <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
@@ -384,22 +389,26 @@
         }
     </style>
 
+    
+    <link rel="stylesheet" href="{% static 'css/nora_workspace.css' %}?v=partial-pages-2">
+    <script src="{% static 'js/vendor/htmx-2.0.2.min.js' %}" defer></script>
     {% block head_extra %}{% endblock %}
 </head>
 
-<body data-debug-beacon="{% if ui_debug_beacon_enabled %}1{% else %}0{% endif %}"
-    class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200">
+<body hx-history="false" data-debug-beacon="{% if ui_debug_beacon_enabled %}1{% else %}0{% endif %}"
+    class="text-slate-900 dark:text-slate-100 flex min-h-screen overflow-hidden selection:bg-blue-100 selection:text-blue-700 dark:selection:bg-blue-900 dark:selection:text-blue-200 nora-workspace-body">
 
-    {% include "components/sidebar.html" %}
+    
+    {% block sidebar %}{% include "components/nora_sidebar.html" %}{% endblock %}
 
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <main class="flex-1 md:ml-64 overflow-y-auto h-screen bg-slate-50 dark:bg-slate-900">
-        {% block topbar %}{% endblock %}
-
-        <div class="py-12 px-6 md:px-8 max-w-7xl mx-auto space-y-8">
-            {% if messages %}
+    <main class="flex-1 md:ml-64 overflow-y-auto h-screen bg-slate-50 dark:bg-slate-900 nora-main">
+        {% block topbar %}{% include "components/nora_topbar.html" %}{% endblock %}
+        
+        <div class="py-12 px-6 md:px-8 max-w-7xl mx-auto space-y-8 nora-content-wrap">
+            {% if messages and not nora_messages_inline %}
             <div class="space-y-2">
                 {% for message in messages %}
                 <div class="rounded-md border px-3 py-2 text-sm
@@ -423,7 +432,6 @@
     <!-- Alpine.js -->
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@2.0.2"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -446,6 +454,9 @@
         window.addEventListener('themeChange', syncThemeLabel);
     </script>
 
+    
+    <p id="portal-page-feedback" role="status" aria-live="polite" class="sr-only"></p>
+    <script src="{% static 'js/nora_workspace.js' %}?v=partial-pages-2"></script>
     {% block body_extra %}{% endblock %}
 </body>
 

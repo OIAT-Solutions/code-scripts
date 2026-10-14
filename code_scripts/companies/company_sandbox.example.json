@@ -26,6 +26,13 @@
     "receipt_prefix": "SR",
     "receipt_number_format": "date_tender_sequence",
     "aggregate_products": true,
+    "product_conversion": {
+      "enabled": false,
+      "file": "",
+      "allow_name_fallback": true,
+      "catch_all_qbo_name": "AKP-UNMAPPED-EPOS-SALES",
+      "fail_closed_from": "2026-10-01"
+    },
     "location_mapping": {}
   },
   "output": {
@@ -48,7 +55,7 @@
     "inv_start_date_floor": "2025-01-01",
     "inventory_sync_mode": "upload_fast",
     "default_qty_on_hand": 0,
-    "auto_fix_wrong_type_items": true,
+    "auto_fix_wrong_type_items": false,
     "auto_fix_inv_start_date_blockers": true,
     "use_item_hierarchy": true
   }

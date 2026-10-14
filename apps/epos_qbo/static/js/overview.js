@@ -280,6 +280,9 @@
                     metricDataDiv.remove();
                 }
 
+                const bannerData = tempDiv.querySelector('#attention-banners-data');
+                const banners = document.getElementById('attention-banners');
+                if (bannerData && banners) banners.innerHTML = bannerData.innerHTML;
                 root.innerHTML = tempDiv.innerHTML;
                 initOverview({ filterQuery, revenueCompany });
             })

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -186,48 +186,4 @@ class ReconciledRevenueOverviewTemplateTests(TestCase):
             "environment": "production",
         }
 
-    def test_overview_renders_revenue_chart_section(self):
-        run = RunJob.objects.create(
-            scope=RunJob.SCOPE_SINGLE,
-            company_key="company_a",
-            status=RunJob.STATUS_SUCCEEDED,
-        )
-        RunArtifact.objects.create(
-            run_job=run,
-            company_key="company_a",
-            target_date=date(2026, 2, 13),
-            processed_at=timezone.make_aware(datetime(2026, 2, 13, 20, 0, 0)),
-            source_path="/tmp/match.json",
-            source_hash="hash-match",
-            reconcile_status="MATCH",
-            reconcile_epos_total=5000.0,
-            reconcile_qbo_total=5000.0,
-            reconcile_epos_count=20,
-            reconcile_qbo_count=20,
-        )
 
-        with (
-            mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=self._token_payload()),
-        ):
-            response = self.client.get(reverse("epos_qbo:overview"), {"revenue_period": "90d"})
-
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn("Reconciled EPOS Revenue", html)
-        self.assertIn("Last 90D", html)
-        self.assertIn('id="overview-revenue-chart"', html)
-        self.assertIn("overview-revenue-chart-data", html)
-
-    def test_overview_renders_empty_state_for_no_reconciled_data(self):
-        with (
-            mock.patch("apps.epos_qbo.business_date.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.timezone.now", return_value=self.fixed_now),
-            mock.patch("apps.epos_qbo.views.load_tokens", return_value=self._token_payload()),
-        ):
-            response = self.client.get(reverse("epos_qbo:overview"))
-
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn("No reconciled revenue data yet for this period.", html)

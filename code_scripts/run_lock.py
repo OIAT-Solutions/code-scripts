@@ -51,10 +51,12 @@ class GlobalRunLock:
                 try:
                     msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)  # pragma: no cover
                 except OSError:
+                    self._close_unacquired()
                     return LockResult(acquired=False, reason="another run is already active")
             else:
                 fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            self._close_unacquired()
             return LockResult(acquired=False, reason="another run is already active")
 
         self._handle.seek(0)
@@ -72,6 +74,11 @@ class GlobalRunLock:
         os.fsync(self._handle.fileno())
         self._acquired = True
         return LockResult(acquired=True, reason="acquired")
+
+    def _close_unacquired(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
     def release(self) -> None:
         if not self._handle or not self._acquired:
@@ -99,3 +106,34 @@ def hold_global_lock(holder: str) -> Iterator[LockResult]:
     finally:
         if result.acquired:
             lock.release()
+
+
+def global_lock_is_free() -> bool | None:
+    """Return True when no process holds the global run lock, False when one does.
+
+    Probes with a non-blocking acquire that is released immediately and never
+    writes to the lock file. The OS releases an flock when its holder dies, so a
+    free lock is a reliable "nothing is running" signal even after container
+    restarts reuse PIDs. Returns None when the probe cannot be made (Windows,
+    unopenable lock file); callers must then fall back to other checks.
+    """
+    if os.name == "nt":  # pragma: no cover
+        return None
+    try:
+        handle = open(lock_file_path(), "a+", encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        except OSError:
+            return None
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        return True
+    finally:
+        handle.close()

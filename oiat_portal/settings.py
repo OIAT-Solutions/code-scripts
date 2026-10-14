@@ -86,7 +86,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.core",
     "apps.epos_qbo",
-    "apps.websites",
     "apps.dashboard",
 ]
 
@@ -115,6 +114,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.epos_qbo.context_processors.dashboard_timezone",
+                "apps.epos_qbo.context_processors.nora_shell",
             ],
         },
     },
@@ -126,6 +126,9 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": STATE_ROOT / "db.sqlite3",
+        # Wait for a busy database instead of failing at once (3 Oct 2026: the scheduler crashed on
+        # "database is locked" while a migration ran; Django's default is 5 seconds).
+        "OPTIONS": {"timeout": 20},
     }
 }
 
@@ -147,7 +150,7 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LOGIN_URL = "/login/"
-LOGIN_REDIRECT_URL = "/epos-qbo/dashboard/"
+LOGIN_REDIRECT_URL = "/epos-qbo/companies/company_a/"  # Nora workspace (13 Oct 2026); agency overview is one click away
 LOGOUT_REDIRECT_URL = "/login/"
 
 # Portal workspace selector cards.
@@ -156,11 +159,6 @@ PORTAL_SOLUTIONS = [
         "name": "EPOS -> QBO",
         "description": "Monitor runs, manage companies, and trigger sync jobs.",
         "url_name": "epos_qbo:overview",
-    },
-    {
-        "name": "Websites",
-        "description": "Monitor website logs, endpoint health, and site operations.",
-        "url_name": "websites:index",
     },
 ]
 

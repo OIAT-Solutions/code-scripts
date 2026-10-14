@@ -1,0 +1,15 @@
+{
+  "_comment": "DRAFT TEMPLATE - placeholder amounts AND A MISSING ACCOUNT. September deliveries without bills (bills paused): Dr purchases 200xxx for post-16-Sep POs, Dr 300150 (Id 86) for pre-reset POs already inside the 16 Sep opening stock, Cr a GRNI liability; ex-tax. POs 3828/3829/3855/3861 held as possible duplicates (bills_draft_2026-09/). Read-only Account query 30 Sep 2026: NO goods-received-not-invoiced / accrued-purchases liability exists (Other Current Liability accounts are only 210000 Income Tax Payable, 210100 Accrued payroll, VAT Control, VAT Suspense). The account must be created first (suggested '210200 - Goods Received Not Invoiced', Other Current Liability / AccruedLiabilities) as a separately approved write, then put its Id in the credit line. post_journal refuses a blank account_id. Reverse on 1 Oct or when the bills are entered so purchases are not doubled. Needs chat yes.",
+  "doc_number": "GRNI-2026-09",
+  "txn_date": "2026-09-30",
+  "status": "DRAFT - placeholder amounts; GRNI account must be created first",
+  "private_note": "AKPONORA Sep 2026 GRNI accrual for received, unbilled deliveries (ex-tax). PO list <FILE sha256>. Reverse when bills are entered. Per chat approval <REF>.",
+  "lines": [
+    {"account_id": "74", "posting_type": "Debit", "amount": "0.00", "description": "GRNI Sep 2026: groceries received, not billed (post-16-Sep POs)"},
+    {"account_id": "1150040033", "posting_type": "Debit", "amount": "0.00", "description": "GRNI Sep 2026: alcoholic drinks received, not billed (post-16-Sep POs)"},
+    {"account_id": "1150040034", "posting_type": "Debit", "amount": "0.00", "description": "GRNI Sep 2026: non-alcoholic drinks received, not billed (post-16-Sep POs)"},
+    {"account_id": "1150040020", "posting_type": "Debit", "amount": "0.00", "description": "GRNI Sep 2026: non-food received, not billed (post-16-Sep POs)"},
+    {"account_id": "86", "posting_type": "Debit", "amount": "0.00", "description": "GRNI Sep 2026: pre-reset POs already in the 16 Sep opening stock (300150)"},
+    {"account_id": "", "posting_type": "Credit", "amount": "0.00", "description": "Goods received not invoiced - Sep 2026 (ACCOUNT TO BE CREATED)"}
+  ]
+}
