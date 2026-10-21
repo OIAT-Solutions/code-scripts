@@ -46,9 +46,8 @@ class RunScheduleAdmin(admin.ModelAdmin):
         "timezone_name",
         "next_fire_at",
         "last_fired_at",
-        "is_system_managed",
     )
-    list_filter = ("enabled", "scope", "is_system_managed", "timezone_name")
+    list_filter = ("enabled", "scope", "timezone_name")
     search_fields = ("name", "company_key", "cron_expr")
 
 

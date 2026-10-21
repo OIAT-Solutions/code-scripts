@@ -9,24 +9,6 @@ class CoreViewsTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="operator", password="pw12345")
 
-    @override_settings(
-        PORTAL_SOLUTIONS=[
-            {
-                "name": "EPOS -> QBO",
-                "description": "Main dashboard",
-                "url_name": "epos_qbo:overview",
-            },
-            {"name": "Invalid Missing URL", "description": "skip me"},
-        ]
-    )
-    def test_home_renders_solutions_from_settings(self):
-        self.client.login(username="operator", password="pw12345")
-        response = self.client.get(reverse("core-home"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn("EPOS -&gt; QBO", html)
-        self.assertIn(reverse("epos_qbo:overview"), html)
-        self.assertNotIn("Invalid Missing URL", html)
 
     def test_coming_soon_known_feature(self):
         self.client.login(username="operator", password="pw12345")
@@ -49,8 +31,8 @@ class CoreViewsTests(TestCase):
 
     def test_core_pages_do_not_leak_template_tokens(self):
         self.client.login(username="operator", password="pw12345")
+        self.assertEqual(self.client.get(reverse("core-home")).status_code, 302)  # home -> Nora workspace (13 Oct 2026)
         urls = [
-            reverse("core-home"),
             reverse("core-coming-soon", kwargs={"feature": "settings"}),
             reverse("core-account"),
         ]

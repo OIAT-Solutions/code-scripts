@@ -24,6 +24,13 @@
     "receipt_prefix": "SR",
     "receipt_number_format": "date_tender_sequence",
     "aggregate_products": false,
+    "product_conversion": {
+      "enabled": false,
+      "file": "",
+      "allow_name_fallback": false,
+      "catch_all_qbo_name": "",
+      "fail_closed_from": ""
+    },
     "location_mapping": {}
   },
   "output": {

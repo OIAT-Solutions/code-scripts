@@ -60,9 +60,10 @@ services:
       STATE_ROOT: /data
       OIAT_COMPANIES_DIR: /data/code_scripts/companies
       OIAT_SCHEDULER_POLL_SECONDS: ${OIAT_SCHEDULER_POLL_SECONDS:-15}
-      OIAT_SCHEDULER_ENABLE_ENV_FALLBACK: ${OIAT_SCHEDULER_ENABLE_ENV_FALLBACK:-1}
-      SCHEDULE_CRON: ${SCHEDULE_CRON:-0 18 * * *}
-      SCHEDULE_TZ: ${SCHEDULE_TZ:-Africa/Lagos}
+      # The one scheduler: it decides when each workflow runs (RunSchedule rows, Schedules page) and is
+      # the only process that starts jobs, including Nora's Daily routine (daily_run). The Company A
+      # automation / approval switches (OIAT_COMPANY_A_*) come from env_file (.env) on purpose: not
+      # listed here so an empty interpolation can never blank them.
 
   caddy:
     build:

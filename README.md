@@ -1,6 +1,6 @@
 # OIAT EPOS → QuickBooks Automation Platform
 
-A unified automation platform for syncing **Sales** and **Inventory** between EPOS Now and QuickBooks Online, with the **OIAT Portal** (Django) for operators, a **DB-backed scheduler**, and Docker-based deployment.
+A unified automation platform for syncing **Sales** from EPOS Now to QuickBooks Online, plus the **Company A (Akponora) daily routine**, with the **OIAT Portal** (Django) for operators, a **DB-backed scheduler**, and Docker-based deployment.
 
 ## What this repo does
 
@@ -11,17 +11,11 @@ A unified automation platform for syncing **Sales** and **Inventory** between EP
   - Upload to QuickBooks Online (Sales Receipts)
   - Archive artifacts + reconcile EPOS totals vs QBO totals
   - Dashboard + Slack reporting
-- **Inventory sync**
-  - EPOS Stock Report download
-  - QBO Inventory Item snapshot (includes diagnostic fields where QBO supports them)
-  - Audit EPOS expected stock vs QBO `QtyOnHand`
-  - Catalog and quantity review reports for pack variants, duplicate base items, and missing base items
-  - Manual QBO starting-value correction previews; automated QBO quantity apply is disabled
-  - Final audit + pipeline JSON/CSV summary (always includes `child_reports.final_audit`)
-  - Dashboard artifact ingestion + compact Slack summary
-  - Negative EPOS stock policy: **clamp negative row quantities to 0 before grouping**
+- **Company A (Akponora) daily routine** (`code_scripts/akponora_ops/daily_run.py`)
+  - New EPOS products → QBO items, EPOS purchase orders → unpaid Bills, sales, item check, stock snapshot, Undeposited Funds deposits
+  - Every write goes through its own approval gate; see [`AGENTS.md`](AGENTS.md) and [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md)
 - **OIAT Portal (Django)**
-  - Runs UI (Sales + Inventory), scheduling, company management, tools, and status dashboards
+  - Runs UI, review inbox, scheduling, company management, tools, and status dashboards
 - **Scheduler**
   - Runs in a separate service/process and enqueues `RunJob` rows from DB schedules
 - **Docker deployment**
@@ -51,7 +45,7 @@ docker compose run --rm --profile bootstrap bootstrap
 docker compose up -d caddy web scheduler
 ```
 
-For host migration notes, see [`docs/DOCKER_MIGRATION_READY.md`](docs/DOCKER_MIGRATION_READY.md).
+Server setup and deploy: [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md).
 
 ### Local / dev (high level)
 
@@ -91,44 +85,24 @@ See [`docs/DEV_STAGE_SETUP.md`](docs/DEV_STAGE_SETUP.md) for the full guardrails
 5. Archive artifacts and reconcile EPOS vs QBO totals
 6. Report via Portal + Slack
 
-### Inventory
+### Company A (Akponora)
 
-The operator-facing command is:
+One routine, `daily_run`, started by the portal schedule worker from the "Nora daily routine" schedule at 18:00 Africa/Lagos. Read [`AGENTS.md`](AGENTS.md) first, then:
 
-- `python -m code_scripts.inventory_pipeline`
-
-The unified inventory pipeline does:
-
-1. EPOS stock snapshot
-2. Fresh QBO inventory item snapshot
-3. Audit
-4. Supported catalog cleanup (where safe/possible)
-5. Re-audit
-6. Exact-match inventory adjustments
-7. Final reports + Slack summary
-
-Detailed operator documentation: [`docs/INVENTORY_SYNC.md`](docs/INVENTORY_SYNC.md).
+- [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md): day-to-day running
+- [`docs/AKPONORA_POSTING_CONTROLS.md`](docs/AKPONORA_POSTING_CONTROLS.md): sales posting contract, approvals, holds
+- [`docs/SCHEDULING_AUTHORITY.md`](docs/SCHEDULING_AUTHORITY.md): the one scheduler
 
 ## Portal overview
 
 The OIAT Portal is the main operator UI. Key pages:
 
-- **Overview**: separates **Sales status**, **Inventory status**, and **Token health**
-- **Runs**:
-  - **Runs → Sales**: trigger sales runs (single or all companies)
-  - **Runs → Inventory**: trigger the unified inventory pipeline with optional category/product filters
-- **Schedules**: DB-backed cron schedules that enqueue `RunJob` records
-  - Sales should run before Inventory. Weekly/bi-weekly Inventory schedules should fire after the selected day's Sales sync because Inventory is a live EPOS stock correction snapshot.
-  - The default weekly Inventory schedule is disabled and targets all products for `company_a`; category/product filters can be used for narrowed schedules.
+- **Overview**: sales status, Company A daily run status and token health
+- **Attention**: review inbox for held items and approvals
+- **Runs**: trigger sales runs (single or all companies) and inspect run details, logs and artifacts; Company A daily runs have their own list and detail pages
+- **Schedules**: DB-backed schedules (one row per workflow) that the schedule worker turns into `RunJob` records. "Daily routine" for Company A, "Sales sync" for other companies
 - **Companies**: manage company configs (DB is source of truth; sync to/from JSON supported)
-- **Tools**: lower-level/debug tools (QBO query, verify mapping, etc.) — not the primary operator path
-
-`RunJob` scopes reflect the current system:
-
-- `single_company`
-- `all_companies`
-- `inventory_pipeline`
-- `inventory_sync` (legacy; still supported by the model)
+- **Tools**: lower-level/debug tools (QBO query, verify mapping) — not the primary operator path
 
 ### Portal permissions
 
@@ -138,8 +112,6 @@ Assign via Django admin (`/admin/`):
 - `can_edit_companies`
 - `can_manage_schedules`
 - `can_manage_portal_settings`
-
-Lower-level inventory utilities (audit-only, catalog cleanup planning, snapshot inspection) still exist, but the main operator workflow is **Runs → Inventory** and the unified CLI `python -m code_scripts.inventory_pipeline`.
 
 ## CLI examples
 
@@ -169,30 +141,6 @@ All companies:
 python run_all_companies.py
 ```
 
-### Inventory
-
-Product example:
-
-```bash
-python -m code_scripts.inventory_pipeline \
-  --company company_a \
-  --auto-download \
-  --auto-fetch-qbo \
-  --qbo-force-refresh \
-  --product "ACTION BITTERS50ml"
-```
-
-Category example:
-
-```bash
-python -m code_scripts.inventory_pipeline \
-  --company company_a \
-  --auto-download \
-  --auto-fetch-qbo \
-  --qbo-force-refresh \
-  --category "ALCOHOLS & SPIRITS"
-```
-
 ## Runtime state and artifacts
 
 Runtime state is rooted under the configured **state root** (default `runtime/` locally). In Docker, `STATE_ROOT=/data` and the `app-data` volume is the persistent source of truth.
@@ -200,13 +148,9 @@ Runtime state is rooted under the configured **state root** (default `runtime/` 
 Common paths (relative to state root):
 
 - **Sales archive**: `code_scripts/Uploaded/YYYY-MM-DD/`
-- **Inventory audit CSVs**: `code_scripts/reports/inventory_sync/YYYY-MM-DD/`
-- **Inventory catalog cleanup reports**: `code_scripts/reports/inventory_catalog_cleanup/YYYY-MM-DD/`
-- **Inventory pipeline summaries**: `code_scripts/reports/inventory_pipeline/YYYY-MM-DD/`
+- **Company A daily runs**: `ops/company_a/daily/<business_date>/run_<stamp>/`
+- **Company A mapping**: `mappings/company_a/approved.csv`
 - **EPOS exports**: `code_scripts/exports/stock_reports/`
-- **QBO snapshots**: `code_scripts/exports/qbo_snapshots/`
-
-Retention/lifecycle plan: [`docs/ARTIFACT_RETENTION_PLAN.md`](docs/ARTIFACT_RETENTION_PLAN.md).
 
 ## Configuration
 
@@ -283,15 +227,18 @@ Setup (one-time):
 
 ## Documentation
 
-- [`docs/INVENTORY_SYNC.md`](docs/INVENTORY_SYNC.md)
-- [`docs/ARTIFACT_RETENTION_PLAN.md`](docs/ARTIFACT_RETENTION_PLAN.md)
-- [`docs/PORTAL_IMPROVEMENTS_AND_TRACKING.md`](docs/PORTAL_IMPROVEMENTS_AND_TRACKING.md)
-- [`docs/DOCKER_MIGRATION_READY.md`](docs/DOCKER_MIGRATION_READY.md)
-- [`docs/DEV_STAGE_SETUP.md`](docs/DEV_STAGE_SETUP.md)
+- [`AGENTS.md`](AGENTS.md): Company A rules (read before any QBO write)
+- [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md): where things are now
+- [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md): production server
+- [`docs/SCHEDULING_AUTHORITY.md`](docs/SCHEDULING_AUTHORITY.md): scheduling
+- [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md), [`docs/AKPONORA_POSTING_CONTROLS.md`](docs/AKPONORA_POSTING_CONTROLS.md), [`docs/AKPONORA_ROADMAP.md`](docs/AKPONORA_ROADMAP.md): Company A
+- [`docs/OIAT_PORTAL_DELIVERY_PLAN.md`](docs/OIAT_PORTAL_DELIVERY_PLAN.md): portal plan
+- [`docs/DEV_STAGE_SETUP.md`](docs/DEV_STAGE_SETUP.md): local sandbox profiles
+
+Older plans, runbooks and briefs were removed on 5 Oct 2026 and are in git history.
 
 ## Safety / operations
 
-- A **global run lock** prevents concurrent runs (avoid overlapping Sales/Inventory runs).
-- Avoid editing QBO inventory quantities while an inventory run is active.
+- A **global run lock** prevents concurrent runs.
 - Token refresh is expected to fail occasionally when refresh tokens expire; re-auth and store new tokens.
 - For local dev, prefer sandbox profiles (see [`docs/DEV_STAGE_SETUP.md`](docs/DEV_STAGE_SETUP.md)) to avoid mixing state.

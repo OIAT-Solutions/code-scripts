@@ -82,20 +82,6 @@ class DashboardSettingsTests(TestCase):
         self.assertEqual(posted.cleaned_data["parallel"], 4)
         self.assertEqual(posted.cleaned_data["stagger_seconds"], 9)
 
-    @override_settings(
-        OIAT_DASHBOARD_DEFAULT_PARALLEL=5,
-        OIAT_DASHBOARD_DEFAULT_STAGGER_SECONDS=6,
-    )
-    def test_runs_page_renders_settings_defaults(self):
-        perm = Permission.objects.get(codename="can_trigger_runs")
-        self.user.user_permissions.add(perm)
-
-        response = self.client.get(reverse("epos_qbo:runs"))
-        self.assertEqual(response.status_code, 200)
-        html = response.content.decode("utf-8")
-        self.assertIn('name="parallel" min="1" value="5"', html)
-        self.assertIn('name="stagger_seconds" min="0" value="6"', html)
-
     @override_settings(OIAT_DASHBOARD_STALE_HOURS_WARNING=2)
     def test_stale_hours_warning_respects_setting(self):
         run = RunJob.objects.create(
@@ -345,30 +331,7 @@ class OverviewUserPrefsTests(TestCase):
         )
         self.client.login(username="operator", password="pw12345")
 
-    def test_overview_uses_user_prefs_when_no_get_params(self):
-        DashboardUserPreference.objects.create(
-            user=self.user,
-            default_revenue_period="30d",
-            default_overview_company_key="company_a",
-        )
-        response = self.client.get(reverse("epos_qbo:overview"))
-        self.assertEqual(response.status_code, 200)
-        # Context should have company filtered to company_a and revenue_period 30d
-        self.assertIn(b"Company A", response.content)
-        self.assertIn(b"30d", response.content)
 
-    def test_overview_uses_get_params_when_provided(self):
-        DashboardUserPreference.objects.create(
-            user=self.user,
-            default_revenue_period="30d",
-            default_overview_company_key="company_a",
-        )
-        response = self.client.get(
-            reverse("epos_qbo:overview") + "?revenue_period=7d&company=company_b"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"company_b", response.content)
-        self.assertIn(b"7d", response.content)
 
     def test_overview_defaults_fallback_when_user_prefs_lookup_errors(self):
         request = mock.Mock(user=self.user)

@@ -34,6 +34,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional subset of companies to run (space-separated). Defaults to all configured companies.",
     )
     parser.add_argument(
+        "--exclude-company",
+        action="append",
+        default=[],
+        help="Company key to omit from this run; may be supplied more than once.",
+    )
+    parser.add_argument(
         "--continue-on-failure",
         action="store_true",
         help="Continue running remaining companies even if one fails. Default is to stop on first failure.",
@@ -58,6 +64,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _standing_approval_enabled() -> bool:
+    from code_scripts.load_env import load_env_file
+    from code_scripts.standing_approval import StandingApprovalConfigError, standing_approval_settings
+
+    load_env_file()
+    try:
+        return standing_approval_settings() is not None
+    except StandingApprovalConfigError:
+        return True  # enabled but misconfigured: Company A will fail closed, so still run it last
+
+
 def _run_companies(args: argparse.Namespace) -> int:
     all_companies = [company for company in get_available_companies() if not company.endswith("_example")]
     if not all_companies:
@@ -73,9 +90,18 @@ def _run_companies(args: argparse.Namespace) -> int:
     else:
         companies = all_companies
 
+    excluded = {str(company).strip() for company in (args.exclude_company or []) if str(company).strip()}
+    companies = [company for company in companies if company not in excluded]
+
     if not companies:
         print("No runnable companies selected. Exiting.")
         return 1
+
+    # With Company A standing auto-approval on, a refused/held Company A day exits
+    # non-zero by design. Run it last so it can never stop other companies in a
+    # sequential stop-on-failure run. Without the env vars the order is unchanged.
+    if "company_a" in companies and _standing_approval_enabled():
+        companies = [c for c in companies if c != "company_a"] + ["company_a"]
 
     forwarded_date_args: list[str] = []
     if args.from_date and args.to_date:
