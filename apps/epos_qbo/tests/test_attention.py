@@ -265,6 +265,19 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         kinds = [c[0][0][c[0][0].index("--kind") + 1] for c in call.call_args_list]
         self.assertEqual(kinds, ["routine_repeat", "repeat_ok"])  # still no bill posted from the portal
 
+    @mock.patch("apps.epos_qbo.services.job_runner.dispatch_next_queued_job")
+    def test_held_repeat_buttons_submit_through_the_confirm_page(self, dispatch):
+        # 20 Oct 2026: both buttons opened their confirm page but the submit refused them with
+        # "This action is no longer available", because it only looked for top-level actions.
+        (self.folder / "bills/review.csv").write_text(
+            "PO,EPOS Supplier,Status,Reasons,Warnings,Approve\n"
+            "4009,DEALRADICALS LIMITED,HOLD,possible duplicate receipt of EPOS PO 3963 (x): same products/qty,,\n")
+        held = next(i for i in attention.inbox()[0] if i["identity"] == "4009")
+        for action in ("repeat_ok", "routine"):
+            response = self.post(self.token(held, action))
+            self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(sorted(PortalReviewAction.objects.values_list("action", flat=True)), ["repeat_ok", "routine"])
+
     def test_banners_use_the_same_confirmation_rule_as_home(self):
         from apps.epos_qbo.models import RunArtifact
         now = datetime(2026,10,3,12,tzinfo=ZoneInfo("UTC"))

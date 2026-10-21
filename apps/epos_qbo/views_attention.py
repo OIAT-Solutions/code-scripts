@@ -268,7 +268,8 @@ def _confirm_post(request):
             return HttpResponseBadRequest(f"Keep the reason under {REASON_MAX} characters.")
         if data.get("key"):
             item = attention_actions.current_item(data["key"], data["snapshot"])
-            if not item.get(action):
+            # Same rule as the confirm page: the repeat-order actions live in item["extra"].
+            if not (item.get(action) or (action in ("routine", "repeat_ok") and item["extra"].get(action))):
                 raise ValueError("This action is no longer available")
             if action == "preview":
                 data["choice"] = _vendor_choice(request, item)
