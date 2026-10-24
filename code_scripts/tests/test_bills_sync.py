@@ -498,10 +498,10 @@ class PoDetailCacheTests(unittest.TestCase):
         today = {"OrderRef": 3970, "DateReceived": "2026-10-02T10:00:00", "TotalValueReceived": 20000}
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / bs.PO_CACHE
-            rows = [{"ref": "3850", "fingerprint": bs.po_fingerprint(old), "detail": {"OrderRef": 3850}},
+            rows = [{"ref": "3850", "fingerprint": bs.po_fingerprint(old), "detail": {"OrderRef": 3850, "Products": []}},
                     {"ref": "3851", "fingerprint": bs.po_fingerprint({**edited, "TotalValueReceived": 1}),
-                     "detail": {"OrderRef": 3851}},
-                    {"ref": "3970", "fingerprint": bs.po_fingerprint(today), "detail": {"OrderRef": 3970}}]
+                     "detail": {"OrderRef": 3851, "Products": []}},
+                    {"ref": "3970", "fingerprint": bs.po_fingerprint(today), "detail": {"OrderRef": 3970, "Products": []}}]
             path.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
             cache = bs.load_po_cache(path)
         got = bs.cached_details([old, edited, today], cache, lambda o: o["DateReceived"] < "2026-10-01")

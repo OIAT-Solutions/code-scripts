@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 
@@ -93,6 +94,13 @@ class StandingApprovalHarness(CompanyAUploadHarness):
             if "/item/90002" in url:
                 return FakeResponse({"Item": dict(OCT_ITEM, Id="90002", Name="Gin bottle", Sku="AKP-GIN",
                                                   FullyQualifiedName="Gin bottle")})
+            query = parse_qs(urlparse(url).query).get("query", [""])[0]
+            if query.startswith("select * from Item where Id in"):
+                import re
+                items = {"15030": CATCH_ALL_ITEM, "90001": OCT_ITEM,
+                         "90002": dict(OCT_ITEM, Id="90002", Name="Gin bottle", Sku="AKP-GIN")}
+                return FakeResponse({"QueryResponse": {"Item": [items[i] for i in re.findall(r"'(\d+)'", query)
+                                                                if i in items]}})
             if "/item/" in url:
                 raise AssertionError("unexpected item lookup " + url)
             if "SalesReceipt%20where%20DocNumber" in url:

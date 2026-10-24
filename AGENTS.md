@@ -1,5 +1,17 @@
 # Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
 
+## Active work — 24 Oct 2026 runtime efficiency
+
+Read [`docs/NORA_RUNTIME_EFFICIENCY_20261024.md`](docs/NORA_RUNTIME_EFFICIENCY_20261024.md) before continuing this work.
+Branch `codex/nora-run-efficiency` starts from current production/master `7d3bf5b`.
+Owner authorized implementation on the Mac and validation on the production host before the 17:00 UTC run;
+merge/return production to master only after validation. Preserve all existing financial approval gates.
+No EPOS API. Received POs are immutable; later deliveries use new POs (owner confirmed).
+Never run a financial backfill or change posting limits as a performance test. Check the checkpoint for
+test evidence, deployment state, remaining work and rollback. The old Mac tracker edit is preserved in
+git stash `preserve-local-tracker-before-nora-efficiency-20261024` and gitignored implementation evidence.
+
+
 **Read this before any QBO write, inventory change, or Company A pipeline change.** This file wins over every other plan document.
 
 | Need | Read |

@@ -364,12 +364,13 @@ class LiveEpos:
     def po_receipts(self, ids) -> dict[str, list[dict]]:
         """October PO receipts. Details are kept in this step's own cache, so each night only POs that are
         new or changed since the last run are opened (the full October list used to be re-opened nightly)."""
-        from code_scripts.akponora_ops.bills_sync import capture_epos
+        from code_scripts.akponora_ops.bills_sync import capture_epos, received_order_cacheable
 
         ev = self.out / "epos_pos"
         ev.mkdir(parents=True, exist_ok=True)
         orders, details = capture_epos(ev, order_from=INV_START, order_to=business_today(), want=lambda o: True,
-                                       cacheable=lambda o: True, cache_path=state_dir(TOOL) / PO_CACHE)
+                                       cacheable=received_order_cacheable, cache_path=state_dir(TOOL) / PO_CACHE,
+                                       fallback_cache_paths=(state_dir("bills_sync") / PO_CACHE,))
         return receipts_from_orders(orders, details, ids)
 
 

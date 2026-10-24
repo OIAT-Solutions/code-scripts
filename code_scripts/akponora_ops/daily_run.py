@@ -190,7 +190,28 @@ class DailyRun:
         return env
 
     def run_step(self, name: str, cmd: list[str], out: Path) -> int:
-        return self.runner(cmd, log_path=out / "log.txt", env=self.child_env())
+        started = time.monotonic()
+        timing = {"step": name, "started_at": _now_utc(), "status": "running"}
+        dump_json(out / "timing.json", timing)
+        try:
+            rc = self.runner(cmd, log_path=out / "log.txt", env=self.child_env())
+            timing.update(exit_code=rc, status="finished")
+            return rc
+        finally:
+            timing.update(finished_at=_now_utc(), elapsed_seconds=round(time.monotonic() - started, 3))
+            if timing["status"] == "running":
+                timing["status"] = "failed"
+            dump_json(out / "timing.json", timing)
+
+    def save_progress(self, current: str | None) -> None:
+        """Separate from final summaries: readers must not mistake a running attempt for success."""
+        progress = {"business_date": self.date, "started_at": self.started_at, "updated_at": _now_utc(),
+                    "current_step": current, "status": "running" if current else "finished",
+                    "completed_steps": [asdict(r) for r in self.results]}
+        path = self.run_dir / "progress.json"
+        tmp = path.with_suffix(".tmp")
+        dump_json(tmp, progress)
+        tmp.replace(path)
 
     # ------------------------------------------------------------ steps
     def step_catalogue(self, res: StepResult) -> None:
@@ -564,12 +585,14 @@ class DailyRun:
                 self.results.append(res)
                 continue
             res.out = str(self.step_dir(name))
+            self.save_progress(name)
             try:
                 getattr(self, f"step_{name}")(res)
             except Exception as exc:  # noqa: BLE001 - a crashed step never stops the later ones
                 res.status, res.detail = FAILED, f"{type(exc).__name__}: {exc}"
             res.finished_at = _now_utc()
             self.results.append(res)
+            self.save_progress(name)
             if self.send_slack and name in self.only:
                 try:
                     note = step_note(asdict(res))
@@ -577,6 +600,7 @@ class DailyRun:
                         self.slack(note)
                 except Exception:  # noqa: BLE001 - Slack must never break the run
                     pass
+        self.save_progress(None)
         return self.finish()
 
     def links(self) -> dict:

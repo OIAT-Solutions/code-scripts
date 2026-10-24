@@ -137,16 +137,16 @@ class NonInventoryContractTests(unittest.TestCase):
     def test_upload_resolution_reads_exact_noninventory_id(self):
         targets = validate_upload_frame(self.converted(), self.config)
         response = mock.Mock(status_code=200)
-        response.json.return_value = {"Item": dict(NS_ITEM)}
+        response.json.return_value = {"QueryResponse": {"Item": [dict(NS_ITEM)]}}
         with mock.patch.object(qbo_upload, "_make_qbo_request", return_value=response) as request, \
              mock.patch.object(qbo_upload, "get_or_create_item_id") as create:
             result = {}
             qbo_upload.resolve_conversion_items(["FROZEN CHICKEN KG"], self.config, mock.Mock(),
                                                 harness.REALM, result, exact_targets=targets)
-        self.assertIn("/item/90001?", request.call_args.args[1])
+        self.assertIn("/query?query=", request.call_args.args[1])
         create.assert_not_called()
         self.assertEqual(result["FROZEN CHICKEN KG"]["type_label"], "existing_non_inventory")
-        response.json.return_value = {"Item": {**NS_ITEM, "Sku": "LEGACY"}}
+        response.json.return_value = {"QueryResponse": {"Item": [{**NS_ITEM, "Sku": "LEGACY"}]}}
         with mock.patch.object(qbo_upload, "_make_qbo_request", return_value=response):
             with self.assertRaises(ValueError):
                 qbo_upload.resolve_conversion_items(["FROZEN CHICKEN KG"], self.config, mock.Mock(),
