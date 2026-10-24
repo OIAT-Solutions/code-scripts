@@ -263,6 +263,15 @@ class FinalVerificationTests(unittest.TestCase):
 
 
 class EncryptedRecoveryTests(unittest.TestCase):
+    def test_manual_cutover_sources_elsewhere_are_included_and_missing_sources_refuse(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);archive=root/'code_scripts/Uploaded/2026-10-01';archive.mkdir(parents=True)
+            source=root/'code_scripts/recovery/source.csv';source.parent.mkdir();source.write_text('original evidence')
+            common.dump_json(archive/'last_epos_transform.json',{'company_key':'company_a','raw_file':'source.csv'})
+            self.assertIn(source,list(backup.company_a_files(root)))
+            source.unlink()
+            with self.assertRaisesRegex(ValueError,'missing or ambiguous'):list(backup.company_a_files(root))
+
     def test_consistent_sqlite_incremental_backup_restore_and_tampering(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);state=root/'state';state.mkdir();key=root/'key';backup.init_key(key)

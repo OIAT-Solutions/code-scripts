@@ -139,6 +139,19 @@ def sqlite_copy(source, destination):
         src.close(); dst.close()
 
 
+def archive_source(root, folder, reference):
+    name = str(reference).replace('\\', '/').rsplit('/', 1)[-1]
+    candidate = folder / name
+    if candidate.is_file():
+        return candidate
+    # The manual 1 October cutover stored its source in a recovery folder instead of
+    # beside the archive metadata. Require one exact filename match, never a guess.
+    matches = [p for p in (root / 'code_scripts').rglob(name) if p.is_file()]
+    if len(matches) != 1:
+        raise ValueError('referenced archive evidence is missing or ambiguous')
+    return matches[0]
+
+
 def company_a_files(root):
     root = Path(root).resolve()
     picks = [root / 'db.sqlite3', root / 'code_scripts/qbo_tokens.sqlite', root / 'company_a_proposals.sqlite',
@@ -154,7 +167,7 @@ def company_a_files(root):
             continue
         picks.append(meta)
         names = [doc.get('raw_file'), doc.get('raw_file_path'), *(doc.get('processed_files') or [])]
-        picks.extend(meta.parent / Path(str(n)).name for n in names if n)
+        picks.extend(archive_source(root, meta.parent, n) for n in names if n)
     for p in sorted(set(picks)):
         if not p.exists() or p.name.endswith(('-wal', '-shm', '.lock', '.tmp')):
             continue
