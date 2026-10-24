@@ -89,6 +89,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -323,21 +324,35 @@ def prune_po_cache(path: Path, keep_refs) -> int:
 
 
 def cached_details(orders: list, cache: dict, cacheable) -> dict:
-    """Details of earlier (look-back) POs whose list row is unchanged since they were opened."""
+    """Complete, identity-checked PO evidence whose live list fingerprint is unchanged."""
     out = {}
     for o in orders:
         ref = str(o.get("OrderRef"))
         hit = cache.get(ref)
-        if hit and cacheable(o) and hit.get("fingerprint") == po_fingerprint(o):
-            out[ref] = hit["detail"]
+        detail = hit.get("detail") if isinstance(hit, dict) else None
+        if (hit and cacheable(o) and hit.get("fingerprint") == po_fingerprint(o)
+                and isinstance(detail, dict) and str(detail.get("OrderRef")) == ref
+                and isinstance(detail.get("Products"), list)):
+            out[ref] = detail
     return out
 
 
+def received_order_cacheable(order: dict) -> bool:
+    """Owner-confirmed: received POs are locked; later deliveries require a NEW PO.
+
+    Still compare the full live list fingerprint before reuse. Draft/unreceived orders never
+    acquire this guarantee. All QBO duplicate/mapping/approval/post-verification gates remain live.
+    """
+    return parse_epos_ts(order.get("DateReceived")) is not None
+
+
 def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str = COMPANY,
-                 cacheable=lambda o: False, cache_path: Path | None = None) -> tuple[list, dict]:
+                 cacheable=lambda o: False, cache_path: Path | None = None,
+                 fallback_cache_paths=()) -> tuple[list, dict]:
     """View-only EPOS capture. Opens the PO list for an order-date range, then the Details page of
     each order ``want(order)`` selects (rows are matched by the OrderRef in the row text).
     Clicks only login, the date filter + Apply and Details. Resumable via ``po_details.jsonl``."""
+    started = time.monotonic()
     cfg = company_config(company)
     dfrom = datetime.strptime(order_from, "%Y-%m-%d").strftime("%d/%m/%Y")
     dto = datetime.strptime(order_to, "%Y-%m-%d").strftime("%d/%m/%Y")
@@ -383,15 +398,33 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         body = lists[-1]
         orders = body.get("orders") or []
         dump_json(ev / "po_list_raw.json", {"order_from": order_from, "order_to": order_to, "body": body})
+        by_ref = {str(o["OrderRef"]): o for o in orders}
+        # A resumed evidence directory must also match today's live list. Old evidence without
+        # a fingerprint is re-read rather than silently accepted.
+        details = {ref: d for ref, d in details.items() if ref in by_ref
+                   and d.get("_list_fingerprint") == po_fingerprint(by_ref[ref])}
         cached = {}
         if cache_path is not None:
-            cached = {ref: d for ref, d in cached_details(orders, load_po_cache(cache_path), cacheable).items()
-                      if ref not in details}
+            # Prefer this tool's evidence. The other step's matching complete capture can fill
+            # gaps, avoiding a second read of the same received PO in catalogue and bills.
+            for path in (cache_path, *fallback_cache_paths):
+                for ref, d in cached_details(orders, load_po_cache(path), cacheable).items():
+                    if ref not in details and ref not in cached:
+                        cached[ref] = {**d, "_list_fingerprint": po_fingerprint(by_ref[ref])}
             details.update(cached)
+            # Each run must be replayable from its OWN evidence, including cached lookback POs.
+            # Also import shared hits into this tool's cache for future runs.
+            with open(details_path, "w", encoding="utf-8") as fh:
+                for d in details.values():
+                    fh.write(json.dumps(d) + "\n")
+            with open(cache_path, "a", encoding="utf-8") as fh:
+                for ref, d in cached.items():
+                    fh.write(json.dumps({"ref": ref, "fingerprint": po_fingerprint(by_ref[ref]), "detail": d}) + "\n")
         needed = {str(o["OrderRef"]) for o in orders if want(o)} - set(details)
+        requested_pages = len(needed)
+        captured_pages = 0
         print(f"EPOS: {len(orders)} POs ordered {order_from}..{order_to}; {len(needed)} detail page(s) to open"
-              + (f" ({len(cached)} earlier PO(s) unchanged, read from the cache)" if cached else ""), flush=True)
-        by_ref = {str(o["OrderRef"]): o for o in orders}
+              + (f" ({len(cached)} unchanged PO(s) read from saved evidence)" if cached else ""), flush=True)
         for _ in range(3):
             if not needed:
                 break
@@ -420,11 +453,17 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
                     print(f"PO {ref}: Details page shows {d.get('OrderRef')}; retrying", flush=True)
                     open_list(page)
                     continue
+                if not isinstance(d.get("Products"), list):
+                    print(f"PO {ref}: incomplete product detail; retrying", flush=True)
+                    open_list(page)
+                    continue
                 d["_captured_at"] = now_iso()
+                d["_list_fingerprint"] = po_fingerprint(by_ref[ref])
                 with open(details_path, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(d) + "\n")
                 details[ref] = d
                 needed.discard(ref)
+                captured_pages += 1
                 if cache_path is not None and ref in by_ref:
                     with open(cache_path, "a", encoding="utf-8") as fh:
                         fh.write(json.dumps({"ref": ref, "fingerprint": po_fingerprint(by_ref[ref]), "detail": d})
@@ -436,6 +475,10 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         prune_po_cache(cache_path, by_ref)
     if needed:
         print(f"EPOS: detail not captured for {sorted(needed)}", flush=True)
+    dump_json(ev / "capture_metrics.json", {"orders": len(orders),
+              "selected": sum(bool(want(o)) for o in orders), "cache_hits": len(cached),
+              "detail_pages_requested": requested_pages, "detail_pages_captured": captured_pages,
+              "missing_details": len(needed), "elapsed_seconds": round(time.monotonic() - started, 3)})
     return orders, details
 
 
@@ -1138,11 +1181,12 @@ def collect_pos(a, ev: Path, window: tuple[str, str]) -> tuple[list, list]:
     else:
         order_from = (date.fromisoformat(lookback_from) - timedelta(days=7)).isoformat()
         order_to = (date.fromisoformat(window[1]) + timedelta(days=1)).isoformat()
-        # Earlier POs are only read for the duplicate check and never posted: an unchanged one is read
-        # from the cache. POs in the window (the ones that get posted) are always opened live.
+        # A held/capped bill does not invalidate its immutable received EPOS source. Reuse the
+        # matching source, then apply the CURRENT mapping, vendor, duplicate and approval checks.
         orders, details = capture_epos(ev, order_from=order_from, order_to=order_to, want=want,
-                                       cacheable=lambda o: recv_date(o) < window[0],
-                                       cache_path=state_dir(TOOL) / PO_CACHE)
+                                       cacheable=received_order_cacheable,
+                                       cache_path=state_dir(TOOL) / PO_CACHE,
+                                       fallback_cache_paths=(state_dir("catalogue_sync") / PO_CACHE,))
     pos, lookback = [], []
     for o in orders:
         d = recv_date(o)
