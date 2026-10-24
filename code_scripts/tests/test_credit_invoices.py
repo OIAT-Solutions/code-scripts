@@ -44,8 +44,9 @@ class FakeQBO:
     def query_all(self, sql, entity):
         if entity == "Customer":
             return list(self.customers)
-        doc = sql.split("DocNumber = '")[1].split("'")[0]
-        return [i for i in self.invoices if i["DocNumber"] == doc]
+        import re
+        docs = re.findall(r"'([^']+)'", sql)
+        return [i for i in self.invoices if i["DocNumber"] in docs]
 
     def post_json(self, path, body, requestid):
         self.posts.append((path, body))
@@ -54,7 +55,7 @@ class FakeQBO:
             self.customers.append(c)
             return FakeResp({"Customer": c})
         total = sum(Decimal(str(l["SalesItemLineDetail"]["TaxInclusiveAmt"])) for l in body["Line"])
-        inv = {"Id": str(5000 + len(self.invoices)), "DocNumber": body["DocNumber"], "TotalAmt": float(total)}
+        inv = {**body, "Id": str(5000 + len(self.invoices)), "TotalAmt": float(total)}
         self.invoices.append(inv)
         return FakeResp({"Invoice": inv})
 
@@ -139,17 +140,23 @@ class InvoiceTests(Base):
         self.assertEqual(ci.customer_key({"Customer ID": " 390601 ", "Customer Full Name": "x"}), "390601")
 
     def test_invoice_posted_under_the_float_id_is_not_posted_again(self):
-        orig = self.qbo.query_all
-
-        def query_all(sql, entity):
-            if entity == "Invoice" and "CR261005-389764.0'" in sql:
-                return [{"Id": "80642", "TotalAmt": 1}]
-            return orig(sql, entity)
-        self.qbo.query_all = query_all
+        self.run_ci(self.qbo)
+        before = len(self.qbo.posts)
+        inv = next(i for i in self.qbo.invoices if i["DocNumber"] == "CR261005-389764")
+        inv["DocNumber"] += ".0"
         r = self.run_ci(self.qbo)
         by_doc = {i["doc"]: i for i in r["invoices"]}
         self.assertEqual(by_doc["CR261005-389764"]["status"], ci.EXISTS)
-        self.assertFalse(any(b.get("DocNumber") == "CR261005-389764" for p, b in self.qbo.posts if p == "/invoice"))
+        self.assertEqual(len(self.qbo.posts), before)
+
+    def test_existing_wrong_total_customer_or_items_is_held(self):
+        self.run_ci(self.qbo)
+        before = len(self.qbo.posts)
+        inv = self.qbo.invoices[0]
+        inv["TotalAmt"] = 1
+        r = self.run_ci(self.qbo)
+        self.assertTrue(any(i["status"] == ci.HELD for i in r["invoices"]))
+        self.assertEqual(len(self.qbo.posts), before)
 
     def test_plan_mode_posts_nothing(self):
         r = self.run_ci(self.qbo, post=False)

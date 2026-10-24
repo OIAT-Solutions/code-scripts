@@ -5,7 +5,8 @@
 Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.
 Owner requests a single follow-up branch, production validation/run on that branch, and review before merge.
 Branch `codex/nora-process-hardening`; do not merge to master during implementation.
-Do not restart an active financial run. Check pending schedule-delay and stock-editability questions.
+Owner says keep today's 17:00 UTC run; deploy this branch only AFTER it finishes.
+Stock editability is unknown: keep checking details for edits, no immutable movement-detail cache.
 
 ## Deployed work — 24 Oct 2026 runtime efficiency
 

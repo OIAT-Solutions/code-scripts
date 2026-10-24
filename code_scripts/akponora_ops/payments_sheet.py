@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -38,6 +39,7 @@ from zoneinfo import ZoneInfo
 
 from code_scripts.akponora_ops.common import REALM, dump_json, state_dir
 from code_scripts.scripts.akponora_cutover.w7_create_items import sha256_text
+from code_scripts.akponora_ops.work_state import WorkState, digest
 
 TOOL = "payments_sheet"
 TZ = ZoneInfo("Africa/Lagos")
@@ -181,12 +183,37 @@ class GoogleSheet:
         sid = next(sh["properties"]["sheetId"] for sh in meta["sheets"] if sh["properties"]["title"] == tab)
         reqs = []
         for n in sorted(set(rows)):
-            rng = {"sheetId": sid, "startRowIndex": n - 1, "endRowIndex": n, "startColumnIndex": 0, "endColumnIndex": 10}
+            rng = {"sheetId": sid, "startRowIndex": n - 1, "endRowIndex": n, "startColumnIndex": 0, "endColumnIndex": 11}
             reqs.append({"addProtectedRange": {"protectedRange": {
                 "range": rng, "description": f"{TOOL}: posted payment (row {n})", "editors": {"users": [editor]}}}})
             reqs.append({"repeatCell": {"range": rng, "cell": {"userEnteredFormat": {
                 "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85}}}, "fields": "userEnteredFormat.backgroundColor"}})
         self.service.spreadsheets().batchUpdate(spreadsheetId=self.id, body={"requests": reqs}).execute()
+
+    def ensure_payment_ids(self, tab: str, rows: list[list]) -> list[list]:
+        """Persist immutable identities BEFORE any financial operation; A:J stays compatible."""
+        rows = [list(r) + [""] * max(0, 11 - len(r)) for r in rows]
+        if not rows:
+            raise SheetError(f"{tab}: payment headers are missing")
+        if clean(rows[0][10]) not in ("", "Payment ID"):
+            raise SheetError(f"{tab}: column K is occupied; cannot install payment identities")
+        updates, seen = [(f"'{tab}'!K1", ["Payment ID"])], set()
+        rows[0][10] = "Payment ID"
+        for n, row in enumerate(rows[1:], 2):
+            if not any(clean(c) for c in row[:7]):
+                continue
+            pid = clean(row[10])
+            if pid and not re.fullmatch(r"NP-[0-9a-f]{20}", pid):
+                raise SheetError(f"{tab} row {n}: invalid Payment ID")
+            if not pid:
+                pid = "NP-" + uuid.uuid4().hex[:20]
+                row[10] = pid
+                updates.append((f"'{tab}'!K{n}", [pid]))
+            if pid in seen:
+                raise SheetError(f"{tab}: duplicate Payment ID; copied rows need a new identity")
+            seen.add(pid)
+        self.write_cells(updates)
+        return rows
 
     def write_cells(self, updates: list[tuple[str, list]]) -> None:
         if updates:
@@ -316,22 +343,77 @@ def state_path() -> Path:
     return state_dir(TOOL) / "posted.json"
 
 
+def payment_matches(record: dict, expected: dict, kind: str) -> bool:
+    parent = "CustomerRef" if kind == "credit" else "VendorRef"
+    bank = lambda r: str(((r.get("DepositToAccountRef") or {}) if kind == "credit" else
+                         ((r.get("CheckPayment") or {}).get("BankAccountRef") or {})).get("value") or "")
+    links = lambda r: sorted((str(t.get("TxnId")), str(t.get("TxnType")), str(money(l.get("Amount"))))
+                             for l in r.get("Line") or [] for t in l.get("LinkedTxn") or [])
+    return (record.get("TxnDate") == expected["TxnDate"] and money(record.get("TotalAmt")) == money(expected["TotalAmt"])
+            and str((record.get(parent) or {}).get("value")) == str((expected.get(parent) or {}).get("value"))
+            and bank(record) == bank(expected) and links(record) == links(expected))
+
+
+def recover_payment(client, kind: str, expected: dict, keys: list[str], cache: dict) -> dict | None:
+    entity = "Payment" if kind == "credit" else "BillPayment"
+    ck = (entity, expected["TxnDate"])
+    if ck not in cache:
+        cache[ck] = client.query_all(f"select * from {entity} where TxnDate = '{expected['TxnDate']}'", entity)
+    matches = [r for r in cache[ck] if any(f"row {key} |" in str(r.get("PrivateNote") or "") for key in keys)]
+    if len(matches) > 1 or (matches and (not matches[0].get("Id") or not payment_matches(matches[0], expected, kind))):
+        raise SheetError("existing payment identity has conflicting accounting details; review required")
+    return matches[0] if matches else None
+
+
 def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, client, write_client, posted: dict) -> tuple[list, list]:
     """Returns (cell updates [(row number, [Status, Payment No, Processed At])], results)."""
     updates, results = [], []
     left = {k: Decimal(str(t.get("Balance") or 0)) for k, t in targets.items()}
     body = rows[1:]
-    for n, (cells, key) in enumerate(zip(body, row_keys(kind, body)), start=2):
+    journal = WorkState(state_dir(TOOL) / "work.sqlite3")
+    def save_posted():
+        dump_json(state_path(), posted)
+    for n, (cells, legacy_key) in enumerate(zip(body, row_keys(kind, body)), start=2):
+        key = clean(cells[10]) if len(cells) > 10 and clean(cells[10]) else legacy_key
+        source_sha = digest([clean(c) for c in (list(cells) + [""] * 7)[:7]])
         cells = (list(cells) + [""] * 10)[:10]
         if not any(clean(c) for c in cells[:7]):
             continue
         status = clean(cells[7])
+        if key not in posted and legacy_key in posted:
+            posted[key] = {**posted[legacy_key], "source_sha": source_sha, "legacy_key": legacy_key}
         if key in posted:
+            if posted[key].get("source_sha", source_sha) != source_sha or posted[key].get("verification_required"):
+                results.append({"row": n, "status": "edited after posting", "reason": "payment identity changed or verification remains outstanding"})
+                continue
             if status != POSTED:  # sheet lost the mark (sorted/edited): write it back, never post again
                 updates.append((n, [POSTED, posted[key]["payment_id"], posted[key]["at"]]))
             continue
         if status == POSTED:  # changed after posting: the old key is gone; never re-post an edited row
             results.append({"row": n, "status": "edited after posting"})
+            continue
+        prior = journal.get("payment", key)
+        if prior and prior["status"] in ("sending", "unknown"):
+            # Reconcile BEFORE checking the remaining balance: a fully accepted payment may
+            # already have closed the bill/invoice and removed it from the open target list.
+            try:
+                if prior["source_sha"] != source_sha:
+                    raise SheetError("payment was edited after an uncertain write")
+                expected = prior["evidence"].get("payload")
+                if not expected:
+                    raise SheetError("original payment evidence needs operator review")
+                found = recover_payment(client, kind, expected, [key, legacy_key], qbo.setdefault("payment_lookup", {}))
+                if not found:
+                    raise SheetError("previous payment result is uncertain; verify it before retrying")
+                posted[key] = {"payment_id": str(found["Id"]), "at": now_text(), "kind": kind,
+                               "doc": doc_of(cells[0]), "source_sha": source_sha}
+                save_posted()
+                journal.put("payment", key, source_sha, "verified", posted[key])
+                updates.append((n, [POSTED, str(found["Id"]), posted[key]["at"]]))
+                results.append({"row": n, "status": "posted", "recovered": True, "payment_id": str(found["Id"])})
+            except Exception as exc:
+                updates.append((n, [f"Held: {exc}", "", now_text()]))
+                results.append({"row": n, "status": "held", "reason": str(exc)})
             continue
         target_key = doc_of(cells[0])
         target = targets.get(target_key)
@@ -352,7 +434,32 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
             continue
         path, body_json = payload(kind, target, parts, cells, key)
         before = left[target_key]
-        resp = write_client.post_json(path, body_json, sha256_text(f"{TOOL}|{REALM}|{key}")[:36])
+        prior = journal.get("payment", key)
+        if prior and prior["source_sha"] != source_sha:
+            updates.append((n, ["Held: payment identity was edited; review the original operation", "", now_text()]))
+            results.append({**row, "status": "held", "reason": "payment identity changed"})
+            continue
+        try:
+            found = recover_payment(client, kind, body_json, [key, legacy_key], qbo.setdefault("payment_lookup", {})) \
+                if prior or key != legacy_key else None
+            if found:
+                posted[key] = {"payment_id": str(found["Id"]), "at": now_text(), "kind": kind,
+                               "doc": target_key, "source_sha": source_sha}
+                save_posted()
+                journal.put("payment", key, source_sha, "verified", posted[key])
+                updates.append((n, [POSTED, str(found["Id"]), posted[key]["at"]]))
+                results.append({**row, "status": "posted", "payment_id": str(found["Id"]), "recovered": True})
+                continue
+            if prior and prior["status"] in ("sending", "unknown"):
+                raise SheetError("previous payment result is uncertain; verify it before retrying")
+            journal.put("payment", key, source_sha, "sending", {"kind": kind, "payload": body_json})
+            resp = write_client.post_json(path, body_json, sha256_text(f"{TOOL}|{REALM}|{key}")[:36])
+        except Exception as exc:
+            if not prior or prior["status"] != "verified":
+                journal.put("payment", key, source_sha, "unknown", {"reason": str(exc), "kind": kind, "payload": body_json})
+            updates.append((n, [f"Held: {exc}", "", now_text()]))
+            results.append({**row, "status": "failed", "reason": str(exc)})
+            break
         entity = "Payment" if kind == "credit" else "BillPayment"
         made = (resp.json() or {}).get(entity, {}) if getattr(resp, "status_code", 0) == 200 else {}
         live = client.get_json(f"/{'invoice' if kind == 'credit' else 'bill'}/{target['Id']}")
@@ -364,11 +471,17 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
                    else f"posted as payment {made.get('Id')} but the balance is N{after:,.2f}, expected "
                         f"N{before - parts['amount']:,.2f} - check in QuickBooks")
             if made.get("Id"):
-                posted[key] = {"payment_id": made["Id"], "at": now_text(), "kind": kind, "doc": target_key}
+                posted[key] = {"payment_id": made["Id"], "at": now_text(), "kind": kind, "doc": target_key,
+                               "source_sha": source_sha, "verification_required": True}
+                save_posted()
+            journal.put("payment", key, source_sha, "unknown", {"reason": why, "kind": kind, "payload": body_json})
             updates.append((n, [f"Held: {why}", made.get("Id", ""), now_text()]))
             results.append({**row, "status": "failed", "reason": why})
             break  # stop on the first problem; the rest wait for the next run
-        posted[key] = {"payment_id": made["Id"], "at": now_text(), "kind": kind, "doc": target_key}
+        posted[key] = {"payment_id": made["Id"], "at": now_text(), "kind": kind, "doc": target_key, "source_sha": source_sha}
+        save_posted()
+        journal.put("payment", key, source_sha, "verified", posted[key])
+        qbo.pop("payment_lookup", None)
         left[target_key] = after
         updates.append((n, [POSTED, made["Id"], posted[key]["at"]]))
         results.append({**row, "status": "posted", "payment_id": made["Id"]})
@@ -388,11 +501,14 @@ def run(*, client, write_client=None, sheet=None, env=None, dry_run: bool = Fals
         editor = json.loads(Path(key).read_text()).get("client_email", "")
     qbo = load_qbo(client)
     sys_rows = system_rows(qbo)
-    credit_rows, bill_rows = sheet.read(CREDIT_PAYMENTS, 10), sheet.read(BILL_PAYMENTS, 10)
+    credit_rows, bill_rows = sheet.read(CREDIT_PAYMENTS, 11), sheet.read(BILL_PAYMENTS, 11)
     for tab, rows, cols in ((CREDIT_PAYMENTS, credit_rows, CREDIT_PAY_COLS), (BILL_PAYMENTS, bill_rows, BILL_PAY_COLS),
                             (CREDIT_SALES, sheet.read(CREDIT_SALES, 8), CREDIT_SALES_COLS),
                             (BILLS, sheet.read(BILLS, 8), BILLS_COLS), (LISTS, sheet.read(LISTS, 3), LIST_COLS)):
         headers_ok(rows, cols, tab)
+    if not dry_run and hasattr(sheet, "ensure_payment_ids"):
+        credit_rows = sheet.ensure_payment_ids(CREDIT_PAYMENTS, credit_rows)
+        bill_rows = sheet.ensure_payment_ids(BILL_PAYMENTS, bill_rows)
     posted = json.loads(state_path().read_text()) if state_path().exists() else {}
     docs = [clean(b.get("DocNumber")) for b in qbo["bills"]]
     dup = {d for d in docs if d and docs.count(d) > 1}

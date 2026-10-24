@@ -118,8 +118,30 @@ def run_command(cmd: list[str], *, log_path: Path, env: dict, cwd: Path = REPO_R
     with open(log_path, "w", encoding="utf-8") as log:
         log.write(f"$ {' '.join(cmd)}\n")
         log.flush()
-        proc = subprocess.run(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
-    return proc.returncode
+        started = time.monotonic()
+        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT)
+        read_only = any(m in cmd for m in ("code_scripts.akponora_ops.stock_snapshot",
+                                           "code_scripts.akponora_ops.stock_movements",
+                                           "code_scripts.akponora_ops.item_guard"))
+        limit = max(60, int(env.get("OIAT_READ_STEP_TIMEOUT_SECONDS", "1200")))
+        while True:
+            try:
+                return proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                elapsed = round(time.monotonic() - started, 1)
+                dump_json(log_path.parent / "heartbeat.json", {"pid": proc.pid, "elapsed_seconds": elapsed,
+                          "updated_at": _now_utc(), "status": "stalled" if elapsed > limit else "running",
+                          "safe_to_stop": read_only})
+                if elapsed > limit and read_only:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                    log.write("Read-only collection exceeded its deadline; no financial writer was interrupted.\n")
+                    return 2
+                # Financial subprocesses are never blindly killed after a possible accepted write.
 
 
 def slack_webhook() -> str | None:
@@ -414,6 +436,8 @@ class DailyRun:
         failed = [x for x in r.get("posted") or [] if x["status"] == "FAILED"]
         if r.get("waiting_approval"):
             res.review.append(f"{r['waiting_approval']} large stock adjustment(s) over the limit wait for approval")
+        if r.get("not_automatic"):
+            res.review.append(f"{r['not_automatic']} stock change(s) need product, delivery or reason review")
         for w in r.get("warnings") or []:
             res.review.append(f"stock adjustment check: {w}")
         res.detail = r.get("note") or f"{len(posted)} adjustment(s) posted"
@@ -616,6 +640,17 @@ class DailyRun:
 
     def finish(self) -> dict:
         code = self.overall_exit()
+        # Stock-changing follow-up runs after the first snapshot. Refresh the comparison only
+        # when it actually posted; expose a separate result without repeating movement capture.
+        follow = next((r for r in self.results if r.name == "stock_follow"), None)
+        if follow and any(x.get("status") == "POSTED" for x in follow.counts.get("posted") or []):
+            final = StepResult(name="final_stock", started_at=_now_utc(), out=str(self.step_dir("final_stock")))
+            rc = self.run_step("final_stock", [self.python, "-m", "code_scripts.akponora_ops.stock_snapshot", "run",
+                                               "--out", final.out], Path(final.out))
+            final.status, final.exit_code, final.finished_at = (OK if rc == 0 else FAILED), rc, _now_utc()
+            final.detail = "fresh EPOS/QBO comparison after stock adjustments; source cutoffs remain explicit"
+            self.results.append(final)
+            code = self.overall_exit()
         summary = {"tool": TOOL, "company": COMPANY, "business_date": self.date, "dry_run": self.dry_run,
                    "exit_code": code, "status": {0: "clean", 2: "failed", 3: "review"}[code],
                    "run_dir": str(self.run_dir), "started_at": self.started_at, "finished_at": _now_utc(),
@@ -625,6 +660,8 @@ class DailyRun:
                    "links": self.links(),
                    "steps": [asdict(r) for r in self.results],
                    "waiting_for_review": [line for r in self.results for line in r.review]}
+        summary["completion"] = {0: "finished cleanly", 2: "stopped with failures", 3: "finished with review"}[code]
+        summary["exception_owner"] = "OIAT / owner"
         dump_json(self.run_dir / "summary.json", summary)
         dump_json(self.day_dir / "summary.json", summary)
         if self.send_slack:

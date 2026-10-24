@@ -7,6 +7,7 @@ stock_movements, never by barcode. Runtime browser automation is isolated here.
 from __future__ import annotations
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from code_scripts.scripts.akponora_cutover._common import company_config, epos_login
@@ -18,6 +19,17 @@ ROWS_JS = """(gid) => { const t = document.getElementById(gid); if (!t) return [
 DETAIL_JS = """() => { const g = t => { const e = document.getElementById(t); return e ? Array.from(e.rows).map(r => Array.from(r.cells).map(c => c.innerText.trim())) : null; };
   return {url: location.href, info: g('MainContent_dvTransfers'), items: g('MainContent_gvItems'),
           tables: Array.from(document.querySelectorAll('table[id]')).map(t => t.id)}; }"""
+# Read the same authenticated HTML page without loading its images/scripts in a new tab.
+# Every detail is fetched freshly; this is not immutable caching or the EPOS API.
+HTML_DETAIL_JS = """async url => {
+  const response = await fetch(url, {credentials:'same-origin'});
+  if (!response.ok) throw new Error('Stock detail HTTP ' + response.status);
+  const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const g = id => { const e=doc.getElementById(id); return e ? Array.from(e.rows).map(r=>Array.from(r.cells).map(c=>c.textContent.trim())) : null; };
+  return {url:response.url, info:g('MainContent_dvTransfers'), items:g('MainContent_gvItems'),
+    tables:Array.from(doc.querySelectorAll('table[id]')).map(t=>t.id),
+    _has_pager:!!doc.querySelector('#MainContent_gvItems a[href*=\\"Page$\\"]')};
+}"""
 TAKES_URL = "https://www.eposnowhq.com/Pages/BackOffice/StockTakeList.aspx"
 MOVES_URL = "https://www.eposnowhq.com/Pages/BackOffice/StockMovementList.aspx"
 
@@ -27,6 +39,8 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
 
     from playwright.sync_api import sync_playwright
 
+    started = time.monotonic()
+    metrics = {"fresh_html_details": 0, "browser_detail_fallbacks": 0, "lists": 0}
     cfg = company_config(company_key)
     start = datetime.strptime(from_date, "%Y-%m-%d")
     from_day = f"{start.day} {start.strftime('%B')}"  # calendar link title, e.g. "16 September"
@@ -61,6 +75,7 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
         open_list(page, url, cal_id, grid, 1)
         while True:
             rows = page.evaluate(ROWS_JS, f"MainContent_{grid}")
+            metrics["lists"] += 1
             print(name, "page", pageno, len(rows), rows[0]["cells"] if rows else None, flush=True)
             if not rows:
                 break
@@ -102,21 +117,29 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
                         loc = hit.get("loc")
                         if not loc:
                             raise RuntimeError(f"no redirect ({hit})")
-                        det = page.context.new_page()
-                        det.goto(urljoin(url, loc), wait_until="domcontentloaded")
-                        det.wait_for_timeout(800)
-                        d = det.evaluate(DETAIL_JS)
-                        if d.get("items") is None:  # no item grid yet: read once more after a longer wait
-                            det.wait_for_timeout(3000)
+                        try:
+                            d = page.evaluate(HTML_DETAIL_JS, urljoin(url, loc))
+                            metrics["fresh_html_details"] += 1
+                        except Exception:
+                            d = None
+                        if not d or not d.get("info") or not d.get("items") or d.get("_has_pager"):
+                            metrics["browser_detail_fallbacks"] += 1
+                            det = page.context.new_page()
+                            det.goto(urljoin(url, loc), wait_until="domcontentloaded")
+                            det.wait_for_timeout(800)
                             d = det.evaluate(DETAIL_JS)
-                        k = 2  # item grid pager (view only)
-                        while det.locator(f"#MainContent_gvItems a[href*=\"Page${k}'\"]").count():
-                            det.evaluate(f"__doPostBack('ctl00$MainContent$gvItems','Page${k}')")
-                            det.wait_for_load_state("domcontentloaded")
-                            det.wait_for_timeout(1200)
-                            d["items"] += (det.evaluate(DETAIL_JS)["items"] or [])[1:]
-                            k += 1
-                        det.close()
+                            if d.get("items") is None:  # no item grid yet: read once more after a longer wait
+                                det.wait_for_timeout(3000)
+                                d = det.evaluate(DETAIL_JS)
+                            k = 2  # item grid pager (view only)
+                            while det.locator(f"#MainContent_gvItems a[href*=\"Page${k}'\"]").count():
+                                det.evaluate(f"__doPostBack('ctl00$MainContent$gvItems','Page${k}')")
+                                det.wait_for_load_state("domcontentloaded")
+                                det.wait_for_timeout(1200)
+                                d["items"] += (det.evaluate(DETAIL_JS)["items"] or [])[1:]
+                                k += 1
+                            det.close()
+                        d.pop("_has_pager", None)
                         d.update({"_page": pageno, "_row": i, "_list_cells": sig})
                         with out_det.open("a") as fh:
                             fh.write(json.dumps(d) + "\n")
@@ -164,4 +187,6 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
             if cals:
                 scrape(page, "stockmovements", MOVES_URL, cals[0], gv[0] if gv else "gvTransfers")
         browser.close()
+    metrics["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    (out / "capture_metrics.json").write_text(json.dumps(metrics, indent=1))
 

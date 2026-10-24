@@ -6,7 +6,7 @@ Branch: `codex/nora-process-hardening`, base master `df046f4`. Prior runtime eff
 
 ## Clock and deployment gate
 
-Next daily schedule is 17:00 UTC. At start only nine minutes remain. Asked owner asynchronously whether to defer today's schedule until the full branch is validated or retain 17:00 and deploy afterward. Do not change the schedule before that answer; never replace containers while a financial job/global lock is active. Also asked whether completed stock adjustments can be edited. Until confirmed, do not assume their details immutable.
+Next daily schedule is 17:00 UTC. At start only nine minutes remain. Owner answered: KEEP the 17:00 UTC run and deploy AFTER it finishes. Do not change the schedule or interrupt that job. Owner is UNSURE whether completed stock adjustments are editable: continue fresh edit-safe detail checks; do not use immutable movement-detail caching.
 
 ## Scope from all-round review
 
@@ -31,4 +31,8 @@ Evidence under gitignored `outputs/run_performance_20261024/process_hardening/`.
 
 Current known-good image: `oiat-portal:latest` = `sha256:6b8c6ecfdf2bc3bc00e1317faa27d311fb593355df20a9d8be9806df25cac1f2`; save a new rollback tag before activation. Prior older rollback also exists as `oiat-portal:nora-before-efficiency-20261024`.
 
-No implementation or new deployment has happened at this checkpoint. Update this file with each completed area, tests, SHA, pending input, schedule changes and actual running image.
+17:00 UTC checkpoint: implementation underway, no new deployment. Atomic JSON writes, SQLite per-operation work state, grouped complete credit-invoice checks/prepared-work reuse, immediate payment persistence/recovery and permanent IDs in optional column K, stronger stock eligibility and final post-adjustment snapshot are drafted. Credit tests 12 pass; payments 11 pass. Full suite currently has only stock tests needing changes for the explicitly stronger delivery/aggregate-cap policy; do not deploy until all old/new tests pass and live read-only shadows validate actual QBO invoice fields. Stock details remain freshly checked.
+
+Today's 17:00 run must finish using the prior PR #64 image. Do not replay a financial routine merely to benchmark this branch. After it finishes, use its saved evidence for shadow comparisons, deploy the fully validated branch idle, and leave PR unmerged. Update this file with each completed area, tests, SHA, schedule outcome and actual running image.
+
+17:09 UTC: core drafted changes pass all 475 existing code_scripts tests after updating complete-entity fake responses and stock-policy expectations. Still add dedicated interruption/identity/edit/cap regression tests, money cross-checks, discovery work state, backup/restore and production read-only validation before deployment. The 17:00 job is running on the old PR #64 image and remains untouched.
