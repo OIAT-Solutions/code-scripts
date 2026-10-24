@@ -268,7 +268,7 @@ class EncryptedRecoveryTests(unittest.TestCase):
             root=Path(folder);archive=root/'code_scripts/Uploaded/2026-10-01';archive.mkdir(parents=True)
             source=root/'code_scripts/recovery/source.csv';source.parent.mkdir();source.write_text('original evidence')
             common.dump_json(archive/'last_epos_transform.json',{'company_key':'company_a','raw_file':'source.csv'})
-            self.assertIn(source,list(backup.company_a_files(root)))
+            self.assertIn(source.resolve(),list(backup.company_a_files(root)))
             source.unlink()
             with self.assertRaisesRegex(ValueError,'missing or ambiguous'):list(backup.company_a_files(root))
 
