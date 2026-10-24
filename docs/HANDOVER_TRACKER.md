@@ -2,13 +2,13 @@
 
 ## Active whole-process hardening — 24 October 2026
 
-Read [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md). Owner requests implementation and production run on `codex/nora-process-hardening`; master must remain unchanged until later run review.
+Read [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md). Implemented and deployed on `codex/nora-process-hardening` (runtime code through `606302c`, draft PR #65). Mac and production stay on this branch; master remains unchanged. 497 local/server-image tests, live hashes/HTTP/single-worker checks and encrypted local restore pass. The first full branch run is 25 Oct 17:00 UTC; review it before merge. Staff/opening-balance signoff and offsite/key custody remain pending. See [NORA_STAFF_AND_RECOVERY.md](NORA_STAFF_AND_RECOVERY.md).
 
 ## Deployed runtime improvements — 24 October 2026
 
-Runtime efficiency PR #64 merged as `8632c76` on master. Mac and production checkouts are on master.
-Implementation `7c3d5aa` is running in both web and scheduler; 474 tests and production read-only checks pass.
-The first complete scheduled routine at 17:00 UTC has not run yet; its duration/outcome remains unverified.
+Runtime efficiency PR #64 merged as `8632c76` on master. This was the master baseline before the follow-up branch above.
+That baseline used implementation `7c3d5aa`, with 474 tests and production read-only checks passing. Current runtime is the hardening branch above.
+That scheduled routine completed 24 Oct in 19m52s (review, no failed steps), versus the prior 66m43s. It validates PR #64; the newer hardening branch still needs its own full-run observation.
 Read [NORA_RUNTIME_EFFICIENCY_20261024.md](NORA_RUNTIME_EFFICIENCY_20261024.md) for scope, test evidence,
 production state and rollback. Owner requested validation before the 17:00 UTC scheduled run.
 The dates/revisions in older sections below are historical; use the active checkpoint for this release.

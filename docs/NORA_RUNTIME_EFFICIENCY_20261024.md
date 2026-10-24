@@ -29,7 +29,7 @@ PR #64 as `8632c766ede9ee1ee2869afaf2f6698e5219e7c6`. Mac and production checkou
 - [x] Validate cached evidence and read-only QBO/browser behavior on the production host.
 - [x] Push branch and PR, deploy the validated branch without interrupting running jobs, verify services.
 - [x] Merge validated PR #64 into master and return both Mac and production checkouts to master.
-- [ ] Observe next scheduled run before claiming full live acceptance or a total runtime improvement.
+- [x] Observe first scheduled run: 24 Oct 17:00–17:19:53 UTC, 19m52s, review, no failed steps (prior run 66m43s).
 
 ## Evidence and recovery
 
@@ -106,3 +106,5 @@ Recovery if needed: while no job is active, tag `oiat-portal:nora-before-efficie
 The old image is retained locally; do not prune it before the first normal run is accepted. Record the
 rollback and do not restart containers during an active financial run. Checkout rollback alone does not
 change a running container image.
+
+24 Oct 21:50 UTC: production now runs the separate whole-process hardening branch/PR #65. See NORA_PROCESS_HARDENING_20261024.md for current runtime and the next full-run gate. The 19m52s observation belongs to this earlier runtime release, not PR #65.

@@ -5,15 +5,21 @@
 Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.
 Owner requests a single follow-up branch, production validation/run on that branch, and review before merge.
 Branch `codex/nora-process-hardening`; do not merge to master during implementation.
-Owner says keep today's 17:00 UTC run; deploy this branch only AFTER it finishes.
+Owner said keep today's 17:00 UTC run; it finished 17:19:53 UTC in 19m52s (prior PR #64).
+Hardening code through `606302c` is now rebuilt, validated and deployed to web/scheduler on this branch.
+497 tests pass on Mac and isolated server image; live hashes/HTTP/single scheduler pass.
+First full scheduled hardening run: 25 Oct 17:00 UTC. Keep PR #65 unmerged pending that review.
+Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
 Stock editability is unknown: keep checking details for edits, no immutable movement-detail cache.
 
 ## Deployed work — 24 Oct 2026 runtime efficiency
 
+Historical release: the active branch and no-merge instructions above take precedence.
+
 Read [`docs/NORA_RUNTIME_EFFICIENCY_20261024.md`](docs/NORA_RUNTIME_EFFICIENCY_20261024.md) before continuing this work.
 Implemented from master `7d3bf5b` on `codex/nora-run-efficiency`; PR #64 merged as `8632c76`.
-Mac and production checkouts are back on master; web/scheduler run the validated implementation.
-The first full scheduled run at 17:00 UTC is still pending: check the checkpoint before claiming total runtime gains.
+That release was validated on master before the follow-up branch above.
+Its first scheduled run completed in 19m52s with review and no failed steps; do not attribute that duration to the newer branch.
 Owner authorized implementation on the Mac and validation on the production host before the 17:00 UTC run;
 merge/return production to master only after validation. Preserve all existing financial approval gates.
 No EPOS API. Received POs are immutable; later deliveries use new POs (owner confirmed).
