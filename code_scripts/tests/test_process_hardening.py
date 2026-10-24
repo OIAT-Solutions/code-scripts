@@ -263,7 +263,12 @@ class EncryptedRecoveryTests(unittest.TestCase):
             db=state/'db.sqlite3'
             with sqlite3.connect(db) as c:c.execute('CREATE TABLE test (value TEXT)');c.execute("INSERT INTO test VALUES ('evidence')")
             source=state/'mapping.csv';source.write_text('approved identity')
-            first=backup.create(state,root/'backups',key,files=[db,source])
+            original_replace=backup.os.replace
+            def same_filesystem_replace(src, dst):
+                self.assertEqual(Path(src).parent,Path(dst).parent,'atomic rename must stay on destination filesystem')
+                return original_replace(src,dst)
+            with mock.patch.object(backup.os,'replace',side_effect=same_filesystem_replace):
+                first=backup.create(state,root/'backups',key,files=[db,source])
             second=backup.create(state,root/'backups',key,files=[db,source])
             self.assertEqual(second['reused'],1)
             third=backup.create(state,root/'backups',key,files=[db,source])

@@ -50,6 +50,19 @@ def file_sha(path):
     return sha.hexdigest()
 
 
+def publish_encrypted(source: Path, destination: Path):
+    """Container /tmp and the persistent volume can be different filesystems."""
+    fd, name = tempfile.mkstemp(prefix='.', suffix='.tmp', dir=destination.parent)
+    try:
+        with Path(source).open('rb') as src, os.fdopen(fd, 'wb') as dst:
+            shutil.copyfileobj(src, dst, CHUNK)
+            dst.flush(); os.fsync(dst.fileno())
+        os.replace(name, destination)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def encrypt_file(source: Path, destination: Path, key: bytes):
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     iv = os.urandom(12)
@@ -193,7 +206,7 @@ def create(root: Path, destination: Path, key_file: Path, *, files=None):
                 raise ValueError('source changed during backup; retry under the global run lock')
             blob = blobs / (raw_sha + '.enc')
             if not blob.exists():
-                os.replace(enc, blob)
+                publish_encrypted(enc, blob)
             elif not (old.get('sha256') == raw_sha and file_sha(blob) == old.get('cipher_sha256')):
                 # Blobs are immutable: replacing one would invalidate earlier manifests.
                 # Verify a pre-existing content identity before reusing it in another set.
@@ -209,7 +222,7 @@ def create(root: Path, destination: Path, key_file: Path, *, files=None):
                     'shared_sqlite': 'portal/token databases are copied consistently as opaque shared infrastructure'}
         plain = temp / 'manifest.json'; plain.write_text(json.dumps(manifest, sort_keys=True))
         encrypted = temp / 'manifest.enc'; encrypt_file(plain, encrypted, key)
-        final = manifests / (stamp + '.nora.enc'); os.replace(encrypted, final)
+        final = manifests / (stamp + '.nora.enc'); publish_encrypted(encrypted, final)
     return {'manifest': str(final), 'files': len(entries), 'changed': changed, 'reused': reused,
             'encrypted': True, 'offsite_verified': False}
 
