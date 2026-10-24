@@ -1,5 +1,20 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
+## Active implementation — 24 October 2026
+
+Runtime efficiency work is on `codex/nora-run-efficiency`, from current master `7d3bf5b`.
+Read [NORA_RUNTIME_EFFICIENCY_20261024.md](NORA_RUNTIME_EFFICIENCY_20261024.md) for scope, test evidence,
+production state and rollback. Owner requested validation before the 17:00 UTC scheduled run.
+The dates/revisions in older sections below are historical; use the active checkpoint for this release.
+
+Preserved Mac-only handover items: the Metrix Nora mockup under `outputs/portal-metrix-mockup/` is local
+preview work (not production), with backup `outputs/portal-metrix-mockup-backup-20261012/`. The owner also
+requested a separate production-data backup project (14 October): consistent SQLite backups, mappings,
+ops evidence and uploaded source files, encrypted local/off-site retention and restore tests. This
+performance release does not implement that backup project. The full original local notes are retained
+in git stash `preserve-local-tracker-before-nora-efficiency-20261024` on the Mac.
+
+
 **Last updated:** 2026-10-12 by Claude (5–12 Oct changes below; all deployed).
 **Rule:** any agent that picks this up must **update this file when it finishes something** (tick the item, add the date and the commit).
 Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP.md`](AKPONORA_ROADMAP.md). History of production writes: cutover log (removed 5 Oct; in git history).

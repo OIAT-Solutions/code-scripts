@@ -105,10 +105,10 @@ class ContractTests(unittest.TestCase):
     def test_upload_resolves_id_and_never_calls_create(self):
         targets=validate_upload_frame(self.converted(),self.config)
         response=mock.Mock(status_code=200)
-        response.json.return_value={'Item':{**targets['Wine bottle'],'Active':True,'TrackQtyOnHand':True}}
+        response.json.return_value={'QueryResponse':{'Item':[{**targets['Wine bottle'],'Active':True,'TrackQtyOnHand':True}]}}
         with mock.patch.object(qbo_upload,'_make_qbo_request',return_value=response) as request, mock.patch.object(qbo_upload,'get_or_create_item_id') as create:
             result={};qbo_upload.resolve_conversion_items(['Wine bottle'],self.config,mock.Mock(),'9341455406194328',result,exact_targets=targets)
-        self.assertIn('/item/90001?',request.call_args.args[1]);create.assert_not_called()
+        self.assertIn('/query?query=',request.call_args.args[1]);create.assert_not_called()
         self.assertEqual(result['Wine bottle']['item_id'],'90001')
 
     def test_conflicting_family_ids_blocked(self):

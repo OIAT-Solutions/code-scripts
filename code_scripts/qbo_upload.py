@@ -1806,16 +1806,24 @@ def resolve_conversion_items(
         raise RuntimeError("Company A upload requires exact conversion evidence")
     if exact_targets is not None:
         from code_scripts.conversion_contract import validate_live_item
+        # Fetch complete live records in bounded groups, in BOTH the approval preflight and
+        # posting pass. Never replace any of validate_live_item's identity/account checks with
+        # yesterday's cache or a projected query that omits required fields.
+        ids = []
         for name in unique_names:
             expected = exact_targets[name]
-            item_id = expected["Id"]
+            item_id = str(expected["Id"])
             if not str(item_id).isdigit():
                 raise RuntimeError("QBO Item Id must be numeric")
-            url = f"{BASE_URL}/v3/company/{realm_id}/item/{item_id}?minorversion=70"
-            response = _make_qbo_request("GET", url, token_mgr)
-            if response.status_code != 200:
-                raise RuntimeError(f"Cannot verify mapped QBO Item Id {item_id}")
-            validate_live_item(response.json().get("Item") or {}, expected)
+            if item_id not in ids:
+                ids.append(item_id)
+        live_items = query_exact_conversion_items(token_mgr, realm_id, ids)
+        # Validate the complete set before publishing even partial resolution results.
+        for name in unique_names:
+            validate_live_item(live_items[str(exact_targets[name]["Id"])], exact_targets[name])
+        for name in unique_names:
+            expected = exact_targets[name]
+            item_id = str(expected["Id"])
             item_result_by_name[name] = {"item_id": item_id, "created": False,
                 "type_label": "existing_inventory" if expected["Type"] == "Inventory" else "existing_non_inventory",
                 "fallback_reason": None}
@@ -2666,6 +2674,49 @@ def _log_sales_receipt_line_items_for_6270(payload: dict) -> None:
 
 # Chunk size for QBO "Id in (...)" queries to avoid URL/query limits
 _ITEM_IDS_QUERY_CHUNK_SIZE = 20
+
+
+def query_exact_conversion_items(
+    token_mgr: TokenManager, realm_id: str, id_list: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Complete exact-target records, fail closed on partial/duplicate/unexpected evidence.
+
+    Separate from the legacy projected query below: the Company A validator also needs SKU
+    and AssetAccountRef. SELECT * preserves those checks. There is no per-item fallback on
+    a failed grouped read, and callers re-read freshly on each upload invocation.
+    """
+    ids = list(dict.fromkeys(str(i) for i in id_list))
+    if any(not i.isdigit() for i in ids):
+        raise RuntimeError("QBO Item Id must be numeric")
+    result: Dict[str, Dict[str, Any]] = {}
+    for offset in range(0, len(ids), _ITEM_IDS_QUERY_CHUNK_SIZE):
+        chunk = ids[offset:offset + _ITEM_IDS_QUERY_CHUNK_SIZE]
+        values = "','".join(chunk)
+        query = f"select * from Item where Id in ('{values}') maxresults 1000"
+        url = f"{BASE_URL}/v3/company/{realm_id}/query?query={quote(query)}&minorversion=70"
+        response = _make_qbo_request("GET", url, token_mgr)
+        if response.status_code != 200:
+            raise RuntimeError("Cannot verify mapped QBO items: grouped read failed")
+        body = response.json()
+        if not isinstance(body, dict) or body.get("Fault") or not isinstance(body.get("QueryResponse"), dict):
+            raise RuntimeError("Cannot verify mapped QBO items: invalid grouped response")
+        rows = body["QueryResponse"].get("Item", [])
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            raise RuntimeError("Cannot verify mapped QBO items: invalid grouped response")
+        returned = set()
+        for item in rows:
+            if not isinstance(item, dict):
+                raise RuntimeError("Cannot verify mapped QBO items: invalid item record")
+            iid = str(item.get("Id", ""))
+            if iid not in chunk or iid in returned:
+                raise RuntimeError("Cannot verify mapped QBO items: unexpected or duplicate Id")
+            returned.add(iid)
+            result[iid] = item
+        if returned != set(chunk):
+            raise RuntimeError("Cannot verify mapped QBO items: grouped response is incomplete")
+    return result
 
 
 def _query_items_by_ids(
