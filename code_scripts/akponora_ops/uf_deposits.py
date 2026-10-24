@@ -733,6 +733,7 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
         reasons.append(why)
         return e
     e["sheet"] = {k: sheet_day[k] for k in ("date", "tab", "row", "actual", "system", "excess")}
+    e["sheet_day_sha256"] = till_sheet.day_fingerprint(sheet_day)
     unfinished = sheet_reasons(sheet_day)
     reasons += unfinished
     if unfinished:
@@ -742,6 +743,12 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     e["sheet_by_bank"] = sheet_by_bank
     e["sheet_total"] = sum(sheet_by_bank.values(), Decimal(0))
     diff = e["sheet_total"] - e["receipts_total"]
+    from code_scripts.akponora_ops.money_integrity import overage_overlap
+    overlap = overage_overlap(day, diff, s.get("repayments_by_day") or {})
+    if overlap:
+        reasons.append(overlap["reason"])
+        e["money_overlap"] = overlap
+        e["hold_kind"] = "repayment_overlap"
     tol = tolerance(e["receipts_total"], s)
     overage, overage_acct = Decimal(0), None
     over_limit = diff > tol  # owner, 13 Oct 2026: a sheet OVER sales is banked anyway and flagged, not held
@@ -974,7 +981,7 @@ def day_summary(e: dict, banks: dict) -> dict:
         "deposits_new": sum(1 for a in e["actions"] if a["kind"] == "deposit" and a["state"] == "NEW"),
         "transfers_new": sum(1 for a in e["actions"] if a["kind"] == "transfer" and a["state"] == "NEW"),
         "existing": [f"{a['kind']} {a['key']} (QBO {a.get('qbo_id')})" for a in e["actions"] if a["state"] == "EXISTS"],
-        "sheet": e["sheet"], "sheet_sha256": e["sheet_sha256"],
+        "sheet": e["sheet"], "sheet_sha256": e["sheet_sha256"], "sheet_day_sha256": e.get("sheet_day_sha256", ""),
     }
 
 
@@ -1151,6 +1158,14 @@ def post_day(day_dir: Path, *, client: QBOClient, approval_ref: str, expect_sha:
             raise StopRun(f"automatic posting needs {ENABLED_ENV}=1, {AUTO_ENV}=1 and {REF_ENV}")
         if Decimal(summary["receipts_total"]) > s["cap"]:
             raise StopRun(f"day total {summary['receipts_total']} over the automatic cap {money(s['cap'])}")
+        if s.get("_till_source") and summary.get("sheet_day_sha256"):
+            fresh, why, _ = till_sheet.fresh_day(s["_till_source"], summary["day"])
+            if not fresh or till_sheet.day_fingerprint(fresh) != summary["sheet_day_sha256"]:
+                raise StopRun("till day changed since planning; refresh and review before banking: " + why)
+        if s.get("_repayment_reader"):
+            from code_scripts.akponora_ops.work_state import digest
+            if digest(s["_repayment_reader"]()) != digest(s.get("repayments_by_day") or {}):
+                raise StopRun("customer repayment input changed since planning; recheck sales-only banking")
     payloads = []
     for line in (day_dir / "payloads.jsonl").read_text().splitlines():
         if line.strip():
@@ -1206,6 +1221,7 @@ def run_scheduled(out: Path, *, business_day: str, client: QBOClient, source, s:
     DEPOSITED is planned on its own; each READY day is posted when the automatic gates are on (never
     on a dry run), whatever happened to the days before it. Per-day state goes to days.json (not on
     a dry run). A post that stops (QBO error / verification) ends posting for this run."""
+    s = {**s, "_till_source": source}
     state = read_state()
     days = open_days(state, from_day or FLOOR, business_day)
     auto = s["auto"] and not dry_run

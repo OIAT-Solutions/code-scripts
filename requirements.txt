@@ -26,3 +26,6 @@ openpyxl>=3.1.0
 # Google Sheets (read-only service account): Company A till sheet -> Undeposited Funds deposits
 google-auth>=2.23.0
 google-api-python-client>=2.100.0
+
+# Authenticated streaming operational backups
+cryptography>=46,<51

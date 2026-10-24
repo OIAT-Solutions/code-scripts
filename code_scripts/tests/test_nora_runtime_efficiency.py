@@ -98,7 +98,10 @@ class ReceivedPOEvidenceTests(unittest.TestCase):
             page = mock.MagicMock()
             resp = mock.Mock(url="https://example/GetPurchaseOrders")
             resp.request.method = "GET"; resp.text.return_value = json.dumps({"orders": [self.order]})
-            page.on.side_effect = lambda event, handler: handler(resp)
+            page.expect_response.return_value.__enter__.return_value.value = resp
+            default = mock.Mock(url="https://example/GetPurchaseOrders")
+            default.request.method = "GET"; default.text.return_value = json.dumps({"orders": []})
+            page.on.side_effect = lambda event, handler: handler(default)
             pw = mock.MagicMock(); pw.chromium.launch.return_value.new_context.return_value.new_page.return_value = page
             context = mock.MagicMock(); context.__enter__.return_value = pw
             with mock.patch.object(bills, "sync_playwright", return_value=context), \
@@ -121,7 +124,7 @@ class ReceivedPOEvidenceTests(unittest.TestCase):
              mock.patch.object(bills, "capture_epos", return_value=([], {})) as capture:
             bills.collect_pos(args, Path(tmp), ("2026-10-06", "2026-10-23"))
         self.assertTrue(capture.call_args.kwargs["cacheable"](self.order))
-        self.assertEqual(capture.call_args.kwargs["order_from"], "2026-09-15")
+        self.assertEqual(capture.call_args.kwargs["order_from"], "2000-01-01")
 
 
     def test_incomplete_resumed_details_cannot_reappear_in_offline_replay(self):
@@ -132,6 +135,7 @@ class ReceivedPOEvidenceTests(unittest.TestCase):
             page = mock.MagicMock();page.locator.return_value.count.return_value = 0
             resp = mock.Mock(url='https://example/GetPurchaseOrders');resp.request.method = 'GET'
             resp.text.return_value = json.dumps({'orders': [self.order]})
+            page.expect_response.return_value.__enter__.return_value.value = resp
             page.on.side_effect = lambda event, handler: handler(resp)
             pw = mock.MagicMock();pw.chromium.launch.return_value.new_context.return_value.new_page.return_value = page
             context = mock.MagicMock();context.__enter__.return_value = pw

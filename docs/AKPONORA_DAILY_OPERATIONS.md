@@ -7,6 +7,10 @@
 
 ---
 
+## Current hardening controls
+
+See [NORA_STAFF_AND_RECOVERY.md](NORA_STAFF_AND_RECOVERY.md) for payment IDs, delivery/stock overlap holds, cash/bank evidence, November practice and encrypted recovery. The active branch/deployment state is in [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md).
+
 ## What runs every day: `daily_run`
 
 One routine runs everything, in order, for the last closed business day. On the server the portal schedule worker (`scheduler` container) runs it at 18:00 Lagos, from the portal schedule row "Nora daily routine" (setup, env, holds and approvals: [`SERVER_SETUP.md`](SERVER_SETUP.md)):

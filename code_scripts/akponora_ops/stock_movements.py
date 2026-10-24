@@ -38,7 +38,10 @@ def normalise(captures, catalogue, mapping_rows, *, from_date, through_date):
         if not tid.isdigit():
             errors.append("Adjustment detail is missing a stable TransferID")
             continue
-        info = {r[0].strip(): r[1].strip() for r in capture.get("info", []) if len(r) == 2}
+        # The generated reference barcode has different HTML/rendered decoration. Identity is
+        # the validated TransferID in the URL; barcode display is not accounting evidence.
+        info = {r[0].strip(): r[1].strip() for r in capture.get("info", [])
+                if len(r) == 2 and r[0].strip() != "Ref. Number"}
         try:
             when = datetime.strptime(info["Date"], "%d/%m/%Y %H:%M:%S")
         except (KeyError, ValueError):

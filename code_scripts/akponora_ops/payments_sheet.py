@@ -213,7 +213,11 @@ class GoogleSheet:
                 raise SheetError(f"{tab}: duplicate Payment ID; copied rows need a new identity")
             seen.add(pid)
         self.write_cells(updates)
-        return rows
+        fresh = [list(r) + [""] * max(0, 11 - len(r)) for r in self.read(tab, 11)]
+        if len(fresh) != len(rows) or any([clean(x) for x in old[:7] + [old[10]]] !=
+                                         [clean(x) for x in new[:7] + [new[10]]] for old, new in zip(rows, fresh)):
+            raise SheetError(f"{tab}: rows changed while payment identities were installed; refresh before posting")
+        return fresh
 
     def write_cells(self, updates: list[tuple[str, list]]) -> None:
         if updates:
@@ -280,6 +284,31 @@ def label(name: str, day: str, total, doc: str) -> str:
 def doc_of(cell) -> str:
     """The QuickBooks number from a picked label (its last part); a bare number is accepted too."""
     return clean(cell).rsplit(SEP.strip(), 1)[-1].strip() if SEP.strip() in clean(cell) else clean(cell)
+
+
+def current_payment_row(sheet, tab, identity, source_sha):
+    rows = sheet.read(tab, 11)
+    matches = [(n, list(row) + [""] * max(0, 11-len(row))) for n, row in enumerate(rows[1:], 2)
+               if len(row) > 10 and clean(row[10]) == identity]
+    if len(matches) != 1 or digest([clean(c) for c in matches[0][1][:7]]) != source_sha:
+        raise SheetError(f"{tab}: payment row changed or its identity is missing/duplicated; refresh before posting")
+    return matches[0][0]
+
+
+def relocate_updates(sheet, tab, source_rows, updates):
+    """A sort during a run must not put a Posted mark on another payment."""
+    live = sheet.read(tab, 11)
+    positions = {}
+    for n, row in enumerate(live[1:], 2):
+        if len(row) > 10 and clean(row[10]):
+            positions.setdefault(clean(row[10]), []).append((n, row))
+    moved = []
+    for n, value in updates:
+        row = source_rows[n-1];hits = positions.get(clean(row[10]), [])
+        if len(hits) != 1 or [clean(c) for c in hits[0][1][:7]] != [clean(c) for c in row[:7]]:
+            raise SheetError(f"{tab}: payment rows changed before status update; durable results retained for review")
+        moved.append((hits[0][0], value))
+    return moved
 
 
 def bank_for(label: str, banks: list[dict]) -> tuple[dict | None, str]:
@@ -439,6 +468,12 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
             updates.append((n, ["Held: payment identity was edited; review the original operation", "", now_text()]))
             results.append({**row, "status": "held", "reason": "payment identity changed"})
             continue
+        if s.get("_row_checker"):
+            try:
+                s["_row_checker"](key, source_sha)
+            except SheetError as exc:
+                results.append({**row, "status": "held", "reason": str(exc)})
+                continue
         try:
             found = recover_payment(client, kind, body_json, [key, legacy_key], qbo.setdefault("payment_lookup", {})) \
                 if prior or key != legacy_key else None
@@ -515,12 +550,20 @@ def run(*, client, write_client=None, sheet=None, env=None, dry_run: bool = Fals
     invoices = {i["DocNumber"]: i for i in qbo["invoices"] if Decimal(str(i.get("Balance") or 0)) > 0}
     bills = {bill_no(b, dup): b for b in qbo["bills"]}
     wc = None if dry_run else write_client
-    cu, res["credit"] = process("credit", credit_rows, invoices, qbo, s={**s, "post": res["post"]}, client=client,
+    def payment_settings(tab):
+        result = {**s, "post": res["post"]}
+        if not dry_run and hasattr(sheet, "ensure_payment_ids"):
+            result["_row_checker"] = lambda identity, sha: current_payment_row(sheet, tab, identity, sha)
+        return result
+    cu, res["credit"] = process("credit", credit_rows, invoices, qbo, s=payment_settings(CREDIT_PAYMENTS), client=client,
                                 write_client=wc, posted=posted)
-    bu, res["bills"] = process("bill", bill_rows, bills, qbo, s={**s, "post": res["post"]}, client=client,
+    bu, res["bills"] = process("bill", bill_rows, bills, qbo, s=payment_settings(BILL_PAYMENTS), client=client,
                                write_client=wc, posted=posted)
     if not dry_run:
         dump_json(state_path(), posted)
+        if hasattr(sheet, "ensure_payment_ids"):
+            cu = relocate_updates(sheet, CREDIT_PAYMENTS, credit_rows, cu)
+            bu = relocate_updates(sheet, BILL_PAYMENTS, bill_rows, bu)
         # system tabs after posting, so balances shown include tonight's payments
         sys_rows = system_rows(load_qbo(client)) if any(r["status"] == "posted" for r in res["credit"] + res["bills"]) else sys_rows
         sheet.replace_body(CREDIT_SALES, 8, sys_rows["credit"])

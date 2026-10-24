@@ -25,6 +25,9 @@ HTML_DETAIL_JS = """async url => {
   const response = await fetch(url, {credentials:'same-origin'});
   if (!response.ok) throw new Error('Stock detail HTTP ' + response.status);
   const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+  // Script/style text is not visible evidence (the reference cell includes barcode script).
+  doc.querySelectorAll('script,style,noscript,template').forEach(e=>e.remove());
+  doc.querySelectorAll('br').forEach(e=>e.replaceWith(doc.createTextNode('\\n')));
   const g = id => { const e=doc.getElementById(id); return e ? Array.from(e.rows).map(r=>Array.from(r.cells).map(c=>c.textContent.trim())) : null; };
   return {url:response.url, info:g('MainContent_dvTransfers'), items:g('MainContent_gvItems'),
     tables:Array.from(doc.querySelectorAll('table[id]')).map(t=>t.id),

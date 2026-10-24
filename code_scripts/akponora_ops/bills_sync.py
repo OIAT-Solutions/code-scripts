@@ -381,9 +381,17 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
             inp.fill(val)
             inp.press("Tab")
         page.keyboard.press("Escape")
-        page.locator('[data-qa-id="purchase-order__apply-filter-button"]').click()
+        # Wait for THIS filter's response, not the most recently completed default-list request.
+        # A broad history can take longer than a fixed sleep and otherwise silently return a week.
+        with page.expect_response(lambda r: "GetPurchaseOrders" in r.url and r.request.method == "GET",
+                                  timeout=90000) as filtered:
+            page.locator('[data-qa-id="purchase-order__apply-filter-button"]').click()
+        filtered.value.finished()
+        body = json.loads(filtered.value.text())
+        if not isinstance(body, dict) or not isinstance(body.get("orders"), list):
+            raise StopRun("EPOS filtered PO response is incomplete")
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(2500)
+        return body
 
     sel = '[data-qa-id="purchase-order__orders-list__details"]'
     with sync_playwright() as p:
@@ -391,14 +399,12 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         page = browser.new_context(viewport={"width": 1600, "height": 1000}).new_page()
         page.on("response", on_resp)
         epos_login(page, cfg)
-        open_list(page)
-        if not lists:
-            browser.close()
-            raise StopRun("EPOS purchase order list did not load")
-        body = lists[-1]
+        body = open_list(page)
         orders = body.get("orders") or []
         dump_json(ev / "po_list_raw.json", {"order_from": order_from, "order_to": order_to, "body": body})
         by_ref = {str(o["OrderRef"]): o for o in orders}
+        if len(by_ref) != len(orders):
+            raise StopRun("EPOS filtered list repeats an order identity")
         # A resumed evidence directory must also match today's live list. Old evidence without
         # a fingerprint is re-read rather than silently accepted.
         details = {ref: d for ref, d in details.items() if ref in by_ref
@@ -853,8 +859,14 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
         existing = bills_by_doc.get(doc, [])
         if existing:
             b = existing[0]
-            if len(existing) == 1 and abs(D(b.get("TotalAmt"), Decimal(0)) - e["bill_total"]) <= TOL \
-                    and e["bill_total"] > 0:
+            expected = {"bill_total": str(e["bill_total"]), "payload": {
+                "VendorRef": {"value": (vendor or {}).get("Id", "")}, "DocNumber": doc, "TxnDate": txn,
+                "Line": [{"DetailType": "ItemBasedExpenseLineDetail", "Amount": float(r["amount"]),
+                          "ItemBasedExpenseLineDetail": {"ItemRef": {"value": r["rule"].target_qbo_item_id},
+                              "Qty": float(r["qbo_qty"]), "UnitPrice": float(r["unit_cost"]),
+                              "TaxCodeRef": {"value": r["tax_code"]}}} for r in priced]}}
+            if len(existing) == 1 and vendor and len(priced) == len(received) and e["bill_total"] > 0 \
+                    and not verify_bill(b, expected, require_unpaid=False):
                 e["status"] = "SKIP"
                 e["reasons"] = [f"already posted as Bill {b['Id']} ({b['TxnDate']}, {money(D(b['TotalAmt']))})"]
                 e["existing_bill_id"] = b["Id"]
@@ -1181,7 +1193,10 @@ def collect_pos(a, ev: Path, window: tuple[str, str]) -> tuple[list, list]:
     if a.po_list and a.po_details:
         orders, details = load_pos(a.po_list, a.po_details)
     else:
-        order_from = (date.fromisoformat(lookback_from) - timedelta(days=7)).isoformat()
+        # The EPOS report filters order CREATION, whereas our work window filters RECEIPT.
+        # Always discover the full list: a recently received order may have been created long ago.
+        # Only the active receipt/duplicate window needs detail pages; immutable cache still applies.
+        order_from = "2000-01-01"
         order_to = (date.fromisoformat(window[1]) + timedelta(days=1)).isoformat()
         # A held/capped bill does not invalidate its immutable received EPOS source. Reuse the
         # matching source, then apply the CURRENT mapping, vendor, duplicate and approval checks.
@@ -1189,6 +1204,21 @@ def collect_pos(a, ev: Path, window: tuple[str, str]) -> tuple[list, list]:
                                        cacheable=received_order_cacheable,
                                        cache_path=state_dir(TOOL) / PO_CACHE,
                                        fallback_cache_paths=(state_dir("catalogue_sync") / PO_CACHE,))
+    from code_scripts.akponora_ops.work_state import WorkState, digest
+    source_work = WorkState(state_dir(TOOL) / "work.sqlite3")
+    # Collection progress is independent of whether accounting can yet post a bill.
+    # Keep absent old refs too: they remain discoverable/reviewable in the durable work list.
+    source_records = []
+    for o in orders:
+        ref = str(o["OrderRef"])
+        detail = details.get(ref)
+        complete = isinstance(detail, dict) and isinstance(detail.get("Products"), list)
+        source_records.append(("po_source", ref, digest(o), "captured" if complete else "unreceived" if not recv_date(o) else "missing",
+                               {"order": o, "detail": detail if complete else None, "received_date": recv_date(o)}))
+    source_work.put_many(source_records)
+    source_work.put("po_discovery", "latest", digest(orders), "verified",
+                    {"window": list(window), "orders": len(orders), "captured": len(details),
+                     "accounting_cursor_unchanged": True, "captured_at": now_iso()})
     pos, lookback = [], []
     for o in orders:
         d = recv_date(o)
@@ -1248,6 +1278,13 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
             "vendor_actions": [{k: act[k] for k in ("state", "epos_name", "display_name", "vendor_id", "best_score",
                                                     "candidates", "po_refs", "detail")} for act in vendor_actions]}
     summary = write_plan(out, entries, meta)
+    from code_scripts.akponora_ops.work_state import WorkState, digest
+    work = WorkState(state_dir(TOOL) / "work.sqlite3")
+    work.put_many(("po_accounting", e["po"]["ref"], digest(e["po"]),
+                   "verified" if e["status"] in ("SKIP", "EXCLUDED") else e["status"].lower(),
+                   {"status": e["status"], "doc": e["doc"], "received_date": e["po"]["received_date"],
+                    "reasons": e["reasons"], "owner": "OIAT / owner", "plan_dir": str(out)}) for e in entries)
+    dump_json(out / "unresolved_work.json", work.unresolved("po_accounting"))
     return out, summary, entries
 
 
@@ -1285,7 +1322,7 @@ def mapping_drift(p: dict, registry) -> str:
     return ""
 
 
-def verify_bill(bill: dict, p: dict) -> list[str]:
+def verify_bill(bill: dict, p: dict, *, require_unpaid: bool = True) -> list[str]:
     payload = p["payload"]
     problems = []
     if clean((bill.get("VendorRef") or {}).get("value")) != payload["VendorRef"]["value"]:
@@ -1311,7 +1348,11 @@ def verify_bill(bill: dict, p: dict) -> list[str]:
             problems.append(f"line qty {h.get('Qty')} != {w['Qty']}")
         if abs(D(have.get("Amount"), Decimal(0)) - Decimal(str(want["Amount"]))) > Decimal("0.01"):
             problems.append(f"line amount {have.get('Amount')} != {want['Amount']}")
-    if abs(D(bill.get("Balance"), Decimal(0)) - total) > Decimal("0.01"):
+        if clean((h.get("TaxCodeRef") or {}).get("value")) != w["TaxCodeRef"]["value"]:
+            problems.append("line tax code differs")
+        if abs(D(h.get("UnitPrice"), Decimal(0)) - Decimal(str(w["UnitPrice"]))) > Decimal("0.00001"):
+            problems.append("line unit price differs")
+    if require_unpaid and abs(D(bill.get("Balance"), Decimal(0)) - total) > Decimal("0.01"):
         problems.append(f"Balance {bill.get('Balance')} != TotalAmt (bill should be unpaid)")
     return problems
 
@@ -1505,6 +1546,13 @@ def run_post(plan_dir: Path, *, client: QBOClient, registry, approval_ref: str, 
             break
         counts[state] += 1
     results = load_results(results_path)
+    from code_scripts.akponora_ops.work_state import WorkState, digest
+    work = WorkState(state_dir(TOOL) / "work.sqlite3")
+    for ref, result in results.items():
+        old = work.get("po_accounting", ref)
+        work.put("po_accounting", ref, old["source_sha"] if old else digest(result),
+                 "verified" if result.get("status") in DONE_RESULTS else str(result.get("status") or "review").lower(),
+                 {**(old["evidence"] if old else {}), "result": result, "owner": "OIAT / owner"})
     cursor = advance_cursor(plan, results, review, approval_ref, plan_dir) if not stop else read_cursor().get(
         "last_complete_business_date")
     out = {"run_at": now_iso(), "approval_ref": approval_ref, "mode": "auto" if auto else "review",

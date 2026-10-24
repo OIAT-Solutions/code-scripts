@@ -430,7 +430,8 @@ class DailyRun:
         write = None
         if sf.settings(self.base_env)["post"] and not self.dry_run and sf.catchup_done():
             write = self.stock_follow_write_client or QBOClient.for_company_a(allow_writes=True)
-        r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run)
+        r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run,
+                       bills_dir=self.step_dir("bills"))
         res.counts = r
         posted = [x for x in r.get("posted") or [] if x["status"] == "POSTED"]
         failed = [x for x in r.get("posted") or [] if x["status"] == "FAILED"]
@@ -456,7 +457,9 @@ class DailyRun:
         write = None
         if s["post"] and not self.dry_run:
             write = self.payments_write_client or QBOClient.for_company_a(allow_writes=True)
-        r = ps.run(client=client, write_client=write, env=self.base_env, dry_run=self.dry_run, out=Path(res.out))
+        shared = getattr(self, "repayment_source", None)
+        r = ps.run(client=client, write_client=write, sheet=shared["sheet"] if shared else None,
+                   env=self.base_env, dry_run=self.dry_run, out=Path(res.out))
         res.counts = {"post": r["post"], "credit": r["credit"], "bills": r["bills"],
                       "open_credit": r.get("open_credit"), "open_bills": r.get("open_bills")}
         for kind, rows in (("credit payment", r["credit"]), ("bill payment", r["bills"])):
@@ -519,7 +522,9 @@ class DailyRun:
         out = self.step_dir("movements")
         # Sales normally posts yesterday; staff stock additions must include today.
         end = datetime.now(ZoneInfo("Africa/Lagos")).date()
-        start = max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
+        # Sunday: re-read the full open-period movement history to catch older edits.
+        # Other days overlap three days. Every selected detail is still freshly read.
+        start = (date(2026, 10, 1) if end.weekday() == 6 else max(date(2026, 10, 1), end - timedelta(days=2))).isoformat()
         rc = self.run_step("movements", [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
             "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)], out)
@@ -555,6 +560,19 @@ class DailyRun:
             from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
 
             client = QBOClient.for_company_a(allow_writes=False)
+        # Read the repayment input once for cross-process validation. A failed check must
+        # prevent banking a possibly duplicated repayment as sales overage.
+        from code_scripts.akponora_ops import payments_sheet as ps
+        from code_scripts.akponora_ops.money_integrity import repayment_days
+        pay_settings = ps.settings(self.base_env)
+        if pay_settings["sheet_id"]:
+            pay_sheet = ps.GoogleSheet(pay_settings["sheet_id"], ufd.key_path(s))
+            rows = pay_sheet.read(ps.CREDIT_PAYMENTS, 11)
+            ps.headers_ok(rows, ps.CREDIT_PAY_COLS, ps.CREDIT_PAYMENTS)
+            s["repayments_by_day"] = repayment_days(rows, parse_day=ps.parse_day, parse_money=ps.money)
+            s["_repayment_reader"] = lambda: repayment_days(pay_sheet.read(ps.CREDIT_PAYMENTS, 11),
+                                                             parse_day=ps.parse_day, parse_money=ps.money)
+            self.repayment_source = {"sheet": pay_sheet, "rows": rows}
         source = self.uf_sheet or ufd.sheet_source(s)
         accounts = ufd.load_accounts(ufd.accounts_path(s))
         r = ufd.run_scheduled(Path(res.out), business_day=self.date, client=client, source=source, s=s,
@@ -643,12 +661,16 @@ class DailyRun:
         # Stock-changing follow-up runs after the first snapshot. Refresh the comparison only
         # when it actually posted; expose a separate result without repeating movement capture.
         follow = next((r for r in self.results if r.name == "stock_follow"), None)
-        if follow and any(x.get("status") == "POSTED" for x in follow.counts.get("posted") or []):
+        if follow and (follow.status == FAILED or any(x.get("status") == "POSTED" for x in follow.counts.get("posted") or [])):
             final = StepResult(name="final_stock", started_at=_now_utc(), out=str(self.step_dir("final_stock")))
-            rc = self.run_step("final_stock", [self.python, "-m", "code_scripts.akponora_ops.stock_snapshot", "run",
-                                               "--out", final.out], Path(final.out))
-            final.status, final.exit_code, final.finished_at = (OK if rc == 0 else FAILED), rc, _now_utc()
-            final.detail = "fresh EPOS/QBO comparison after stock adjustments; source cutoffs remain explicit"
+            try:
+                rc = self.run_step("final_stock", [self.python, "-m", "code_scripts.akponora_ops.stock_snapshot", "run",
+                                                   "--out", final.out], Path(final.out))
+                final.status, final.exit_code = (OK if rc == 0 else FAILED), rc
+                final.detail = "fresh EPOS/QBO comparison after stock adjustments; source cutoffs remain explicit"
+            except Exception as exc:
+                final.status, final.detail = FAILED, f"final stock verification failed: {type(exc).__name__}: {exc}"
+            final.finished_at = _now_utc()
             self.results.append(final)
             code = self.overall_exit()
         summary = {"tool": TOOL, "company": COMPANY, "business_date": self.date, "dry_run": self.dry_run,
@@ -662,8 +684,26 @@ class DailyRun:
                    "waiting_for_review": [line for r in self.results for line in r.review]}
         summary["completion"] = {0: "finished cleanly", 2: "stopped with failures", 3: "finished with review"}[code]
         summary["exception_owner"] = "OIAT / owner"
+        from code_scripts.paths import STATE_ROOT
+        from code_scripts.akponora_ops.money_integrity import evidence_report, review_register
+        try:
+            summary["money_evidence"] = evidence_report(STATE_ROOT, self.date)
+            summary["review_register"] = review_register(STATE_ROOT)
+        except Exception as exc:
+            summary["operational_review"] = f"evidence register unavailable: {type(exc).__name__}"
         dump_json(self.run_dir / "summary.json", summary)
         dump_json(self.day_dir / "summary.json", summary)
+        if not self.dry_run:
+            from code_scripts.akponora_ops.ops_backup import run_configured
+            try:
+                summary["recovery"] = run_configured(STATE_ROOT)
+            except Exception as exc:
+                summary["recovery"] = {"status": "failed", "reason": type(exc).__name__, "owner": "OIAT"}
+                summary["waiting_for_review"].append("Recovery copy failed; OIAT must check backup storage and restore evidence")
+                if summary["exit_code"] == EXIT_OK:
+                    summary.update(exit_code=EXIT_REVIEW, status="review", completion="finished with review")
+            dump_json(self.run_dir / "summary.json", summary)
+            dump_json(self.day_dir / "summary.json", summary)
         if self.send_slack:
             try:
                 self.slack(closing_text(summary))
