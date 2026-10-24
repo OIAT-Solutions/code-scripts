@@ -123,3 +123,23 @@ class ReceivedPOEvidenceTests(unittest.TestCase):
         self.assertTrue(capture.call_args.kwargs["cacheable"](self.order))
         self.assertEqual(capture.call_args.kwargs["order_from"], "2026-09-15")
 
+
+    def test_incomplete_resumed_details_cannot_reappear_in_offline_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'po_details.jsonl').write_text(json.dumps({
+                'OrderRef': 42, '_list_fingerprint': bills.po_fingerprint(self.order), 'Products': None}) + '\n')
+            page = mock.MagicMock();page.locator.return_value.count.return_value = 0
+            resp = mock.Mock(url='https://example/GetPurchaseOrders');resp.request.method = 'GET'
+            resp.text.return_value = json.dumps({'orders': [self.order]})
+            page.on.side_effect = lambda event, handler: handler(resp)
+            pw = mock.MagicMock();pw.chromium.launch.return_value.new_context.return_value.new_page.return_value = page
+            context = mock.MagicMock();context.__enter__.return_value = pw
+            with mock.patch.object(bills, 'sync_playwright', return_value=context), \
+                 mock.patch.object(bills, 'company_config'), mock.patch.object(bills, 'epos_login'), \
+                 mock.patch.object(bills, 'goto_retry'):
+                _, details = bills.capture_epos(root, order_from='2026-10-01', order_to='2026-10-23',
+                                                want=lambda o: True)
+            self.assertEqual(details, {})
+            self.assertEqual((root / 'po_details.jsonl').read_text(), '')
+            self.assertEqual(json.loads((root / 'capture_metrics.json').read_text())['missing_details'], 1)

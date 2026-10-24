@@ -402,7 +402,8 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         # A resumed evidence directory must also match today's live list. Old evidence without
         # a fingerprint is re-read rather than silently accepted.
         details = {ref: d for ref, d in details.items() if ref in by_ref
-                   and d.get("_list_fingerprint") == po_fingerprint(by_ref[ref])}
+                   and d.get("_list_fingerprint") == po_fingerprint(by_ref[ref])
+                   and isinstance(d.get("Products"), list)}
         cached = {}
         if cache_path is not None:
             # Prefer this tool's evidence. The other step's matching complete capture can fill
@@ -412,14 +413,15 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
                     if ref not in details and ref not in cached:
                         cached[ref] = {**d, "_list_fingerprint": po_fingerprint(by_ref[ref])}
             details.update(cached)
-            # Each run must be replayable from its OWN evidence, including cached lookback POs.
-            # Also import shared hits into this tool's cache for future runs.
-            with open(details_path, "w", encoding="utf-8") as fh:
-                for d in details.values():
-                    fh.write(json.dumps(d) + "\n")
+            # Import shared hits into this tool's cache for future runs.
             with open(cache_path, "a", encoding="utf-8") as fh:
                 for ref, d in cached.items():
                     fh.write(json.dumps({"ref": ref, "fingerprint": po_fingerprint(by_ref[ref]), "detail": d}) + "\n")
+        # Every run is replayable from its own evidence. Discard invalid resumed records even
+        # when no persistent cache is configured; otherwise an offline replay could revive them.
+        with open(details_path, "w", encoding="utf-8") as fh:
+            for d in details.values():
+                fh.write(json.dumps(d) + "\n")
         needed = {str(o["OrderRef"]) for o in orders if want(o)} - set(details)
         requested_pages = len(needed)
         captured_pages = 0

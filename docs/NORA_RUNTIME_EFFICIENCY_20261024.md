@@ -1,6 +1,6 @@
 # Nora runtime efficiency — active checkpoint
 
-Updated: 24 October 2026, 16:07 UTC. Owner requested implementation and production-host validation before
+Updated: 24 October 2026, 16:26 UTC. Owner requested implementation and production-host validation before
 the next 17:00 UTC run. Branch: `codex/nora-run-efficiency`, base `7d3bf5b` (current GitHub master/production).
 
 ## Authorization and scope
@@ -25,7 +25,7 @@ the next 17:00 UTC run. Branch: `codex/nora-run-efficiency`, base `7d3bf5b` (cur
   fingerprint invalidation, held/capped bills, live QBO duplicate checks and existing cursor semantics.
 - [x] Share receipt caches between catalogue and bills where freshness/identity permit.
 - [x] Add useful capture/step timing metadata and test the affected contracts.
-- [ ] Validate cached evidence and read-only QBO/browser behavior on the production host.
+- [x] Validate cached evidence and read-only QBO/browser behavior on the production host.
 - [ ] Push branch and PR, deploy the validated branch without interrupting running jobs, verify services.
 - [ ] Observe next scheduled run before claiming live acceptance; merge to master only when justified.
 
@@ -34,14 +34,17 @@ the next 17:00 UTC run. Branch: `codex/nora-run-efficiency`, base `7d3bf5b` (cur
 Gitignored investigation and implementation evidence: `outputs/run_performance_20261024/`.
 No QBO exports, runtime state, live stock data, tokens or workbooks may be committed.
 Initial production revision: `7d3bf5b6c5c8e2c844d7870588a42b56c4102548`.
-Before replacing any image, save the old image under a timestamped rollback tag and record its ID here.
+Rollback image saved as `oiat-portal:nora-before-efficiency-20261024`, image ID
+`sha256:d32fcf4f3feba96ba86d2d847ad47bb045219d1d4236183705283498dda32757`.
+Rollback: tag that image `oiat-portal:latest`, then recreate only web and scheduler while idle.
 Do not recreate web/scheduler while any RunJob or global lock is active. Do not run duplicate posting
 writers. If validation/deployment cannot safely finish before the scheduled run, leave the known-good
 runtime intact, preserve the branch and explain exactly what remains.
 
 ## Current result
 
-16:11 UTC: 240 focused tests pass, including the two-pass standing-approval flows, September history,
+16:26 UTC: all 474 code_scripts tests pass locally (240 focused tests also passed in the isolated,
+network-disabled candidate image). Coverage includes, the two-pass standing-approval flows, September history,
 October Inventory/NonInventory validation, held/capped bills, mapping changes, shared-cache replay and
 payment contracts. A 563-item regression proves 29 reads per pass (58 across both), with missing,
 duplicate, wrong-identity/asset and partial responses refusing before any partial resolution is published.
@@ -56,4 +59,23 @@ a held/capped bill complete or skips newly received old orders within the existi
 Stock-movement detail caching is not enabled without evidence that completed adjustments cannot change.
 Existing movement coverage/classification/posting is retained; new per-subprocess timing separates the
 snapshot from movement capture. Broader incremental discovery/cursor redesign and payment-ID/schema
-changes are outside this timed release. No runtime changes or financial writes have occurred yet.
+changes are outside this timed release.
+
+Production-host checks (GET/browser reads only; no financial writes):
+- Fresh grouped QBO validation resolved 563 items (500 Inventory, 63 NonInventory) in 7.787 seconds,
+  using 29 queries. Twenty records independently matched exact GETs for all required validator fields.
+- Fresh EPOS browser capture fetched 331 list entries, selected 198 and reused complete matching
+  saved evidence. No detail pages were needed; no selected details were missing. Capture took
+  14.529 seconds. All source fields for 155 historical plan POs exactly match original raw evidence.
+- Historical-plan summaries intentionally omit raw lines; compare raw evidence, not the summary,
+  when proving line equivalence. Initial comparison was corrected for that format distinction.
+- Live production caches were only read; validation used a temporary cache copy.
+- PR #64: https://github.com/OIAT-Solutions/code-scripts/pull/64 (draft until deployment checks pass).
+- Production checkout is the implementation branch; services still run the original image pending
+  final rebuild/idle check. Next schedule remains enabled at 17:00 UTC. No active jobs at last check.
+- Follow-up hardens resumed evidence: incomplete records are removed from disk even without a
+  persistent cache, so offline replay cannot revive invalid records. Regression covered locally.
+
+No complete scheduled run has executed with the new image yet. Do not report live acceptance until
+its outcome and per-step timing are checked. The read-only timings above are component measurements,
+not a promised total daily runtime.
