@@ -229,6 +229,22 @@ class MoneyAndReceiptTests(unittest.TestCase):
 
 
 class FinalVerificationTests(unittest.TestCase):
+    @unittest.skipIf(dr.os.name == 'nt', 'production collectors run in Linux containers')
+    def test_collector_deadline_stops_its_process_group_but_never_financial_writer(self):
+        for module, readonly in [('stock_movements',True),('bills_sync',False)]:
+            with tempfile.TemporaryDirectory() as folder:
+                proc=mock.Mock(pid=12345)
+                proc.wait.side_effect=[dr.subprocess.TimeoutExpired('test',30),0]
+                with mock.patch.object(dr.subprocess,'Popen',return_value=proc), \
+                     mock.patch.object(dr.time,'monotonic',side_effect=[0,100]), \
+                     mock.patch.object(dr.os,'killpg') as kill:
+                    result=dr.run_command(['python','-m','code_scripts.akponora_ops.'+module],
+                        log_path=Path(folder)/'log.txt',env={'OIAT_READ_STEP_TIMEOUT_SECONDS':'60'})
+                self.assertEqual(result,2 if readonly else 0)
+                self.assertEqual(kill.call_count,1 if readonly else 0)
+                heartbeat=json.loads((Path(folder)/'heartbeat.json').read_text())
+                self.assertEqual(heartbeat['safe_to_stop'],readonly)
+
     def test_failed_final_snapshot_preserves_run_summary(self):
         with tempfile.TemporaryDirectory() as folder:
             run=dr.DailyRun('2026-10-06',root=Path(folder),dry_run=True,send_slack=False)

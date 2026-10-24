@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -119,10 +120,11 @@ def run_command(cmd: list[str], *, log_path: Path, env: dict, cwd: Path = REPO_R
         log.write(f"$ {' '.join(cmd)}\n")
         log.flush()
         started = time.monotonic()
-        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT)
         read_only = any(m in cmd for m in ("code_scripts.akponora_ops.stock_snapshot",
                                            "code_scripts.akponora_ops.stock_movements",
                                            "code_scripts.akponora_ops.item_guard"))
+        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=os.name != "nt")
         limit = max(60, int(env.get("OIAT_READ_STEP_TIMEOUT_SECONDS", "1200")))
         while True:
             try:
@@ -133,11 +135,23 @@ def run_command(cmd: list[str], *, log_path: Path, env: dict, cwd: Path = REPO_R
                           "updated_at": _now_utc(), "status": "stalled" if elapsed > limit else "running",
                           "safe_to_stop": read_only})
                 if elapsed > limit and read_only:
-                    proc.terminate()
+                    if os.name != "nt":
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        proc.terminate()
                     try:
                         proc.wait(timeout=20)
                     except subprocess.TimeoutExpired:
-                        proc.kill()
+                        if os.name != "nt":
+                            try:
+                                os.killpg(proc.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        else:
+                            proc.kill()
                         proc.wait()
                     log.write("Read-only collection exceeded its deadline; no financial writer was interrupted.\n")
                     return 2
