@@ -1,5 +1,12 @@
 # Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
 
+## Active branch work — 24 Oct 2026 whole-process hardening
+
+Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.
+Owner requests a single follow-up branch, production validation/run on that branch, and review before merge.
+Branch `codex/nora-process-hardening`; do not merge to master during implementation.
+Do not restart an active financial run. Check pending schedule-delay and stock-editability questions.
+
 ## Deployed work — 24 Oct 2026 runtime efficiency
 
 Read [`docs/NORA_RUNTIME_EFFICIENCY_20261024.md`](docs/NORA_RUNTIME_EFFICIENCY_20261024.md) before continuing this work.

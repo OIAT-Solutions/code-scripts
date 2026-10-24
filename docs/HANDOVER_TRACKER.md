@@ -1,5 +1,9 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
+## Active whole-process hardening — 24 October 2026
+
+Read [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md). Owner requests implementation and production run on `codex/nora-process-hardening`; master must remain unchanged until later run review.
+
 ## Deployed runtime improvements — 24 October 2026
 
 Runtime efficiency PR #64 merged as `8632c76` on master. Mac and production checkouts are on master.
