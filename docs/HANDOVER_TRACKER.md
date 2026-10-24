@@ -1,8 +1,10 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
-## Active implementation — 24 October 2026
+## Deployed runtime improvements — 24 October 2026
 
-Runtime efficiency work is on `codex/nora-run-efficiency`, from current master `7d3bf5b`.
+Runtime efficiency PR #64 merged as `8632c76` on master. Mac and production checkouts are on master.
+Implementation `7c3d5aa` is running in both web and scheduler; 474 tests and production read-only checks pass.
+The first complete scheduled routine at 17:00 UTC has not run yet; its duration/outcome remains unverified.
 Read [NORA_RUNTIME_EFFICIENCY_20261024.md](NORA_RUNTIME_EFFICIENCY_20261024.md) for scope, test evidence,
 production state and rollback. Owner requested validation before the 17:00 UTC scheduled run.
 The dates/revisions in older sections below are historical; use the active checkpoint for this release.

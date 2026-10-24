@@ -1,9 +1,11 @@
 # Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
 
-## Active work — 24 Oct 2026 runtime efficiency
+## Deployed work — 24 Oct 2026 runtime efficiency
 
 Read [`docs/NORA_RUNTIME_EFFICIENCY_20261024.md`](docs/NORA_RUNTIME_EFFICIENCY_20261024.md) before continuing this work.
-Branch `codex/nora-run-efficiency` starts from current production/master `7d3bf5b`.
+Implemented from master `7d3bf5b` on `codex/nora-run-efficiency`; PR #64 merged as `8632c76`.
+Mac and production checkouts are back on master; web/scheduler run the validated implementation.
+The first full scheduled run at 17:00 UTC is still pending: check the checkpoint before claiming total runtime gains.
 Owner authorized implementation on the Mac and validation on the production host before the 17:00 UTC run;
 merge/return production to master only after validation. Preserve all existing financial approval gates.
 No EPOS API. Received POs are immutable; later deliveries use new POs (owner confirmed).
