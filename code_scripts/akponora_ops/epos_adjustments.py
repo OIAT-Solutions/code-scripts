@@ -56,10 +56,14 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
     def open_list(page, url, cal_id, grid, pageno):
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
-        if page.locator(f"#{cal_id} a[title='{from_day}']").count() == 0:
-            # The daily three-day overlap can cross a month boundary.
+        for _ in range(36):
+            if page.locator(f"#{cal_id} a[title='{from_day}']").count():
+                break
+            # Daily overlap and periodic open-period audits can cross multiple months.
             page.locator(f"#{cal_id}").get_by_text("<", exact=True).click()
             settle(page)
+        else:
+            raise RuntimeError("EPOS stock calendar did not reach the requested audit month")
         page.locator(f"#{cal_id} a[title='{from_day}']").first.click()  # From-date filter (view only)
         settle(page)
         if pageno > 1:

@@ -193,6 +193,12 @@ class StockHardeningTests(unittest.TestCase):
         events=sf.delivery_overlaps(sf.collect([self.fixture.capture([event('a')])]),folder)
         self.assertIn('possible delivery', sf.classify(next(iter(events.values())),self.s['cap'])[1])
 
+    def test_wide_audit_never_automatically_backfills_newly_discovered_old_stock(self):
+        capture=self.fixture.capture([event('a')])
+        result=sf.nightly(capture,self.tmp/'night',write_client=self.qbo,env={},auto_from_date='2026-10-20')
+        self.assertEqual(result['not_automatic'],1)
+        self.assertEqual(self.qbo.posts,[])
+
 
 class MoneyAndReceiptTests(unittest.TestCase):
     def test_cancelled_zero_receipt_does_not_need_details_but_contradictory_receipt_does(self):

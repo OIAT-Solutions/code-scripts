@@ -119,6 +119,8 @@ def classify(e: dict, cap: Decimal) -> tuple[str, str]:
         return kind[0], "no quantity change"
     if e["_day"] < FLOOR:
         return kind[0], "before 1 October"
+    if e.get("_audit_only"):
+        return kind[0], "older movement discovered by completeness audit; explicit review required"
     if kind[0] == "NA":
         return kind[0], "delivery/PO review required for New Stock or an unexplained change"
     if e.get("delivery_overlap"):
@@ -363,12 +365,14 @@ def catchup_done() -> bool:
 
 
 def nightly(movements_summary: Path, out: Path, *, client=None, write_client=None, env=None, dry_run=False,
-            bills_dir=None) -> dict:
+            bills_dir=None, auto_from_date=None) -> dict:
     """Auto-post this run's eligible events (within the cap) once the catch-up is posted; over-cap ones go to
     an approval plan under portal_reads/stock_follow/."""
     s = settings(env)
     capture = json.loads(movements_summary.read_text())
     events = with_transfer_totals(collect([movements_summary]))
+    if auto_from_date:
+        events = {identity: {**e, "_audit_only": e["_day"] < auto_from_date} for identity, e in events.items()}
     if bills_dir is not None:
         events = delivery_overlaps(events, bills_dir)
     res = {"events": len(events), "posted": [], "waiting_approval": 0, "not_automatic": 0, "note": ""}

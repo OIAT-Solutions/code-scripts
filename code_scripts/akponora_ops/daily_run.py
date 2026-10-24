@@ -445,7 +445,8 @@ class DailyRun:
         if sf.settings(self.base_env)["post"] and not self.dry_run and sf.catchup_done():
             write = self.stock_follow_write_client or QBOClient.for_company_a(allow_writes=True)
         r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run,
-                       bills_dir=self.step_dir("bills"))
+                       bills_dir=self.step_dir("bills"),
+                       auto_from_date=max(date(2026, 10, 1), datetime.now(TZ).date() - timedelta(days=2)).isoformat())
         res.counts = r
         posted = [x for x in r.get("posted") or [] if x["status"] == "POSTED"]
         failed = [x for x in r.get("posted") or [] if x["status"] == "FAILED"]
