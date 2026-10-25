@@ -160,7 +160,7 @@ class MovementTests(unittest.TestCase):
     def test_capture_is_fresh_and_bounded(self):
         called = []
         with TemporaryDirectory() as folder:
-            def reader(path, start, sources, company):
+            def reader(path, start, sources, company, *, through_date=None):
                 called.append((path, start, sources, company))
             a = collect(Path(folder), "2026-10-01", "2026-10-06", reader=reader)
             b = collect(Path(folder), "2026-10-01", "2026-10-06", reader=reader)

@@ -8,7 +8,9 @@ Branch `codex/nora-process-hardening`; do not merge to master during implementat
 Owner said keep today's 17:00 UTC run; it finished 17:19:53 UTC in 19m52s (prior PR #64).
 Hardening code through `606302c` is now rebuilt, validated and deployed to web/scheduler on this branch.
 497 tests pass on Mac and isolated server image; live hashes/HTTP/single scheduler pass.
-First full scheduled hardening run: 25 Oct 17:00 UTC. Keep PR #65 unmerged pending that review.
+25 Oct full run failed: Sunday requested 25 days but the collector accepts at most seven.
+Stock-only repair/recovery is authorized by owner chat on 25 Oct; keep PR #65 unmerged.
+Sales and bills already posted: never replay the full financial day for this recovery.
 Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
 Stock editability is unknown: keep checking details for edits, no immutable movement-detail cache.
 

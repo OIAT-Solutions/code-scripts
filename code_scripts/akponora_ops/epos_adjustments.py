@@ -6,6 +6,7 @@ stock_movements, never by barcode. Runtime browser automation is isolated here.
 """
 from __future__ import annotations
 import json
+import calendar
 import re
 import time
 from datetime import datetime
@@ -37,7 +38,36 @@ TAKES_URL = "https://www.eposnowhq.com/Pages/BackOffice/StockTakeList.aspx"
 MOVES_URL = "https://www.eposnowhq.com/Pages/BackOffice/StockMovementList.aspx"
 
 
-def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -> None:
+def select_calendar_date(page, calendar_id, target, settle):
+    label = f"{target.day} {target.strftime('%B')}"
+    for _ in range(36):
+        cal = page.locator(f"#{calendar_id}")
+        caption = " ".join(cal.locator("tr").first.inner_text().split())
+        match = re.search(r"(" + "|".join(calendar.month_name[1:]) + r")\s+(\d{4})", caption)
+        if not match:
+            raise RuntimeError("EPOS stock calendar month/year could not be verified")
+        shown = (int(match[2]), list(calendar.month_name).index(match[1]))
+        desired = (target.year, target.month)
+        if shown == desired:
+            cal.locator(f"a[title='{label}']").first.click()
+            settle(page)
+            return
+        cal.get_by_text("<" if shown > desired else ">", exact=True).click()
+        settle(page)
+    raise RuntimeError("EPOS stock calendar did not reach the requested month")
+
+
+def row_dates(cells):
+    found = []
+    for cell in cells:
+        try:
+            found.append(datetime.strptime(cell, "%d/%m/%Y %H:%M:%S"))
+        except ValueError:
+            pass
+    return found
+
+
+def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *, through_date=None) -> None:
     from urllib.parse import unquote, urljoin
 
     from playwright.sync_api import sync_playwright
@@ -46,7 +76,9 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
     metrics = {"fresh_html_details": 0, "browser_detail_fallbacks": 0, "lists": 0}
     cfg = company_config(company_key)
     start = datetime.strptime(from_date, "%Y-%m-%d")
-    from_day = f"{start.day} {start.strftime('%B')}"  # calendar link title, e.g. "16 September"
+    end = datetime.strptime(through_date, "%Y-%m-%d") if through_date else None
+    if end and not 0 <= (end - start).days < 7:
+        raise ValueError("Each stock browser capture must cover at most seven days")
     stop_before = start
 
     def settle(page, ms=2500):
@@ -56,16 +88,10 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
     def open_list(page, url, cal_id, grid, pageno):
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
-        for _ in range(36):
-            if page.locator(f"#{cal_id} a[title='{from_day}']").count():
-                break
-            # Daily overlap and periodic open-period audits can cross multiple months.
-            page.locator(f"#{cal_id}").get_by_text("<", exact=True).click()
-            settle(page)
-        else:
-            raise RuntimeError("EPOS stock calendar did not reach the requested audit month")
-        page.locator(f"#{cal_id} a[title='{from_day}']").first.click()  # From-date filter (view only)
-        settle(page)
+        select_calendar_date(page, cal_id, start, settle)
+        if end:
+            # Both live stock report pages expose these separate From/To calendars.
+            select_calendar_date(page, "MainContent_calToDate", end, settle)
         if pageno > 1:
             page.evaluate(f"__doPostBack('ctl00$MainContent${grid}','Page${pageno}')")
             settle(page)
@@ -87,6 +113,9 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
             if not rows:
                 break
             for i, r in enumerate(rows):
+                dates = row_dates(r["cells"])
+                if dates and (max(dates).date() < start.date() or (end and min(dates).date() > end.date())):
+                    continue  # never fetch another chunk's detail or list it as missing evidence
                 listing.append({"page": pageno, "row": i, "cells": r["cells"]})
                 if (pageno, i) in done or not r["btn"]:
                     continue
@@ -195,5 +224,6 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str) -
                 scrape(page, "stockmovements", MOVES_URL, cals[0], gv[0] if gv else "gvTransfers")
         browser.close()
     metrics["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    metrics["window"] = [from_date, through_date]
     (out / "capture_metrics.json").write_text(json.dumps(metrics, indent=1))
 

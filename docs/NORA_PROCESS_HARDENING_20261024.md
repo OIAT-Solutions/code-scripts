@@ -2,7 +2,7 @@
 
 Started 24 October 2026 at 16:50 UTC. Owner explicitly requests implementing the all-round review in one branch, running production from that branch, and reviewing today's run before any merge to master. Do NOT merge this branch without that later review.
 
-CURRENT: deployed to web/scheduler at 21:48 UTC, 24 Oct. First full branch run is 25 Oct 17:00 UTC; PR #65 stays unmerged. See Deployed result below.
+CURRENT (25 Oct): first branch run failed at stock movement collection (Sunday caller exceeded reader seven-day limit). Owner authorized repair and stock-only recovery if valid. Fix/testing/deployment in progress; PR #65 stays unmerged. Completed sales/bills must not be replayed. See 25 October recovery section below.
 
 Branch: `codex/nora-process-hardening`, base master `df046f4`. Prior runtime efficiency release PR #64 is already deployed. Company A only; no EPOS API; existing financial caps/approval identities remain unless a documented hardening holds uncertain work. No test financial writes or historical backfills.
 
@@ -75,3 +75,11 @@ Rollback while idle: tag `oiat-portal:nora-before-hardening-20261024` as `oiat-p
 - [ ] Staff practise in a copy, provide real cash/statement evidence and sign genuine outstanding opening balances at the November cutoff. No staff practice/live signoff has been fabricated.
 
 21:52 UTC final evidence refresh: the outstanding-balance snapshot records 51 open customer invoices and 857 open supplier bills (includes older/manual QBO records; owner review required). Final protected set includes that evidence: 2,437 files restored, all 23 raw/processed archive references included, 5 changed / 2,432 reused, 14.194s backup plus complete isolated restore. Retention removed one superseded same-day index and one unreferenced blob while retaining two independently restorable sets. Both payment tabs have Payment ID headers installed/read back, zero staff payment rows, and no financial test writes.
+
+## 25 October — Sunday failure and authorized stock-only recovery (in progress)
+
+The first hardening scheduled run (job 61b453dd48db4a22b9c86b798a0655bf, business date 24 Oct) ran 17:00:06–17:07:11 UTC, exit 2. Products, bills, sales, credit, guard, payments and encrypted restore completed; stock snapshot completed but movement collection failed before browser capture. Sunday caller requested 1–25 Oct while stock_movements.collect enforces at most seven days. This caller/reader integration gap was introduced by the hardening change; 7m04s is not a valid completed-run performance comparison. Seven sales receipts matched EPOS; four bills and two items were created, so do not replay the entire financial day.
+
+Owner now explicitly authorizes fixing and running the particular pipeline if valid. Stay on codex/nora-process-hardening / PR #65, unmerged. Fix uses explicit weekly audit mode that splits into exact disjoint <=7-day captures, binds both live From and To calendars, and records a completeness index. Preserve daily/financial caps and old-event review-only cutoff. New integration test runs actual Sunday daily command through stock_movements.main, the real collect guard, index and normalizer, with only browser IO replaced. All 503 local tests pass, including stock-only recovery requiring a read-only delivery refresh. Live From/To controls verified on both EPOS pages for 1–7 Oct. Small live capture/normalization and final production candidate/recovery still in progress. No stock recovery write has run yet. Evidence: outputs/nora_stock_recovery_20261025/ (gitignored).
+
+22:22 UTC recovery preparation: all 503 local tests pass (3.134s). Live bounded date controls verified; candidate one-day 25 Oct capture completed with both source lists, zero events/errors (31.549s). A known nonempty 7 Oct read-only capture/normalization is being checked before activation. Stock-only recovery now explicitly refreshes current delivery evidence using bills_sync PLAN only, and refuses stock posting if that refresh fails. No financial recovery has run.

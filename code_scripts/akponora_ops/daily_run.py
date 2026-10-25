@@ -441,12 +441,24 @@ class DailyRun:
         if not movements.exists():
             res.status, res.detail = SKIPPED, "no stock-movement capture in this run"
             return
+        end = datetime.now(TZ).date()
+        auto_from = max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
+        bills_dir = self.step_dir("bills")
+        if "bills" not in self.only:
+            # A stock-only recovery must still check current deliveries. Refresh PO evidence
+            # through today's date in PLAN mode; no bill/vendor/payment write is authorized here.
+            bills_dir = self.step_dir("stock_receipts")
+            rc = self.run_step("stock_receipts", [self.python, "-m", "code_scripts.akponora_ops.bills_sync", "plan",
+                               "--from", auto_from, "--to", end.isoformat(), "--out", str(bills_dir), "--no-slack"], bills_dir)
+            if rc:
+                res.status, res.exit_code = FAILED, rc
+                res.detail = "stock-only recovery could not refresh delivery evidence; no stock adjustment allowed"
+                return
         write = None
         if sf.settings(self.base_env)["post"] and not self.dry_run and sf.catchup_done():
             write = self.stock_follow_write_client or QBOClient.for_company_a(allow_writes=True)
         r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run,
-                       bills_dir=self.step_dir("bills"),
-                       auto_from_date=max(date(2026, 10, 1), datetime.now(TZ).date() - timedelta(days=2)).isoformat())
+                       bills_dir=bills_dir, auto_from_date=auto_from)
         res.counts = r
         posted = [x for x in r.get("posted") or [] if x["status"] == "POSTED"]
         failed = [x for x in r.get("posted") or [] if x["status"] == "FAILED"]
@@ -540,9 +552,12 @@ class DailyRun:
         # Sunday: re-read the full open-period movement history to catch older edits.
         # Other days overlap three days. Every selected detail is still freshly read.
         start = (date(2026, 10, 1) if end.weekday() == 6 else max(date(2026, 10, 1), end - timedelta(days=2))).isoformat()
-        rc = self.run_step("movements", [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
+        command = [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
-            "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)], out)
+            "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)]
+        if end.weekday() == 6:
+            command.append("--weekly-audit")
+        rc = self.run_step("movements", command, out)
         report = read_json(out / "summary.json", {}) or {}
         events = report.get("events") or []
         res.counts["movement_events"] = len(events)
