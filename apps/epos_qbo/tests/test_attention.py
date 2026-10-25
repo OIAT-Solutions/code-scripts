@@ -319,6 +319,18 @@ class AttentionTests(CompanyAOpsFixtureMixin, TestCase):
         self.assertIn("need review",record.result)
         self.assertIsNotNone(record.finished_at)
 
+    def test_stock_recovery_worker_forwards_explicit_audit_resume_and_selected_steps(self):
+        job=RunJob.objects.create(scope=RunJob.SCOPE_PORTAL_REVIEW)
+        record=PortalReviewAction.objects.create(job=job,actor="reviewer",action="daily",reason="stock recovery",
+            confirmation_id="stock-resume",payload={"date":"2026-10-24","dry_run":False,
+                "only":"stock,stock_follow","stock_audit_resume":"/data/synthetic/audit"})
+        with mock.patch("code_scripts.akponora_ops.daily_run.last_closed_business_date",return_value=date(2026,10,24)), \
+             mock.patch.object(attention_actions.subprocess,"call",return_value=0) as call:
+            self.assertEqual(attention_actions.execute(record),0)
+        command=call.call_args.args[0]
+        self.assertEqual(command[command.index("--only")+1],"stock,stock_follow")
+        self.assertEqual(command[command.index("--stock-audit-resume")+1],"/data/synthetic/audit")
+
     @mock.patch("apps.epos_qbo.services.job_runner.dispatch_next_queued_job")
     def test_local_deferral_needs_reason_but_no_financial_approval_reference(self, dispatch):
         day = self.folder / "uf/2026-10-02"

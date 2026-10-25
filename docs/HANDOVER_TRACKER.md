@@ -2,7 +2,7 @@
 
 ## Active whole-process hardening — 24 October 2026
 
-Read [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md). Implemented and deployed on `codex/nora-process-hardening` (runtime code through `606302c`, draft PR #65). Mac and production stay on this branch; master remains unchanged. 497 local/server-image tests, live hashes/HTTP/single-worker checks and encrypted local restore pass. The first full branch run is 25 Oct 17:00 UTC; review it before merge. Staff/opening-balance signoff and offsite/key custody remain pending. See [NORA_STAFF_AND_RECOVERY.md](NORA_STAFF_AND_RECOVERY.md).
+Read [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md). Implemented and deployed on `codex/nora-process-hardening` (Sunday stock repair `ac585e3`, draft PR #65). Mac and production stay on this branch; master remains unchanged. The 25 Oct scheduled run failed because Sunday exceeded the collector's seven-day limit. The first authorized stock-only recovery then hit the ordinary 20-minute read timeout in its fourth section; no recovery adjustment ran. Three complete historical sections are preserved. Follow-up timeout/resume fix passes 508 local tests and 26 portal tests; isolated image validation/activation are pending. Do not queue another job until those pass or replay already-posted sales/bills. Full successful scheduled-run acceptance remains open. Staff/opening-balance signoff and offsite/key custody remain pending. See [NORA_STAFF_AND_RECOVERY.md](NORA_STAFF_AND_RECOVERY.md).
 
 ## Deployed runtime improvements — 24 October 2026
 

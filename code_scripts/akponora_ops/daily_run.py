@@ -113,6 +113,15 @@ def read_json(path: Path, default=None):
         return default
 
 
+def read_step_limit(cmd: list[str], env: dict) -> int:
+    limit = max(60, int(env.get("OIAT_READ_STEP_TIMEOUT_SECONDS", "1200")))
+    if "code_scripts.akponora_ops.stock_movements" in cmd and "--weekly-audit" in cmd:
+        from code_scripts.akponora_ops.stock_movements import capture_windows
+        windows = capture_windows(cmd[cmd.index("--from-date") + 1], cmd[cmd.index("--through-date") + 1])
+        limit *= len(windows)  # each bounded section gets the ordinary collector allowance
+    return limit
+
+
 def run_command(cmd: list[str], *, log_path: Path, env: dict, cwd: Path = REPO_ROOT) -> int:
     """Run one step subprocess, its stdout+stderr going to ``log_path``. Returns the exit code."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,9 +132,9 @@ def run_command(cmd: list[str], *, log_path: Path, env: dict, cwd: Path = REPO_R
         read_only = any(m in cmd for m in ("code_scripts.akponora_ops.stock_snapshot",
                                            "code_scripts.akponora_ops.stock_movements",
                                            "code_scripts.akponora_ops.item_guard"))
+        limit = read_step_limit(cmd, env)
         proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT,
                                 start_new_session=os.name != "nt")
-        limit = max(60, int(env.get("OIAT_READ_STEP_TIMEOUT_SECONDS", "1200")))
         while True:
             try:
                 return proc.wait(timeout=30)
@@ -185,10 +194,14 @@ class DailyRun:
                  root: Path | None = None, runner: Callable = run_command, slack: Callable | None = None,
                  send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
                  uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None,
-                 payments_client=None, payments_write_client=None, stock_follow_write_client=None):
+                 payments_client=None, payments_write_client=None, stock_follow_write_client=None,
+                 stock_audit_resume: Path | None = None):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
+        if stock_audit_resume and set(self.only) != {"stock", "stock_follow"}:
+            raise ValueError("Interrupted stock audit recovery selects only stock,stock_follow")
+        self.stock_audit_resume = stock_audit_resume
         self.runner = runner
         self.slack = slack or send_summary_slack
         self.send_slack = send_slack
@@ -555,8 +568,14 @@ class DailyRun:
         command = [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
             "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)]
-        if end.weekday() == 6:
+        if end.weekday() == 6 or self.stock_audit_resume:
             command.append("--weekly-audit")
+        if self.stock_audit_resume:
+            # A recovery may cross midnight; retain the original audit's start, extend its
+            # end to today, and freshly collect every section overlapping recent stock.
+            prior = read_json(Path(self.stock_audit_resume) / "audit_index.json", {})
+            command[command.index("--from-date") + 1] = prior.get("from_date", "")
+            command.extend(["--resume-audit", str(self.stock_audit_resume)])
         rc = self.run_step("movements", command, out)
         report = read_json(out / "summary.json", {}) or {}
         events = report.get("events") or []
@@ -1557,6 +1576,7 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
     ap.add_argument("--date", help="business date YYYY-MM-DD (default: last closed Lagos business day)")
     ap.add_argument("--dry-run", action="store_true", help="write nothing to QBO; no Slack unless --slack")
     ap.add_argument("--only", type=parse_only, help=f"comma-separated subset of {','.join(STEPS)}")
+    ap.add_argument("--stock-audit-resume", type=Path, help="resume a recent interrupted historical audit; only stock,stock_follow")
     ap.add_argument("--slack", action="store_true", help="send the Slack summary on a dry run too")
     ap.add_argument("--no-slack", action="store_true", help="never send the Slack summary")
     a = ap.parse_args(argv)
@@ -1579,7 +1599,8 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
         return EXIT_FAILED
     try:
         run = DailyRun(day, dry_run=a.dry_run, only=a.only, runner=runner, slack=slack, send_slack=send,
-                       uf_client=uf_client, uf_write_client=uf_write_client, uf_sheet=uf_sheet)
+                       uf_client=uf_client, uf_write_client=uf_write_client, uf_sheet=uf_sheet,
+                       stock_audit_resume=a.stock_audit_resume)
         summary = run.execute()
     finally:
         lock.release()

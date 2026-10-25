@@ -6,10 +6,13 @@ Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_202
 Owner requests a single follow-up branch, production validation/run on that branch, and review before merge.
 Branch `codex/nora-process-hardening`; do not merge to master during implementation.
 Owner said keep today's 17:00 UTC run; it finished 17:19:53 UTC in 19m52s (prior PR #64).
-Hardening code through `606302c` is now rebuilt, validated and deployed to web/scheduler on this branch.
-497 tests pass on Mac and isolated server image; live hashes/HTTP/single scheduler pass.
+Hardening code plus Sunday repair `ac585e3` is rebuilt, validated and deployed to web/scheduler on this branch.
+503 tests passed for the first repair; follow-up timeout/resume fix has 508 local tests and 26 portal tests passing.
 25 Oct full run failed: Sunday requested 25 days but the collector accepts at most seven.
 Stock-only repair/recovery is authorized by owner chat on 25 Oct; keep PR #65 unmerged.
+Recovery job `dd6cf1b9-d1fd-41c8-9004-88942f45c907` hit the 20-minute read timeout; no stock adjustment ran.
+Its first three sections are complete; timeout scaling and explicit safe stock-only resume are preparing for deployment.
+Do not queue another until candidate validation/idle activation pass; see checkpoint. Preserve both failed attempts.
 Sales and bills already posted: never replay the full financial day for this recovery.
 Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
 Stock editability is unknown: keep checking details for edits, no immutable movement-detail cache.

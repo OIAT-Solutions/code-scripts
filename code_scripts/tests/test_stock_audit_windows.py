@@ -1,5 +1,6 @@
 """Sunday orchestration through the real capture guard/index/normalizer; no network or QBO."""
 import json
+import os
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -17,6 +18,53 @@ class AuditWindowTests(unittest.TestCase):
         assert 0 <= (date.fromisoformat(through_date) - date.fromisoformat(start)).days < 7
         for name in ('stocktakes', 'stockmovements'):
             (path / f'epos_{name}_list.json').write_text('[]')
+        (path/'capture_metrics.json').write_text(json.dumps({'window':[start,through_date]}))
+
+    def test_weekly_timeout_covers_each_bounded_section_without_changing_daily_limit(self):
+        cmd=['python','-m','code_scripts.akponora_ops.stock_movements','--weekly-audit',
+             '--from-date','2026-10-01','--through-date','2026-10-25']
+        self.assertEqual(dr.read_step_limit(cmd,{}),4800)
+        self.assertEqual(dr.read_step_limit([x for x in cmd if x!='--weekly-audit'],{}),1200)
+        self.assertEqual(dr.read_step_limit(cmd,{'OIAT_READ_STEP_TIMEOUT_SECONDS':'90'}),360)
+
+    def test_resume_copies_recent_complete_historical_sections_but_rereads_recent_stock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior=sm.collect_audit(Path(folder)/'prior','2026-10-01','2026-10-25',reader=self.empty_capture)
+            original=(prior/'audit_index.json').read_bytes();calls=[]
+            def capture(*args,**kw):
+                calls.append((args[1],kw['through_date']));self.empty_capture(*args,**kw)
+            resumed=sm.collect_audit(Path(folder)/'recovery','2026-10-01','2026-10-26',reader=capture,resume_from=prior)
+            self.assertEqual(calls,[('2026-10-22','2026-10-26')])
+            self.assertEqual(sm.read_capture(resumed)[1],[])
+            self.assertEqual((prior/'audit_index.json').read_bytes(),original)
+            index=json.loads((resumed/'audit_index.json').read_text())
+            self.assertEqual(sum(bool(c.get('resumed_observation')) for c in index['chunks']),3)
+
+    def test_resume_rejects_stale_or_incomplete_historical_evidence(self):
+        for kind in ('old_index','old_capture','missing_source','wrong_window','unsafe_path'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as folder:
+                prior=sm.collect_audit(Path(folder)/'prior','2026-10-01','2026-10-25',reader=self.empty_capture)
+                index=json.loads((prior/'audit_index.json').read_text());child=prior/index['chunks'][0]['path']
+                if kind=='old_index':os.utime(prior/'audit_index.json',(0,0))
+                if kind=='old_capture':os.utime(child/'capture_metrics.json',(0,0))
+                if kind=='missing_source':(child/'epos_stockmovements_list.json').unlink()
+                if kind=='wrong_window':(child/'capture_metrics.json').write_text('{"window":["2026-10-02","2026-10-07"]}')
+                if kind=='unsafe_path':
+                    index['chunks'][0]['path']='../outside';(prior/'audit_index.json').write_text(json.dumps(index))
+                with self.assertRaises(ValueError):
+                    sm.collect_audit(Path(folder)/'recovery','2026-10-01','2026-10-25',reader=self.empty_capture,resume_from=prior)
+
+    def test_resume_does_not_reuse_incomplete_historical_section(self):
+        with tempfile.TemporaryDirectory() as folder:
+            prior=sm.collect_audit(Path(folder)/'prior','2026-10-01','2026-10-25',reader=self.empty_capture)
+            index=json.loads((prior/'audit_index.json').read_text());index['chunks'][1]['status']='pending'
+            (prior/'audit_index.json').write_text(json.dumps(index));calls=[]
+            def capture(*args,**kw):calls.append(args[1]);self.empty_capture(*args,**kw)
+            sm.collect_audit(Path(folder)/'recovery','2026-10-01','2026-10-25',reader=capture,resume_from=prior)
+            self.assertEqual(calls,['2026-10-08','2026-10-22'])
+
+    def test_audit_resume_refuses_full_financial_routine(self):
+        with self.assertRaises(ValueError):dr.DailyRun('2026-10-24',stock_audit_resume=Path('/missing'))
 
     def test_sunday_daily_command_runs_actual_bounded_collector(self):
         calls = []
@@ -41,6 +89,15 @@ class AuditWindowTests(unittest.TestCase):
             self.assertEqual(report['status'],'NO_CAPTURED_ADJUSTMENTS')
             self.assertEqual(calls,[('2026-10-01','2026-10-07'),('2026-10-08','2026-10-14'),
                                     ('2026-10-15','2026-10-21'),('2026-10-22','2026-10-25')])
+            class Monday(datetime):
+                @classmethod
+                def now(cls,tz=None):return datetime(2026,10,26,0,15,tzinfo=ZoneInfo('Africa/Lagos'))
+            resumed=dr.DailyRun('2026-10-24',root=root/'recovery',runner=run_command,send_slack=False,env={},
+                                only=['stock','stock_follow'],stock_audit_resume=Path(report['sources']['captures']))
+            with mock.patch.object(dr,'datetime',Monday),mock.patch.object(reader,'scrape_adjustments',side_effect=capture):
+                resumed.stock_movement_review(dr.StepResult(name='stock'),{'sources':{'catalogue':{'path':str(catalogue)},'mapping':{'path':str(mapping)}}})
+            self.assertEqual(calls[4:],[('2026-10-22','2026-10-26')])
+            self.assertEqual(json.loads((resumed.step_dir('movements')/'summary.json').read_text())['errors'],[])
 
     def test_windows_are_disjoint_and_cover_cross_month_range(self):
         windows=sm.capture_windows('2026-10-28','2026-11-07')
