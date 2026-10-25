@@ -133,10 +133,15 @@ class AuditWindowTests(unittest.TestCase):
 
     def test_stock_only_recovery_requires_read_only_delivery_refresh_before_followup(self):
         from code_scripts.akponora_ops import stock_follow as sf
-        for code in (0,2):
-            with self.subTest(code=code), tempfile.TemporaryDirectory() as folder:
+        for code,missing in ((0,0),(2,0),(0,1),(0,None)):
+            with self.subTest(code=code,missing=missing), tempfile.TemporaryDirectory() as folder:
                 calls=[]
-                def runner(cmd,**kw):calls.append(cmd);return code
+                def runner(cmd,**kw):
+                    calls.append(cmd)
+                    evidence=Path(folder)/run.run_dir.name/'stock_receipts/evidence'
+                    evidence.mkdir(parents=True,exist_ok=True)
+                    (evidence/'capture_metrics.json').write_text(json.dumps({'missing_details':missing}))
+                    return code
                 run=dr.DailyRun('2026-10-24',root=Path(folder),only=['stock','stock_follow'],runner=runner,
                                 send_slack=False,env={sf.POST_ENV:'0'})
                 (run.step_dir('movements')/'summary.json').write_text('{"company":"company_a","events":[]}')
@@ -145,7 +150,7 @@ class AuditWindowTests(unittest.TestCase):
                     run.step_stock_follow(result)
                 self.assertIn('plan',calls[0])
                 self.assertIn('code_scripts.akponora_ops.bills_sync',calls[0])
-                if code:
+                if code or missing != 0:
                     follow.assert_not_called();self.assertEqual(result.status,dr.FAILED)
                 else:
                     self.assertEqual(follow.call_args.kwargs['bills_dir'],run.step_dir('stock_receipts'))

@@ -436,18 +436,21 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         for _ in range(3):
             if not needed:
                 break
-            rows = page.locator(sel).count()
-            for i in range(rows):
+            # One DOM read, rather than thousands of locator/evaluate round trips when
+            # the full creation-history list contains just one uncached receipt.
+            rows = page.locator(sel).evaluate_all(r"""(elements, wanted) => {
+                const refs = new Set(wanted);
+                return elements.flatMap((el, index) => {
+                    const match = ((el.closest('tr') || el.parentElement).innerText || '').match(/^\s*(\d+)/);
+                    return match && refs.has(match[1]) ? [[index, match[1]]] : [];
+                });
+            }""", sorted(needed))
+            for i, ref in rows:
                 if not needed:
                     break
-                if page.locator(sel).count() != rows:
-                    open_list(page)
                 el = page.locator(sel).nth(i)
-                text = el.evaluate("e => (e.closest('tr') || e.parentElement).innerText") or ""
-                m = re.match(r"\s*(\d+)", text)
-                if not m or m.group(1) not in needed:
+                if ref not in needed:
                     continue
-                ref = m.group(1)
                 try:
                     el.click()
                     page.wait_for_url(re.compile(r"/PurchaseOrder/Details"), timeout=60000)

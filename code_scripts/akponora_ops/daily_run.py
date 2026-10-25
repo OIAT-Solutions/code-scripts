@@ -463,9 +463,11 @@ class DailyRun:
             bills_dir = self.step_dir("stock_receipts")
             rc = self.run_step("stock_receipts", [self.python, "-m", "code_scripts.akponora_ops.bills_sync", "plan",
                                "--from", auto_from, "--to", end.isoformat(), "--out", str(bills_dir), "--no-slack"], bills_dir)
-            if rc:
+            coverage = read_json(bills_dir / "evidence" / "capture_metrics.json", {}) or {}
+            if rc or coverage.get("missing_details") != 0:
                 res.status, res.exit_code = FAILED, rc
-                res.detail = "stock-only recovery could not refresh delivery evidence; no stock adjustment allowed"
+                res.exit_code = rc or 2
+                res.detail = "stock-only recovery needs complete fresh delivery evidence; no stock adjustment allowed"
                 return
         write = None
         if sf.settings(self.base_env)["post"] and not self.dry_run and sf.catchup_done():
