@@ -102,9 +102,28 @@ def tender_kind(text: str) -> str:
     return next(iter(parts)) if len(parts) == 1 and next(iter(parts)) in TENDERS else ""
 
 
-def mode(env=None) -> str:
+def settings_path() -> Path:
+    return state_dir(TOOL) / "settings.env"
+
+
+def setting(env=None) -> str:
+    """'off' / 'plan' / 'post': the environment wins, else ``<state>/credit_repayments/settings.env``
+    (``OIAT_COMPANY_A_CREDIT_REPAYMENTS=plan``), so the owner can switch it without editing the server .env."""
     env = os.environ if env is None else env
-    return "post" if str(env.get(MODE_ENV, "")).strip().lower() == "post" else "plan"
+    value = str(env.get(MODE_ENV, "")).strip().lower()
+    if not value:
+        try:
+            for line in settings_path().read_text().splitlines():
+                key, _, val = line.split("#", 1)[0].partition("=")
+                if key.strip() == MODE_ENV:
+                    value = val.strip().lower()
+        except OSError:
+            pass
+    return value if value in ("plan", "post") else "off"
+
+
+def mode(env=None) -> str:
+    return "post" if setting(env) == "post" else "plan"
 
 
 def cap(env=None) -> Decimal:

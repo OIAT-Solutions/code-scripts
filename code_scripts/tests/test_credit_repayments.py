@@ -122,6 +122,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(p["rows"][0]["status"], cr.WAIT)
 
 
+class SettingTests(unittest.TestCase):
+    def test_off_by_default_then_settings_file_then_environment_wins(self):
+        tmp = Path(tempfile.mkdtemp())
+        with mock.patch.object(cr, "settings_path", return_value=tmp / "settings.env"):
+            self.assertEqual(cr.setting({}), "off")
+            (tmp / "settings.env").write_text(f"# owner switch\n{cr.MODE_ENV}=plan  # read and plan only\n")
+            self.assertEqual((cr.setting({}), cr.mode({})), ("plan", "plan"))
+            self.assertEqual(cr.setting({cr.MODE_ENV: "post"}), "post")
+            (tmp / "settings.env").write_text(f"{cr.MODE_ENV}=nonsense\n")
+            self.assertEqual(cr.setting({}), "off")
+
+
 class FakeQBO:
     def __init__(self):
         self.payments, self.n = [], 900

@@ -455,7 +455,7 @@ class DailyRun:
         from code_scripts.akponora_ops import credit_repayments as rp
         from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
 
-        setting = str(self.base_env.get(rp.MODE_ENV, "")).strip().lower()
+        setting = rp.setting(self.base_env)
         if setting not in ("plan", "post"):
             res.status, res.detail = DISABLED, f"off ({rp.MODE_ENV} not set)"
             return
