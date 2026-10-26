@@ -26,10 +26,11 @@ class FakeQBO:
                                 "Balance": 72000, "VendorRef": {"value": "34", "name": "UNCLE SAM'S BAKERY & CAFE"}}}
         self.banks = [{"Id": "1150040002", "Name": "100202 - MONIEPOINT 4686987227"}, {"Id": "29", "Name": "100100 - Petty Cash"}]
         self.posts, self.n = [], 900
+        self.epos = []  # Payments credit_repayments recorded from EPOS account payments
 
     def query_all(self, sql, entity):
         return {"Account": self.banks, "Invoice": list(self.invoices.values()),
-                "Bill": [b for b in self.bills.values() if b["Balance"] > 0]}[entity]
+                "Bill": [b for b in self.bills.values() if b["Balance"] > 0], "Payment": list(self.epos)}[entity]
 
     def get_json(self, path, params=None):
         if path == "/preferences":
@@ -108,6 +109,30 @@ class PaymentsSheetTests(unittest.TestCase):
         self.assertEqual(len(self.qbo.posts), 2)
         self.assertEqual(sheet.bodies[(ps.CREDIT_SALES, "A")][0][6], "Paid")
         self.assertEqual(sheet.bodies[(ps.LISTS, "B")], [])  # paid in full: no longer offered
+
+    def test_a_till_repayment_already_recorded_from_epos_is_linked_not_posted_again(self):
+        # 26 Oct 2026: EPOS records till account payments; the November staff row for the same money must not
+        # become a second QuickBooks payment
+        self.qbo.epos = [{"Id": "777", "TxnDate": "2026-10-06", "TotalAmt": 20000, "CustomerRef": {"value": "334"},
+                          "PrivateNote": "EPOS account payment VERA AKPOREHA 06/10/2026 12:00:00 Lagos, Transfer"
+                                         " | epos-repay 0123456789abcdef | auto by credit_repayments"}]
+        sheet = FakeSheet(credit=[pay("CR261005-389764", 20000), pay("CR261005-389764", 5000, day="07/10/2026")])
+        r = self.run_(sheet)
+        self.assertEqual([(x["status"], x.get("payment_id"), x.get("linked_epos")) for x in r["credit"]][0],
+                         ("posted", "777", True))
+        self.assertEqual(r["credit"][1]["status"], "posted")  # a second, separate payment: posted normally
+        self.assertEqual(len(self.qbo.posts), 1)
+        self.assertEqual(sheet.cells[(ps.CREDIT_PAYMENTS, 2)][:2], [ps.POSTED, "777"])
+        self.assertEqual(self.run_(sheet)["credit"], [])  # rerun: nothing new, nothing posted twice
+        self.assertEqual(len(self.qbo.posts), 1)
+
+    def test_a_staff_row_near_an_epos_payment_with_another_amount_is_held(self):
+        self.qbo.epos = [{"Id": "777", "TxnDate": "2026-10-06", "TotalAmt": 20000, "CustomerRef": {"value": "334"},
+                          "PrivateNote": "EPOS account payment | epos-repay 0123456789abcdef | auto by credit_repayments"}]
+        r = self.run_(FakeSheet(credit=[pay("CR261005-389764", 15000)]))  # e.g. one EPOS payment split by staff
+        self.assertEqual(r["credit"][0]["status"], "held")
+        self.assertIn("EPOS already recorded a N20,000.00 payment", r["credit"][0]["reason"])
+        self.assertEqual(self.qbo.posts, [])
 
     def test_sheet_losing_the_mark_never_posts_twice(self):
         sheet = FakeSheet(credit=[pay("CR261005-389764", 1000)])

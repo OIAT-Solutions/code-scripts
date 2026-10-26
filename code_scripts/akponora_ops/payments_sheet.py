@@ -44,6 +44,7 @@ from code_scripts.akponora_ops.work_state import WorkState, digest
 TOOL = "payments_sheet"
 TZ = ZoneInfo("Africa/Lagos")
 FROM_DAY = "2026-10-01"
+EPOS_REPAY_TAG = re.compile(r"\| epos-repay [0-9a-f]{16} \|")
 SHEET_ENV, POST_ENV, CAP_ENV = "OIAT_COMPANY_A_PAYMENTS_SHEET_ID", "OIAT_COMPANY_A_PAYMENTS_POST", "OIAT_COMPANY_A_PAYMENTS_CAP"
 CREDIT_PREFIX = "CR"
 
@@ -233,7 +234,38 @@ def load_qbo(client) -> dict:
     bills = client.query_all("select * from Bill where Balance > '0'", "Bill")
     prefs = client.get_json("/preferences").get("Preferences", {})
     close = str(((prefs.get("AccountingInfoPrefs") or {}).get("BookCloseDate")) or "")
-    return {"banks": banks, "invoices": invoices, "bills": bills, "book_close": close}
+    # account payments credit_repayments recorded from EPOS (memo tag): a staff row for the same money links to them
+    epos_payments = [p for p in client.query_all(f"select * from Payment where TxnDate >= '{FROM_DAY}'", "Payment")
+                     if EPOS_REPAY_TAG.search(str(p.get("PrivateNote") or ""))]
+    return {"banks": banks, "invoices": invoices, "bills": bills, "book_close": close, "epos_payments": epos_payments}
+
+
+def epos_twin(cells: list, qbo: dict, used: set) -> tuple[dict | None, str]:
+    """(EPOS-recorded Payment this staff credit row describes, '') or (None, reason to hold) or (None, '').
+    Same customer as the row's invoice, same amount, within a day: the same money, never posted twice
+    (26 Oct 2026). Same customer and day but a different amount (e.g. split over invoices): hold for review."""
+    doc = doc_of(cells[0])
+    inv = next((i for i in qbo.get("invoices") or [] if str(i.get("DocNumber")) == doc), None)
+    day, amount = parse_day(cells[2]), money(cells[1])
+    if not inv or not day or amount is None:
+        return None, ""
+    cust = str((inv.get("CustomerRef") or {}).get("value"))
+    near = []
+    for p in qbo.get("epos_payments") or []:
+        try:
+            gap = abs((date.fromisoformat(str(p.get("TxnDate"))) - date.fromisoformat(day)).days)
+        except ValueError:
+            continue
+        if str((p.get("CustomerRef") or {}).get("value")) == cust and gap <= 1 and str(p.get("Id")) not in used:
+            near.append(p)
+    exact = [p for p in near if money(p.get("TotalAmt")) == amount]
+    if exact:
+        return exact[0], ""
+    if near:
+        p = near[0]
+        return None, (f"EPOS already recorded a N{money(p.get('TotalAmt')):,.2f} payment from this customer on "
+                      f"{p.get('TxnDate')} (QuickBooks payment {p.get('Id')}); check before posting this row")
+    return None, ""
 
 
 def bill_no(bill: dict, dup: set) -> str:
@@ -400,6 +432,7 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
     left = {k: Decimal(str(t.get("Balance") or 0)) for k, t in targets.items()}
     body = rows[1:]
     journal = WorkState(state_dir(TOOL) / "work.sqlite3")
+    epos_used = {str(v.get("payment_id")) for v in posted.values() if v.get("from_epos")}
     def save_posted():
         dump_json(state_path(), posted)
     for n, (cells, legacy_key) in enumerate(zip(body, row_keys(kind, body)), start=2):
@@ -444,6 +477,22 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
                 updates.append((n, [f"Held: {exc}", "", now_text()]))
                 results.append({"row": n, "status": "held", "reason": str(exc)})
             continue
+        if kind == "credit":
+            twin, hold = epos_twin(cells, qbo, epos_used)
+            if twin:  # the same money EPOS already recorded: link the row to it, never a second payment
+                epos_used.add(str(twin["Id"]))
+                posted[key] = {"payment_id": str(twin["Id"]), "at": now_text(), "kind": kind, "doc": doc_of(cells[0]),
+                               "source_sha": source_sha, "from_epos": True}
+                save_posted()
+                journal.put("payment", key, source_sha, "verified", posted[key])
+                updates.append((n, [POSTED, str(twin["Id"]), posted[key]["at"]]))
+                results.append({"row": n, "doc": doc_of(cells[0]), "status": "posted", "payment_id": str(twin["Id"]),
+                                "linked_epos": True})
+                continue
+            if hold:
+                updates.append((n, [f"Held: {hold}", "", now_text()]))
+                results.append({"row": n, "doc": doc_of(cells[0]), "status": "held", "reason": hold})
+                continue
         target_key = doc_of(cells[0])
         target = targets.get(target_key)
         parts, why = check_row(kind, cells, target, left.get(target_key), qbo["banks"], qbo["book_close"], s["cap"])
