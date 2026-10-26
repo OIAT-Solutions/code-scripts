@@ -41,7 +41,7 @@ MAX_RUNS = 200
 
 # What a person can run from the portal ("What to run"), in the routine's order. One name per step everywhere.
 DAILY_STEP_CHOICES = [("", "Whole day"), ("catalogue", "Products"), ("bills", "Bills"), ("sales", "Sales"),
-                      ("credit", "Credit sales (invoices)"), ("guard", "Health check"), ("stock", "Stock check"),
+                      ("credit", "Credit sales (invoices)"), ("repayments", "Credit repayments"), ("guard", "Health check"), ("stock", "Stock check"),
                       ("stock_follow", "Stock adjustments to QuickBooks"), ("uf", "Banking (funds allocation)"),
                       ("payments", "Payments sheet")]
 
@@ -50,6 +50,7 @@ STEP_LABELS = {
     "bills": "Bills",
     "sales": "Sales",
     "credit": "Credit sales",
+    "repayments": "Credit repayments",
     "guard": "Health check",
     "uf": "Banking",
     "deposits": "Banking",

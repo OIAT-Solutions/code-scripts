@@ -67,7 +67,7 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
-STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "stock_follow", "uf", "payments")
+STEPS = ("catalogue", "bills", "sales", "credit", "repayments", "guard", "stock", "stock_follow", "uf", "payments")
 DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
@@ -195,7 +195,8 @@ class DailyRun:
                  send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
                  uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None,
                  payments_client=None, payments_write_client=None, stock_follow_write_client=None,
-                 stock_audit_resume: Path | None = None):
+                 stock_audit_resume: Path | None = None, repay_client=None, repay_write_client=None,
+                 repay_capture: dict | None = None):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
@@ -213,6 +214,7 @@ class DailyRun:
         self.credit_write_client = credit_write_client
         self.payments_client, self.payments_write_client = payments_client, payments_write_client
         self.stock_follow_write_client = stock_follow_write_client
+        self.repay_client, self.repay_write_client, self.repay_capture = repay_client, repay_write_client, repay_capture
         self.python = python
         stamp = datetime.now(timezone.utc).strftime("%H%M%SZ")
         self.day_dir = Path(root) if root else _daily_root() / business_day
@@ -444,6 +446,47 @@ class DailyRun:
             res.status = OK
         if not invoices and not r["mixed"]:
             res.detail = "no credit sales"
+
+    def step_repayments(self, res: StepResult) -> None:
+        """EPOS customer account payments -> QBO Payments into Undeposited Funds (credit_repayments, in-process).
+        Off unless OIAT_COMPANY_A_CREDIT_REPAYMENTS is ``plan`` (read + plan only) or ``post``."""
+        from decimal import Decimal
+
+        from code_scripts.akponora_ops import credit_repayments as rp
+        from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
+
+        setting = str(self.base_env.get(rp.MODE_ENV, "")).strip().lower()
+        if setting not in ("plan", "post"):
+            res.status, res.detail = DISABLED, f"off ({rp.MODE_ENV} not set)"
+            return
+        client = self.repay_client or QBOClient.for_company_a(allow_writes=False)
+        write = None
+        if setting == "post" and not self.dry_run:
+            write = self.repay_write_client or QBOClient.for_company_a(allow_writes=True)
+        try:
+            r = rp.run(Path(res.out), client=client, write_client=write, dry_run=self.dry_run, env=self.base_env,
+                       cap_data=self.repay_capture)
+        except Exception as exc:  # noqa: BLE001 - an EPOS report hiccup must not stop sales/banking
+            res.status, res.detail = REVIEW, f"EPOS customer reports could not be read: {str(exc)[:200]}"
+            res.review.append(f"repayments: {res.detail}")
+            return
+        s, rows = r["summary"], r["rows"]
+        done = {x["key"] for x in r["posted"] if x["status"] in (rp.POSTED, "ALREADY_DONE")}
+        res.counts = {"mode": r["mode"], "payments": len(rows), "counts": s["counts"], "to_post": s["to_post"],
+                      "total_to_post": s["total_to_post"], "posted": r["posted"], "balances": s["balances"],
+                      "posted_total": f"{sum(Decimal(x['amount']) for x in rows if x['key'] in done):.2f}"}
+        for row in rows:
+            if row["status"] == rp.HOLD:
+                res.review.append(f"repayment {row['day']} {row['customer']} N{row['amount']}: {row['reason']}")
+            elif row["status"] in (rp.READY, rp.WAIT) and row["key"] not in done:
+                res.review.append(f"repayment {row['day']} {row['customer']} N{row['amount']} ({row['tender']}): "
+                                  + (row["reason"] or f"planned, not posted ({rp.MODE_ENV}=post to post)"))
+        for e in s["capture_errors"]:
+            res.review.append(f"repayment capture: {e}")
+        failed = [x for x in r["posted"] if x["status"] == rp.FAILED]
+        res.status = FAILED if failed else REVIEW if res.review else OK
+        if not rows:
+            res.detail = "no account payments in EPOS"
 
     def step_stock_follow(self, res: StepResult) -> None:
         """EPOS Stock Take / Wastage adjustments -> QBO InventoryAdjustments (stock_follow, in-process)."""
@@ -880,7 +923,7 @@ def technical_text(summary: dict) -> str:
 # ---------------------------------------------------------------- the Slack messages (plain English)
 STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "credit": "Credit sales", "guard": "Item check",
               "stock": "Stock", "uf": "Banking", "payments": "Payments sheet",
-              "stock_follow": "Stock adjustments"}
+              "stock_follow": "Stock adjustments", "repayments": "Credit repayments"}
 SHEET_URL = "https://docs.google.com/spreadsheets/d/{}"
 
 
@@ -1075,7 +1118,8 @@ def _trend(now: int, before) -> str:
 # message grouped by who has to act. Plain words, no PO numbers or ids; details stay in the portal.
 GREEN, YELLOW, RED = ":large_green_circle:", ":large_yellow_circle:", ":red_circle:"
 STEP_WORD = {"catalogue": "products", "bills": "bills", "sales": "sales", "credit": "credit sales", "guard": "item check",
-             "stock": "stock check", "stock_follow": "stock counts", "uf": "banking", "payments": "payments"}
+             "stock": "stock check", "stock_follow": "stock counts", "uf": "banking", "payments": "payments",
+             "repayments": "credit repayments"}
 
 
 def _needs(n: int) -> str:
