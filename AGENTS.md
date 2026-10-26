@@ -25,6 +25,13 @@ Sales and bills already posted: never replay the full financial day for this rec
 Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
 Stock editability is unknown: keep checking details for edits, no immutable movement-detail cache.
 
+25 Oct Toronto supplier follow-up is authorized: create Moses Bapivavy, A+ Company and Kay Jay Zenith Limited;
+apply six owner-confirmed supplier aliases; continue demonstrated routine repeat purchases.
+Suppliers 343/344/345 are created and verified; all six links are installed. Deal Radical IDs 124/15
+are recorded as one reporting identity, preserving original bills/payment targets; no QBO merge.
+Candidate purchase-pattern/parser/name-match fixes pass 523 local core tests. Deployment and bill recovery
+are IN PROGRESS; see the checkpoint before changing anything. Do not replay sales, stock or payments.
+
 ## Deployed work — 24 Oct 2026 runtime efficiency
 
 Historical release: the active branch and no-merge instructions above take precedence.

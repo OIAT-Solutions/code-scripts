@@ -196,11 +196,11 @@ def ensure_vendor_file(path: Path) -> None:
 
 
 def vendor_key(name: str) -> str:
-    return norm(name)
+    return vendor_ops.vendor_key(name)
 
 
-_SUPPLIER_RE = re.compile(r"S\s*U+\s*P+\s*L\s*I\s*E\s*R\s*S?\s*[:\-]?", re.I)
-_PAYMENT_RE = re.compile(r"MODE\s*OF\s*PAY\w*(?:\s+ME?NT\w*)?\s*[:\-]?", re.I)
+_SUPPLIER_RE = re.compile(r"\bS\s*U+\s*P+\s*L\s*I?\s*E\s*R\s*S?\s*[:\-]?", re.I)
+_PAYMENT_RE = re.compile(r"MODE\s*OF\s*(?:PAY\w*(?:\s+ME?NT\w*)?|TRANSFER)\s*[:\-]?", re.I)
 
 
 def payment_mode(text) -> str:
@@ -749,7 +749,7 @@ def expected_total(lines: list[dict]) -> Decimal:
 # ---------------------------------------------------------------- plan (pure)
 def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str, str], tax_mode: str = "gross",
                lookback: list[dict] = (), dup_days: int = 14, dup_min_value: Decimal = Decimal("50000"),
-               exclusions=None) -> list[dict]:
+               exclusions=None, repeat_policy=None) -> list[dict]:
     """One entry per PO received in ``window``. No HTTP.
 
     ``exclusions`` (``review_exclusions.Exclusions``): an excluded PO (kind ``bill``) is ``EXCLUDED``
@@ -762,6 +762,13 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
     in_window = sorted((p for p in pos if window[0] <= p["received_date"] <= window[1]),
                        key=lambda p: (p["received_at"], p["ref"]))
     history = list(lookback) + in_window
+    from code_scripts.akponora_ops.purchase_patterns import expected_repeat
+    supplier_ids = {}
+    def vendor_for(p):
+        if p['ref'] not in supplier_ids:
+            found, _ = resolve_vendor(p, vmap, vendors)
+            supplier_ids[p['ref']] = str(found['Id']) if found else ''
+        return supplier_ids[p['ref']]
     entries = []
     for po in in_window:
         doc = doc_number(po["ref"])
@@ -824,7 +831,8 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
             if rule.target_qbo_sku not in own:
                 row["flags"].append(f"PO is on EPOS product {ln['product_id']}, a child of {rule.target_qbo_sku}; "
                                     "EPOS stock effect of receiving a non-master product is unproven - "
-                                    "re-enter the receipt on the master")
+                                    "verify the received stock effect and prepare an approved correction; "
+                                    "do not receive the same delivery again")
             item = items.get(rule.target_qbo_item_id)
             row["item"] = item
             row["flags"] += item_problems(item, rule)
@@ -882,6 +890,12 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
                                          item_ids={r["rule"].target_qbo_item_id for r in e["lines"] if r["rule"]},
                                          doc=doc)
         holds, dwarns = duplicate_of(po, history, days=dup_days, min_value=dup_min_value)
+        pattern = expected_repeat(po, history, vendor_id=str(vendor['Id']) if vendor else '',
+                                  vendor_for=vendor_for, policy=repeat_policy) if holds or dwarns else None
+        if pattern:
+            e['expected_repeat'] = pattern
+            e['routine_repeat'] = holds + dwarns
+            holds, dwarns = [], []
         if holds and exclusions is not None and exclusions.describe("repeat_ok", po["ref"]):
             e["routine_repeat"] = holds  # confirmed a real order in the portal: noted, not held
             holds = []
@@ -901,7 +915,7 @@ def plan_bills(pos: list[dict], *, registry, ctx: dict, vmap, window: tuple[str,
         due, term_ref = due_date(txn, vendor, ctx.get("terms", {}))
         hint = (po["payment"] or "not stated") + (f" {po['payment_paid']}" if po.get("payment_paid") else "") + (
             f" from {po['payment_account']}" if po.get("payment_account") else "")
-        note = (f"Payment hint: {hint} (EPOS PO note; bill left UNPAID - pay in QBO) | "
+        note = (f"Payment hint: {hint} (EPOS PO note; bill left UNPAID - record payments in Nora Payments sheet) | "
                 f"EPOS PO {po['ref']} | GRN {po['grn'] or '-'} | received {po['received_at']} | supplier "
                 f"{po['supplier'] or '-'} | created by {TOOL} (tax mode {tax_mode})")
         payload = {
@@ -1050,7 +1064,8 @@ def write_plan(out: Path, entries: list[dict], meta: dict) -> dict:
         "po": {k: v for k, v in e["po"].items() if k != "lines"}, "status": e["status"], "doc": e["doc"],
         "reasons": e["reasons"], "warnings": e["warnings"], "bill_total": money(e["bill_total"]),
         "vendor_id": (e["vendor"] or {}).get("Id", ""), "payload_sha256": e["payload_sha256"],
-        "existing_bill_id": e.get("existing_bill_id", "")} for e in entries]})
+        "existing_bill_id": e.get("existing_bill_id", ""),
+        "expected_repeat": e.get("expected_repeat")} for e in entries]})
     dump_json(out / "summary.json", summary)
     return summary
 
@@ -1259,9 +1274,15 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
                                   history=history, exclusions=exclusions)
     if any(act["state"] in (vendor_ops.CREATED, vendor_ops.LINKED) for act in vendor_actions):
         vmap = load_vendor_map(read_csv(vpath))
+    from code_scripts.akponora_ops.purchase_patterns import load_policy
+    repeat_path = vpath.parent / 'purchase_patterns.json'
+    try:
+        repeat_policy = load_policy(repeat_path)
+    except (ValueError, TypeError, OSError) as exc:
+        raise StopRun(f'purchase-pattern policy invalid: {exc}') from exc
     entries = plan_bills(pos, registry=registry, ctx=ctx, vmap=vmap, window=window, tax_mode=a.tax_mode,
                          lookback=lookback, dup_days=a.dup_days, dup_min_value=Decimal(a.dup_min_value),
-                         exclusions=exclusions)
+                         exclusions=exclusions, repeat_policy=repeat_policy)
     by_key = {act["key"]: act for act in vendor_actions
               if act["state"] not in (vendor_ops.CREATED, vendor_ops.LINKED, vendor_ops.EXCLUDED)}
     for e in entries:
@@ -1274,6 +1295,8 @@ def run_plan(a, client: QBOClient | None = None, write_client: QBOClient | None 
             "closed_through": min(window[1], (business_date(captured_at) - timedelta(days=1)).isoformat()),
             "mapping": {"path": str(Path(a.mapping) if a.mapping else mapping_file()), "sha256": registry.source_sha256},
             "vendors_file": {"path": str(vpath), "sha256": sha256_file(vpath)},
+            "repeat_policy": {"path": str(repeat_path), "sha256": sha256_file(repeat_path),
+                              "approval_ref": repeat_policy['approval_ref']} if repeat_policy else None,
             "exclusions_file": {"path": str(xpath), "sha256": exclusions.sha256(),
                                 "active": len(exclusions.rows)},
             "lookback_pos": len(lookback), "qbo_bills_checked": len(ctx["bills"]), "book_close": ctx["book_close"],
@@ -1437,6 +1460,11 @@ def run_post(plan_dir: Path, *, client: QBOClient, registry, approval_ref: str, 
         raise StopRun("post requires --approval-ref (the chat yes reference)")
     summary = json.loads((plan_dir / "summary.json").read_text())
     plan = json.loads((plan_dir / "plan.json").read_text())
+    if any(e.get('expected_repeat') for e in plan['entries']):
+        policy_info = summary.get('repeat_policy') or {}
+        policy_path = Path(policy_info.get('path') or '__missing_policy__')
+        if not policy_path.is_file() or sha256_file(policy_path) != policy_info.get('sha256'):
+            raise StopRun('purchase-pattern approval changed since planning; prepare a fresh review')
     actual = sha256_file(plan_dir / "payloads.jsonl")
     if not clean(expect_sha) or expect_sha != actual or summary.get("payloads_sha256") != actual:
         raise StopRun(f"--expect-sha mismatch: payloads.jsonl is {actual}; re-review the plan")
@@ -1586,7 +1614,7 @@ def cmd_post(a) -> int:
     print(json.dumps(res, indent=1))
     if not a.no_slack:
         send_slack(f"Akponora bills_sync post ({res['mode']}): {res['counts']}; stopped: {res['stopped'] or 'no'}; "
-                   f"cursor {res['cursor']}. Bills are unpaid - pay them in QBO. Folder: {plan_dir}")
+                   f"cursor {res['cursor']}. Bills are unpaid; record payments in Nora Payments sheet. Folder: {plan_dir}")
     return 2 if res["stopped"] else 0
 
 

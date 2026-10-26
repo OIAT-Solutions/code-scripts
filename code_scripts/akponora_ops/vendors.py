@@ -56,6 +56,7 @@ MAX_ENV = "OIAT_COMPANY_A_VENDOR_AUTO_MAX"
 DEFAULT_MAX = 5
 NEW_VENDOR_MAX_SCORE = 0.75
 NAME_ENTITIES = ("Vendor", "Customer", "Employee")
+BRAND_ONLY_SUPPLIERS = {'CWAY'}  # Owner, 25 Oct 2026: several different sellers supply this brand.
 
 # action states
 CREATE = "CREATE"                 # genuinely new; would be / will be created
@@ -71,6 +72,11 @@ FAILED = "FAILED"
 
 
 def vendor_key(name: str) -> str:
+    # Preserve a short symbolic business identity: A+ must not become A COMPANY.
+    symbolic = re.fullmatch(r'\s*([A-Za-z0-9])\s*\+\s*(?:COMPANY|CO\.?|LTD\.?|LIMITED)?\s*',
+                            str(name or ''), re.I)
+    if symbolic:
+        return symbolic.group(1).upper() + '+'
     return norm(name)
 
 
@@ -133,6 +139,8 @@ def product_evidence(products, product_index) -> list[tuple[str, int, int]]:
 def score(name: str, vendor: dict, bill_counts=None) -> float:
     """``vendors-suggest`` score: name similarity, boosted to 0.86 when the first word (>= 4
     letters) matches a vendor that has bills."""
+    if len(vendor_key(name).replace(' ', '')) < 3 and not same_name(name, vendor.get('DisplayName', '')):
+        return 0.0
     s = sim(name, vendor.get("DisplayName", ""))
     a, b = vendor_key(name).split(), norm(vendor.get("DisplayName", "")).split()
     if a and b and a[0] == b[0] and len(a[0]) >= 4 and (bill_counts or {}).get(vendor.get("Id"), 0) > 0:
@@ -194,12 +202,16 @@ def plan_actions(suppliers: list[dict], vendors: dict, *, history=None, bill_cou
         twins = [v for v in pool if v.get("Active", True) and same_name(name, v.get("DisplayName", ""))]
         if why:
             act["state"], act["detail"] = EXCLUDED, f"supplier excluded: {why}"
+        elif vendor_key(sup['name']) in BRAND_ONLY_SUPPLIERS:
+            act['state'], act['detail'] = HOLD_NEAR, 'product brand only; identify the actual seller for this PO'
         elif len(twins) == 1:
             act["state"], act["vendor_id"] = LINK, str(twins[0].get("Id"))
             act["detail"] = (f"same name as QBO vendor {twins[0].get('Id')} '{twins[0].get('DisplayName')}' "
                              "except capital letters / spacing: linked automatically")
         elif not name:
             act["state"], act["detail"] = HOLD_NEAR, "supplier name is empty after cleaning; map it by hand"
+        elif len(vendor_key(name).replace(' ', '')) < 3:
+            act['state'], act['detail'] = HOLD_NEAR, 'short supplier name needs an explicit identity decision'
         elif auto_link(act, name, sup, pool, ranked, product_index):
             pass  # LINK (automatic) or HOLD_NEAR with product evidence set by auto_link
         elif best >= NEW_VENDOR_MAX_SCORE:
@@ -388,6 +400,8 @@ def approval_preflight(client, *, epos_name: str, link_to: str = "", create: boo
     problems, warnings = [], []
     if not key:
         problems.append("EPOS supplier name is empty after normalizing")
+    if key in BRAND_ONLY_SUPPLIERS:
+        problems.append('product brand only; a global supplier link is unsafe: identify the actual PO seller')
     why = exclusions.describe("vendor", epos_name) if exclusions is not None and key else ""
     if why:
         problems.append(f"supplier is excluded in review_exclusions ({why}); remove the exclusion first")
