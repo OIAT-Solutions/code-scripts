@@ -180,3 +180,104 @@ class PostTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+DEP_9OCT = {"Id": "80700", "TxnDate": "2026-10-09", "SyncToken": "0", "TotalAmt": 2547300.0,
+            "PrivateNote": "UF deposit 2026-10-09 from till sheet | UF261009100202 -> 100202 | created by uf_deposits",
+            "DepositToAccountRef": {"value": "1150040002"},
+            "Line": [{"Id": "1", "Amount": 2012050.0, "LinkedTxn": [{"TxnId": "501", "TxnType": "SalesReceipt"}]},
+                     {"Id": "2", "Amount": 535250.0, "DetailType": "DepositLineDetail",
+                      "DepositLineDetail": {"AccountRef": {"value": "800"}}}]}
+
+
+class CorrectionQBO(FakeQBO):
+    def __init__(self):
+        super().__init__()
+        self.deposits = {"80700": json.loads(json.dumps(DEP_9OCT))}
+
+    def post_json(self, path, body, requestid):
+        if path == "/deposit":
+            dep = dict(body, SyncToken=str(int(body["SyncToken"]) + 1),
+                       TotalAmt=round(sum(l["Amount"] for l in body["Line"]), 2))
+            self.deposits[dep["Id"]] = dep
+            return {"Deposit": dep}
+        return super().post_json(path, body, requestid)
+
+    def get_json(self, path):
+        if path.startswith("/deposit/"):
+            return {"Deposit": json.loads(json.dumps(self.deposits[path.rsplit("/", 1)[1]]))}
+        return super().get_json(path)
+
+
+class CorrectionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        mock.patch.object(cr, "ledger_path", return_value=self.tmp / "posted.json").start()
+        self.addCleanup(mock.patch.stopall)
+
+    def plan(self, deposits=(DEP_9OCT,), amount="534800.00"):
+        data = {"payments": [pay("09/10/2026 14:19:15", amount)]}
+        return cr.plan_corrections(data, qbo(), list(deposits), "800", done={}, banked={"2026-10-09"},
+                                   limit=Decimal("2000000"))
+
+    def test_vera_9_oct_moves_out_of_that_days_till_overage(self):
+        p = self.plan()
+        self.assertEqual(len(p["items"]), 1)
+        item = p["items"][0]
+        self.assertEqual((item["deposit_id"], item["overage_line_id"], item["amount"]), ("80700", "2", "534800.00"))
+        self.assertIn("move N534,800.00 out of till overage", p["rows"][0]["reason"])
+
+    def test_more_than_the_overage_is_held(self):
+        p = self.plan(amount="600000.00")
+        self.assertEqual((p["items"], p["rows"][0]["status"]), ([], cr.HOLD))
+        self.assertIn("no 2026-10-09 UF deposit has", p["rows"][0]["reason"])
+
+    def test_post_links_payment_lowers_overage_keeps_total_and_is_safe_to_repeat(self):
+        p = self.plan()
+        s = cr.write_corrections(self.tmp / "c", p)
+        fake = CorrectionQBO()
+        r = cr.post_corrections(self.tmp / "c", client=fake, approval_ref="owner yes", expect_sha=s["sha256"])
+        self.assertTrue(r["complete"], r)
+        dep = fake.deposits["80700"]
+        self.assertEqual(dep["TotalAmt"], 2547300.0)  # the bank is unchanged
+        over = [l for l in dep["Line"] if not l.get("LinkedTxn")]
+        self.assertEqual([l["Amount"] for l in over], [450.0])  # 535,250 - 534,800 of real overage left
+        pid = fake.payments[0]["Id"]
+        self.assertIn({"TxnId": pid, "TxnType": "Payment", "TxnLineId": "0"},
+                      [t for l in dep["Line"] for t in l.get("LinkedTxn") or []])
+        again = cr.post_corrections(self.tmp / "c", client=fake, approval_ref="owner yes", expect_sha=s["sha256"])
+        self.assertEqual([x["status"] for x in again["results"]], ["ALREADY_DONE"])
+        self.assertEqual((len(fake.payments), fake.deposits["80700"]["TotalAmt"]), (1, 2547300.0))
+
+    def test_a_deposit_changed_after_the_plan_stops(self):
+        p = self.plan()
+        s = cr.write_corrections(self.tmp / "c", p)
+        fake = CorrectionQBO()
+        fake.deposits["80700"]["SyncToken"] = "5"
+        r = cr.post_corrections(self.tmp / "c", client=fake, approval_ref="owner yes", expect_sha=s["sha256"])
+        self.assertFalse(r["complete"])
+        self.assertIn("changed since the plan", r["results"][-1]["detail"])
+        self.assertEqual(fake.deposits["80700"]["Line"][1]["Amount"], 535250.0)
+        self.assertEqual(fake.payments, [])  # nothing written when the deposit moved on
+
+    def test_payment_made_but_deposit_not_fixed_is_planned_again_and_finished_once(self):
+        p = self.plan()
+        s = cr.write_corrections(self.tmp / "c", p)
+        fake = CorrectionQBO()
+        real_post = fake.post_json
+        fake.post_json = lambda path, body, rid: (_ for _ in ()).throw(RuntimeError("timeout")) if path == "/deposit" \
+            else real_post(path, body, rid)
+        r = cr.post_corrections(self.tmp / "c", client=fake, approval_ref="owner yes", expect_sha=s["sha256"])
+        self.assertFalse(r["complete"])
+        self.assertEqual(len(fake.payments), 1)
+        fake.post_json = real_post
+        led = json.loads((self.tmp / "posted.json").read_text())
+        q = qbo([fake.payments[0]])
+        p2 = cr.plan_corrections({"payments": [pay("09/10/2026 14:19:15", "534800.00")]}, q, [DEP_9OCT], "800",
+                                 done=led, banked={"2026-10-09"}, limit=Decimal("2000000"))
+        self.assertEqual(len(p2["items"]), 1)  # not treated as done: its deposit change is still owed
+        s2 = cr.write_corrections(self.tmp / "c2", p2)
+        r2 = cr.post_corrections(self.tmp / "c2", client=fake, approval_ref="owner yes", expect_sha=s2["sha256"])
+        self.assertTrue(r2["complete"], r2)
+        self.assertEqual(len(fake.payments), 1)  # the same Payment, linked now
+        self.assertEqual([l["Amount"] for l in fake.deposits["80700"]["Line"] if not l.get("LinkedTxn")], [450.0])

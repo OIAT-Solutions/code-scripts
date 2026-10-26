@@ -452,6 +452,166 @@ def post(plan_dir: Path, *, client, approval_ref: str, expect_sha: str, include_
     return res
 
 
+# ---------------------------------------------------------------- corrections: payments on already-banked days
+# Owner, 26 Oct 2026. Before this step existed, uf_deposits booked a day's account payments as till overage (the
+# till sheet holds the money, EPOS sales do not). Correction, per payment, approved before any write: record the
+# Payment (Undeposited Funds, oldest invoices first), then put it into that day's existing UF deposit and lower the
+# deposit's Till Overage line by the same amount. The deposit total and the banks do not change.
+def own_overage_lines(deposits: list[dict], day: str, overage_id: str) -> list[dict]:
+    from code_scripts.akponora_ops.uf_deposits import deposit_key, is_own_deposit_doc
+
+    out = []
+    for dep in deposits:
+        if str(dep.get("TxnDate")) != day or not is_own_deposit_doc(deposit_key(dep), day):
+            continue
+        for ln in dep.get("Line") or []:
+            ref = ((ln.get("DepositLineDetail") or {}).get("AccountRef") or {}).get("value")
+            if str(ref) == str(overage_id) and not ln.get("LinkedTxn"):
+                out.append({"deposit_id": str(dep["Id"]), "sync": str(dep.get("SyncToken")), "line_id": str(ln.get("Id")),
+                            "left": money(ln.get("Amount")), "doc": deposit_key(dep)})
+    return sorted(out, key=lambda x: -x["left"])
+
+
+def plan_corrections(cap_data: dict, qbo: dict, deposits: list[dict], overage_id: str, *, done: dict,
+                     banked: set[str], limit: Decimal) -> dict:
+    # a correction is finished only when its deposit is fixed too: a Payment already made (ledger or QBO tag)
+    # without its deposit change is planned again; posting then finds that Payment by its tag
+    finished = {k: v for k, v in done.items() if v.get("deposit")}
+    def unfinished(x):
+        m = TAG_RE.search(str(x.get("PrivateNote") or ""))
+        return bool(m) and m.group(1) not in finished
+
+    q = dict(qbo, payments=[x for x in qbo["payments"] if not unfinished(x)])
+    base = plan(cap_data, q, done=finished, banked=set(), limit=Decimal("1e30"))
+    bodies = {p["_key"]: p for p in base["payloads"]}
+    lines: dict[str, list[dict]] = {}
+    rows, items = [], []
+    for row in base["rows"]:
+        if row["day"] not in banked or row["status"] == DONE:
+            continue
+        row = dict(row)
+        if row["status"] != READY:
+            rows.append(row)
+            continue
+        amount = money(row["amount"])
+        pool = lines.setdefault(row["day"], own_overage_lines(deposits, row["day"], overage_id))
+        line = next((x for x in pool if x["left"] >= amount), None)
+        if line is None:
+            row["status"], row["reason"] = HOLD, f"no {row['day']} UF deposit has N{amount:,.2f} of till overage to move"
+            rows.append(row)
+            continue
+        line["left"] -= amount
+        row["reason"] = f"move N{amount:,.2f} out of till overage in deposit {line['deposit_id']} ({line['doc']})"
+        items.append({"key": row["key"], "day": row["day"], "amount": f"{amount:.2f}", "payment": bodies[row["key"]],
+                      "deposit_id": line["deposit_id"], "deposit_sync": line["sync"], "overage_line_id": line["line_id"]})
+        rows.append(row)
+    return {"rows": rows, "items": items}
+
+
+def write_corrections(out: Path, p: dict) -> dict:
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "corrections.jsonl").write_text("".join(json.dumps(x, sort_keys=True) + "\n" for x in p["items"]))
+    write_csv(out / "corrections.csv", p["rows"], ["day", "when", "customer", "amount", "tender", "staff", "status",
+                                                   "reason", "qbo_customer", "applied_to", "key"])
+    summary = {"tool": TOOL, "kind": "corrections", "items": len(p["items"]),
+               "total": f"{sum(Decimal(x['amount']) for x in p['items']):.2f}",
+               "held": [r for r in p["rows"] if r["status"] == HOLD],
+               "sha256": payloads_sha(p["items"]) if p["items"] else "", "financial_writes": False}
+    dump_json(out / "corrections_summary.json", summary)
+    return summary
+
+
+def corrected_deposit(dep: dict, item: dict, payment_id: str) -> dict:
+    """The deposit with the Payment linked in and its Till Overage line lowered by the same amount."""
+    amount = money(item["amount"])
+    lines = []
+    for ln in dep.get("Line") or []:
+        if str(ln.get("Id")) == item["overage_line_id"] and not ln.get("LinkedTxn"):
+            rest = money(ln.get("Amount")) - amount
+            if rest < 0:
+                raise StopPost(f"deposit {dep['Id']} overage line is now N{money(ln.get('Amount')):,.2f}; re-plan")
+            if rest > 0:
+                lines.append(dict(ln, Amount=float(rest)))
+        else:
+            lines.append(ln)
+    lines.append({"Amount": float(amount), "LinkedTxn": [{"TxnId": payment_id, "TxnType": "Payment", "TxnLineId": "0"}]})
+    return {**dep, "Line": lines,
+            "PrivateNote": f"{dep.get('PrivateNote') or ''} | {item['amount']} of till overage was account payment "
+                           f"{payment_id} (epos-repay {item['key']})"[:4000]}
+
+
+def post_corrections(plan_dir: Path, *, client, approval_ref: str, expect_sha: str) -> dict:
+    if not approval_ref.strip():
+        raise StopPost("an approval reference is required")
+    items = [json.loads(x) for x in (Path(plan_dir) / "corrections.jsonl").read_text().splitlines() if x.strip()]
+    if not items or payloads_sha(items) != expect_sha:
+        raise StopPost("corrections changed since they were approved; re-plan")
+    book, results = ledger(), []
+    for item in items:
+        key, pay = item["key"], dict(item["payment"])
+        pay.pop("_key", None)
+        rec = book.get(key) or {}
+        pid = rec.get("qbo_id")
+        dep = client.get_json(f"/deposit/{item['deposit_id']}").get("Deposit") or {}
+        linked_now = {str(t.get("TxnId")) for ln in dep.get("Line") or [] for t in ln.get("LinkedTxn") or []}
+        if not (pid and pid in linked_now) and str(dep.get("SyncToken")) != item["deposit_sync"]:
+            results.append({"key": key, "status": FAILED, "payment": pid or "",
+                            "detail": f"deposit {item['deposit_id']} changed since the plan; re-plan"})
+            break
+        if not pid:
+            same_day = client.query_all(f"select * from Payment where TxnDate = '{pay['TxnDate']}'", "Payment")
+            found = [x for x in same_day if f"| epos-repay {key} |" in str(x.get("PrivateNote") or "")]
+            if found:
+                pid = str(found[0]["Id"])
+            else:
+                body = dict(pay, PrivateNote=f"{pay['PrivateNote']} | correction, approval {approval_ref}"[:4000])
+                made = client.post_json("/payment", body, f"epos-repay-{key}").get("Payment") or {}
+                pid = str(made.get("Id") or "")
+                if not pid:
+                    results.append({"key": key, "status": FAILED, "detail": "QuickBooks did not return a payment"})
+                    break
+            problems = verify((client.get_json(f"/payment/{pid}").get("Payment") or {}), pay)
+            book[key] = {"qbo_id": pid, "at": datetime.now(LAGOS).isoformat(timespec="seconds"), "approval": approval_ref}
+            dump_json(ledger_path(), book)
+            if problems:
+                results.append({"key": key, "status": FAILED, "payment": pid, "detail": "; ".join(problems)})
+                break
+        dep = client.get_json(f"/deposit/{item['deposit_id']}").get("Deposit") or {}
+        linked = {str(t.get("TxnId")) for ln in dep.get("Line") or [] for t in ln.get("LinkedTxn") or []}
+        if pid in linked:
+            book[key]["deposit"] = item["deposit_id"]
+            dump_json(ledger_path(), book)
+            results.append({"key": key, "status": "ALREADY_DONE", "payment": pid, "deposit": item["deposit_id"]})
+            continue
+        if str(dep.get("SyncToken")) != item["deposit_sync"]:
+            results.append({"key": key, "status": FAILED, "payment": pid,
+                            "detail": f"deposit {item['deposit_id']} changed since the plan; re-plan"})
+            break
+        before = money(dep.get("TotalAmt"))
+        try:
+            client.post_json("/deposit", corrected_deposit(dep, item, pid), f"epos-repay-dep-{key}")
+        except Exception as exc:  # noqa: BLE001 - the link check above makes a retry safe
+            results.append({"key": key, "status": FAILED, "payment": pid, "detail": str(exc)[:300]})
+            break
+        after = client.get_json(f"/deposit/{item['deposit_id']}").get("Deposit") or {}
+        ok = (money(after.get("TotalAmt")) == before and
+              pid in {str(t.get("TxnId")) for ln in after.get("Line") or [] for t in ln.get("LinkedTxn") or []})
+        book[key]["deposit"] = item["deposit_id"]
+        dump_json(ledger_path(), book)
+        results.append({"key": key, "status": POSTED if ok else FAILED, "payment": pid, "deposit": item["deposit_id"],
+                        "detail": "" if ok else f"deposit total {after.get('TotalAmt')} (was {before}) or link missing"})
+        if not ok:
+            break
+        # the next item on the same deposit needs its fresh SyncToken
+        for later in items:
+            if later["deposit_id"] == item["deposit_id"]:
+                later["deposit_sync"] = str(after.get("SyncToken"))
+    res = {"approval_ref": approval_ref, "results": results,
+           "complete": len(results) == len(items) and all(r["status"] in (POSTED, "ALREADY_DONE") for r in results)}
+    dump_json(Path(plan_dir) / "corrections_post.json", res)
+    return res
+
+
 # ---------------------------------------------------------------- daily_run hook
 def run(out: Path, *, client, write_client=None, dry_run: bool = False, env=None, cap_data: dict | None = None,
         approval_ref: str = "") -> dict:
@@ -476,6 +636,13 @@ def main(argv=None) -> int:
     p = sub.add_parser("plan", help="READ-ONLY: read EPOS and QBO, write a plan (no QBO writes)")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--capture", type=Path, help="reuse a capture.json instead of reading EPOS")
+    p = sub.add_parser("plan-corrections", help="READ-ONLY: corrections for payments on already-banked days")
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--capture", type=Path, help="reuse a capture.json instead of reading EPOS")
+    p = sub.add_parser("post-corrections", help="WRITES: approved corrections (Payment + deposit overage move)")
+    p.add_argument("--plan-dir", type=Path, required=True)
+    p.add_argument("--approval-ref", required=True)
+    p.add_argument("--expect-sha", required=True)
     p = sub.add_parser("post", help="WRITES QBO Payments from an approved plan")
     p.add_argument("--plan-dir", type=Path, required=True)
     p.add_argument("--approval-ref", required=True)
@@ -491,6 +658,35 @@ def main(argv=None) -> int:
             print(f"  {row['when']} {row['customer']} N{row['amount']} {row['tender'] or '?'}: {row['status']} "
                   f"{row['reason'] or row['applied_to']}")
         return 0
+    if a.cmd == "plan-corrections":
+        from code_scripts.akponora_ops.uf_deposits import OVERAGE_ACCOUNT_DEFAULT
+
+        client = QBOClient.for_company_a(allow_writes=False)
+        data = json.loads(a.capture.read_text()) if a.capture else capture(a.out)
+        q = load_qbo(client)
+        overage = [x for x in client.query_all("select * from Account where Active = true", "Account")
+                   if OVERAGE_ACCOUNT_DEFAULT in (x.get("Name"), x.get("FullyQualifiedName"))]
+        if len(overage) != 1:
+            print("STOP: Till Overage account not found exactly once")
+            return 2
+        deposits = client.query_all(f"select * from Deposit where TxnDate >= '{FROM_DAY}'", "Deposit")
+        p = plan_corrections(data, q, deposits, str(overage[0]["Id"]), done=ledger(), banked=banked_days(),
+                             limit=cap())
+        summ = write_corrections(a.out, p)
+        print(json.dumps({k: summ[k] for k in ("items", "total", "sha256")}, indent=1))
+        for row in p["rows"]:
+            print(f"  {row['when']} {row['customer']} N{row['amount']} {row['tender']}: {row['status']} {row['reason']}"
+                  f" | {row['applied_to']}")
+        return 0
+    if a.cmd == "post-corrections":
+        try:
+            r = post_corrections(a.plan_dir, client=QBOClient.for_company_a(allow_writes=True),
+                                 approval_ref=a.approval_ref, expect_sha=a.expect_sha)
+        except StopPost as exc:
+            print(f"STOP: {exc}")
+            return 2
+        print(json.dumps(r, indent=1))
+        return 0 if r["complete"] else 2
     try:
         r = post(a.plan_dir, client=QBOClient.for_company_a(allow_writes=True), approval_ref=a.approval_ref,
                  expect_sha=a.expect_sha, include_over_limit=a.include_over_limit)
