@@ -8,7 +8,7 @@ Branch `codex/nora-process-hardening`; do not merge to master during implementat
 Owner said keep today's 17:00 UTC run; it finished 17:19:53 UTC in 19m52s (prior PR #64).
 Private runtime repair `1b1b731` is rebuilt, validated and deployed to web/scheduler on this branch.
 508 core tests and 26 portal tests pass on Mac and isolated server image; 16 live runtime hashes/HTTP/single worker pass.
-Owner said KEEP THE REPAIR PRIVATE: do not push 3ffef33/1b1b731/follow-up notes to public GitHub without later approval.
+Owner said KEEP THE REPAIR PRIVATE: do not push 3ffef33/1b1b731/75f8ce9/follow-up notes to public GitHub without later approval.
 Production received the exact private commit via SSH Git bundle. PR #65 does not include it; keep PR unmerged.
 25 Oct full run failed: Sunday requested 25 days but the collector accepts at most seven.
 Stock-only repair/recovery is authorized by owner chat on 25 Oct; keep PR #65 unmerged.
@@ -29,8 +29,12 @@ Stock editability is unknown: keep checking details for edits, no immutable move
 apply six owner-confirmed supplier aliases; continue demonstrated routine repeat purchases.
 Suppliers 343/344/345 are created and verified; all six links are installed. Deal Radical IDs 124/15
 are recorded as one reporting identity, preserving original bills/payment targets; no QBO merge.
-Candidate purchase-pattern/parser/name-match fixes pass 523 local core tests. Deployment and bill recovery
-are IN PROGRESS; see the checkpoint before changing anything. Do not replay sales, stock or payments.
+Private runtime release 75f8ce9 is deployed and verified: 523 core + 47 portal tests pass on Mac/server;
+18 runtime source hashes match both services. All 33 approved bills (N1,861,500) are posted and verified;
+all 33 are visible unpaid in the refreshed payment Sheet (136 open bill choices). Portal: 82 -> 40 cards.
+Encrypted local restore verifies 2,676 files. NO recovery rerun is needed. Do not replay these bills, sales,
+stock or payments. Four large bills and five supplier/unit/cost holds still need review; CWAY needs its seller.
+SSH builds use docker/code-update.Dockerfile to preserve the validated runtime dependencies.
 
 ## Deployed work — 24 Oct 2026 runtime efficiency
 
