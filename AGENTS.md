@@ -36,6 +36,16 @@ Encrypted local restore verifies 2,676 files. NO recovery rerun is needed. Do no
 stock or payments. Four large bills and five supplier/unit/cost holds still need review; CWAY needs its seller.
 SSH builds use docker/code-update.Dockerfile to preserve the validated runtime dependencies.
 
+26 Oct owner screenshot confirms SEKI ABIMBOLA KOLAWOLE, active QBO vendor 221, for future Seki purchases.
+Production supplier mapping repaired SEKI ABIBOLA (missing 339 -> 221), added SEKI ABIMBOLA;
+both existing full-name aliases remain 221. Web/scheduler verify the same mapping. No financial writes.
+Owner then explicitly approved egg PO 4017 as a genuine frequent purchase: posted/verified unpaid
+Bill 81284, N336,000, vendor 221, source date 8 Oct. One-PO repeat_ok only; no supplier-wide bypass.
+Payment Sheet shows it unpaid (137 open bill choices), staff entries unchanged. Portal now 39 cards,
+eight bills; PO 4017 is cleared. Do not replay it. No BillPayment or InventoryAdjustment was posted.
+Private evidence: /data/ops/company_a/supplier_review/20261026/seki/applied.json and
+/data/ops/company_a/supplier_review/20261026/seki_bill_4017/final_acceptance.json.
+
 ## Deployed work — 24 Oct 2026 runtime efficiency
 
 Historical release: the active branch and no-merge instructions above take precedence.
