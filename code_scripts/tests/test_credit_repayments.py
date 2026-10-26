@@ -349,3 +349,13 @@ class ReadOnceTests(unittest.TestCase):
             cr.created(Resp({"Fault": {}}, 400), "Payment")
         self.assertEqual(cr.created(Resp({"Payment": {"Id": "9"}}), "Payment"), {"Id": "9"})
 
+
+
+class InvoiceWindowTests(unittest.TestCase):
+    def test_invoices_before_the_credit_tender_day_are_paid_first(self):
+        client = mock.Mock()
+        client.query_all.return_value = []
+        client.get_json.return_value = {}
+        cr.load_qbo(client)
+        sql = [c.args[0] for c in client.query_all.call_args_list if "Invoice" in c.args[0]][0]
+        self.assertIn("TxnDate >= '2026-09-01'", sql)

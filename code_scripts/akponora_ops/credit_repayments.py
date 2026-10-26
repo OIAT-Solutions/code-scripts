@@ -45,6 +45,8 @@ from code_scripts.akponora_ops.common import COMPANY, dump_json, state_dir, writ
 TOOL = "credit_repayments"
 LAGOS = ZoneInfo("Africa/Lagos")
 FROM_DAY = "2026-10-05"  # the Credit tender was switched on in EPOS on 5 Oct 2026
+# credit-sale invoices start earlier (Vera's CR260929 N708,599.99); a repayment pays the oldest open one first
+INVOICES_FROM = "2026-09-01"
 MODE_ENV, CAP_ENV = "OIAT_COMPANY_A_CREDIT_REPAYMENTS", "OIAT_COMPANY_A_CREDIT_REPAYMENT_MAX"
 UF_ACCOUNT_ID = "72"
 CREDITS_URL = "https://www.eposnowhq.com/Pages/Reporting/CustomerCredits.aspx"
@@ -335,7 +337,8 @@ def capture(out: Path, *, days: int = 30, recheck: list[dict] = (), company_key:
 # ---------------------------------------------------------------- QBO context (GET only)
 def load_qbo(client, since: str = FROM_DAY) -> dict:
     customers = client.query_all("select * from Customer", "Customer")
-    invoices = [i for i in client.query_all(f"select * from Invoice where TxnDate >= '{since}'", "Invoice")
+    invoices = [i for i in client.query_all(f"select * from Invoice where TxnDate >= '{min(since, INVOICES_FROM)}'",
+                                            "Invoice")
                 if str(i.get("DocNumber") or "").startswith("CR")]
     payments = client.query_all(f"select * from Payment where TxnDate >= '{since}'", "Payment")
     prefs = client.get_json("/preferences").get("Preferences", {})
