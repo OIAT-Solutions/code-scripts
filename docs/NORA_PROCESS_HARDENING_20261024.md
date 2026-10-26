@@ -240,3 +240,20 @@ N535,250 (Vera N534,800), 15 Oct N3,880 (Vera N2,800). NOT posted yet.
 - If bills fails, `delivery_overlaps` silently returns events unchanged on a normal night.
 - One missing archive file fails the whole backup; nightly full restore re-reads every blob (~15 s now, grows).
 - Sunday audit holds repeat weekly with no way to clear them.
+
+### Claude — 26 October (later): read EPOS once
+
+Owner: "If the run reads yesterday's info from EPOS, that should be that." Agreed items 1–3:
+
+1. Every EPOS read starts at the last successful read, not a fixed window. Stock changes: cursor in
+   `<state>/ops/company_a/stock_movements/cursor.json`, saved only after a clean capture. Credit repayments:
+   `<state>/ops/company_a/credit_repayments/seen.json` keeps every payment read; the Customer Credit range is the
+   smallest "Last N days" option since `through`; a payment whose tender was not found is looked up again (by its
+   own day) until found. Completed Transactions sort direction is checked (EPOS can flip it), which is why Vera's
+   N2,750 on 15 Oct was missed on one read.
+2. Credit invoices: a day whose invoices are all EXISTS/POSTED goes into `credit_days_done.json` and is not read
+   again. Paid status comes from the Payments sheet.
+3. Products: fetched directly via the catalogue API pages the page itself uses (count checked against
+   TotalRecords; falls back to UI paging). The stock comparison stays daily (the snapshot takes ~29 s); the Sunday
+   wide audit is gone (stock takes are view-only, confirmed in Chrome 26 Oct).
+

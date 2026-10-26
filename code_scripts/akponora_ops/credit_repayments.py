@@ -10,8 +10,9 @@ Payments workbook (which starts in November). Found in the EPOS back office (rea
   the same payment as a transaction with staff, till and **tender** (Transfer for Vera's).
 * Reporting > Customer > **Customer Report**: each customer's CURRENT BALANCE (negative = owes), MAX CREDIT.
 
-Each nightly run reads the last 30 days of Customer Credit rows, finds each new payment's tender, and plans one
-QBO Payment per EPOS payment:
+Each nightly run reads Customer Credit only from the last good read (owner, 26 Oct: EPOS is read once; a
+payment never changes), finds each new payment's tender, keeps it in ``seen.json``, and plans one QBO Payment
+per EPOS payment:
 
 * Customer: the QBO customer with the same name (credit_invoices.resolve_customer rules); otherwise HOLD.
 * Deposited to Undeposited Funds (``72``) like the till's SalesReceipts, so uf_deposits banks it with that
@@ -34,7 +35,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -54,6 +55,7 @@ TENDERS = {"cash": "Cash", "transfer": "Transfer", "card": "Card"}
 READY, HOLD, WAIT, DONE = "READY", "HOLD", "WAIT", "DONE"
 POSTED, FAILED = "POSTED", "FAILED"
 TAG_RE = re.compile(r"\| epos-repay ([0-9a-f]{16}) \|")
+RANGES = (7, 14, 30, 60, 90)  # Customer Credit "Last N days" options
 
 
 class StopPost(RuntimeError):
@@ -140,6 +142,36 @@ def ledger() -> dict:
     return json.loads(p.read_text()) if p.exists() else {}
 
 
+def seen_path() -> Path:
+    return state_dir(TOOL) / "seen.json"
+
+
+def seen() -> dict:
+    """Payments already read from EPOS: ``{"through": day read up to, "payments": {key: payment}}``."""
+    p = seen_path()
+    return json.loads(p.read_text()) if p.exists() else {"through": "", "payments": {}}
+
+
+def window_days(through: str, today: date) -> int:
+    """The smallest Customer Credit range covering the day after ``through`` up to today (30 on a first read)."""
+    if not through:
+        return 30
+    need = (today - date.fromisoformat(through)).days + 1
+    return next((n for n in RANGES if n >= need), RANGES[-1])
+
+
+def remember(store: dict, cap_data: dict, today: date) -> dict:
+    """Keep every payment read; a tender found later replaces a missing one. Move ``through`` on only when
+    the Customer Credit report itself was read (``credit_read``), so a failed night is read again."""
+    for pay in cap_data.get("payments", []):
+        key = payment_key(pay["customer"], pay["when"], money(pay["amount"]))
+        if pay.get("tender") or "tender" not in store["payments"].get(key, {}):
+            store["payments"][key] = pay
+    if cap_data.get("credit_read"):
+        store["through"] = today.isoformat()
+    return store
+
+
 def payloads_sha(payloads: list[dict]) -> str:
     return hashlib.sha256("\n".join(json.dumps(p, sort_keys=True) for p in payloads).encode()).hexdigest()
 
@@ -201,8 +233,13 @@ CUSTOMER_GRID_JS = """() => { const t = Array.from(document.querySelectorAll('ta
   return t ? Array.from(t.rows).map(r => Array.from(r.cells).map(c => c.innerText.trim())) : null; }"""
 
 
-def capture(out: Path, *, days: int = 30, company_key: str = COMPANY) -> dict:
+def totals_of(rows: list[list[str]]) -> list[Decimal]:
+    return [t for t in (money(r[8]) for r in rows if len(r) > 9) if t is not None]
+
+
+def capture(out: Path, *, days: int = 30, recheck: list[dict] = (), company_key: str = COMPANY) -> dict:
     """Read Customer Credit (last ``days``), each payment's Completed Transactions row, and the Customer Report.
+    ``recheck``: payments read on an earlier night whose tender was not found yet, looked up again.
     Clicks only login, the report filters/Apply, the transactions calendar, sort and page links. Never edits."""
     from playwright.sync_api import sync_playwright
 
@@ -233,6 +270,8 @@ def capture(out: Path, *, days: int = 30, company_key: str = COMPANY) -> dict:
         if grid is None and "no data has been found" not in page.content().lower():
             raise RuntimeError("EPOS Customer Credit report did not load")
         payments = parse_credit_rows(grid or [])
+        new = {(x["customer"], x["when"], x["amount"]) for x in payments}
+        payments += [dict(x) for x in recheck if (x["customer"], x["when"], x["amount"]) not in new]
 
         by_day: dict[str, list[dict]] = {}
         for pay in payments:
@@ -241,8 +280,12 @@ def capture(out: Path, *, days: int = 30, company_key: str = COMPANY) -> dict:
             goto_retry(page, TRANSACTIONS_URL)
             settle(page)
             select_calendar_date(page, "MainContent_calDate", datetime.fromisoformat(day), settle)
-            page.evaluate("__doPostBack('ctl00$MainContent$gvTransactions','Sort$Total')")  # largest first
+            page.evaluate("__doPostBack('ctl00$MainContent$gvTransactions','Sort$Total')")
             settle(page)
+            totals = totals_of(page.evaluate(GRID_JS, "MainContent_gvTransactions") or [])
+            if len(totals) > 1 and totals[0] < totals[-1]:  # EPOS may remember the sort and flip it: largest first
+                page.evaluate("__doPostBack('ctl00$MainContent$gvTransactions','Sort$Total')")
+                settle(page)
             smallest = min(money(x["amount"]) for x in todo)
             for pageno in range(1, 60):
                 rows = page.evaluate(GRID_JS, "MainContent_gvTransactions") or []
@@ -251,8 +294,10 @@ def capture(out: Path, *, days: int = 30, company_key: str = COMPANY) -> dict:
                         hit = match_transaction(pay, rows)
                         if hit:
                             pay.update(hit)
-                totals = [money(r[8]) for r in rows if len(r) > 9 and money(r[8]) is not None]
-                if all("tender" in x for x in todo) or not totals or max(totals) < smallest:
+                totals = totals_of(rows)
+                largest_first = totals == sorted(totals, reverse=True)
+                # stop early only once the page is truly largest-first and already below every wanted amount
+                if all("tender" in x for x in todo) or not totals or (largest_first and max(totals) < smallest):
                     break
                 if page.locator(f"#MainContent_gvTransactions a[href*=\"Page${pageno + 1}'\"]").count() == 0:
                     break
@@ -270,7 +315,7 @@ def capture(out: Path, *, days: int = 30, company_key: str = COMPANY) -> dict:
         browser.close()
 
     result = {"tool": TOOL, "company": company_key, "captured_at": datetime.now(LAGOS).isoformat(timespec="seconds"),
-              "timezone": "Africa/Lagos", "days": days, "payments": payments, "balances": balances,
+              "timezone": "Africa/Lagos", "days": days, "credit_read": True, "payments": payments, "balances": balances,
               "errors": errors, "seconds": round(time.monotonic() - started, 1), "financial_writes": False}
     out.mkdir(parents=True, exist_ok=True)
     dump_json(out / "capture.json", result)
@@ -617,7 +662,15 @@ def run(out: Path, *, client, write_client=None, dry_run: bool = False, env=None
         approval_ref: str = "") -> dict:
     out = Path(out)
     if cap_data is None:
-        cap_data = capture(out)
+        today, done = datetime.now(LAGOS).date(), ledger()
+        store = seen()
+        recheck = [x for k, x in store["payments"].items() if not x.get("tender") and k not in done]
+        cap_data = capture(out, days=window_days(store["through"], today), recheck=recheck)
+        store = remember(store, cap_data, today)
+        if not dry_run:
+            dump_json(seen_path(), store)
+        # plan over everything read so far, so a payment waiting for a yes is not lost when it leaves the window
+        cap_data = {**cap_data, "payments": list(store["payments"].values())}
     p = plan(cap_data, load_qbo(client), done=ledger(), banked=banked_days(), limit=cap(env))
     summary = write_plan(out, cap_data, p)
     res = {"mode": mode(env), "summary": summary, "rows": p["rows"], "posted": []}

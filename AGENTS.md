@@ -8,6 +8,12 @@ integration, corrections for already-banked days) and five review fixes. Full no
 [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) section "Claude — 26 October".
 Fast-forward to the latest branch head before editing; do not rewrite these commits. Keep it private (no public push).
 
+**Read EPOS once (owner, 26 Oct):** EPOS is never re-read for days already read. Products are fetched page by
+page directly; stock changes are read since the last clean capture (`stock_movements/cursor.json`, no Sunday wide
+audit — completed stock takes are view-only in EPOS); a credit-sale day whose invoices are all in QBO is finished
+(`credit_days_done.json`); credit repayments are read since the last good read (`credit_repayments/seen.json`).
+Whether a bill/invoice was paid comes from the Google Sheets, not EPOS.
+
 ## Active branch work — 24 Oct 2026 whole-process hardening
 
 Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.

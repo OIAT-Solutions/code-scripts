@@ -281,3 +281,55 @@ class CorrectionTests(unittest.TestCase):
         self.assertTrue(r2["complete"], r2)
         self.assertEqual(len(fake.payments), 1)  # the same Payment, linked now
         self.assertEqual([l["Amount"] for l in fake.deposits["80700"]["Line"] if not l.get("LinkedTxn")], [450.0])
+
+
+class ReadOnceTests(unittest.TestCase):
+    """Owner, 26 Oct: EPOS is read once. Customer Credit is read only since the last good read."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        for name, path in (("ledger_path", "posted.json"), ("seen_path", "seen.json")):
+            mock.patch.object(cr, name, return_value=self.tmp / path).start()
+        mock.patch.object(cr, "load_qbo", return_value=qbo()).start()
+        mock.patch.object(cr, "banked_days", return_value=set()).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_window_is_the_smallest_range_since_the_last_read(self):
+        today = cr.date(2026, 10, 26)
+        self.assertEqual(cr.window_days("", today), 30)
+        self.assertEqual(cr.window_days("2026-10-25", today), 7)
+        self.assertEqual(cr.window_days("2026-10-15", today), 14)
+        self.assertEqual(cr.window_days("2026-06-01", today), 90)
+
+    def nightly(self, captured, dry_run=False):
+        with mock.patch.object(cr, "capture", side_effect=lambda out, days, recheck: dict(
+                captured, credit_read=True, payments=[dict(x) for x in captured["payments"]] +
+                [dict(x, tender="Transfer") for x in recheck])) as cap:
+            r = cr.run(self.tmp / "out", client=None, dry_run=dry_run, env={})
+        return r, cap.call_args.kwargs
+
+    def test_a_payment_read_once_stays_planned_after_it_leaves_the_window(self):
+        self.nightly({"payments": [pay("20/10/2026 12:00:00", "1000.00")]})
+        self.assertTrue(json.loads((self.tmp / "seen.json").read_text())["through"])
+        r, kw = self.nightly({"payments": []})
+        self.assertEqual(kw["days"], 7)
+        self.assertEqual([x["amount"] for x in r["rows"]], ["1000.00"])
+
+    def test_a_missing_tender_is_looked_up_again_next_night(self):
+        self.nightly({"payments": [pay("20/10/2026 12:00:00", "2750.00", tender=None) | {"tender": ""}]})
+        stored = json.loads((self.tmp / "seen.json").read_text())["payments"]
+        for x in stored.values():
+            x.pop("tender")
+        (self.tmp / "seen.json").write_text(json.dumps({"through": "2026-10-25", "payments": stored}))
+        r, kw = self.nightly({"payments": []})
+        self.assertEqual([x["amount"] for x in kw["recheck"]], ["2750.00"])
+        stored = json.loads((self.tmp / "seen.json").read_text())["payments"]
+        self.assertEqual([x["tender"] for x in stored.values()], ["Transfer"])
+
+    def test_a_plan_only_run_does_not_move_the_read_on(self):
+        self.nightly({"payments": [pay("20/10/2026 12:00:00", "1000.00")]}, dry_run=True)
+        self.assertFalse((self.tmp / "seen.json").exists())
+
+    def test_a_failed_read_is_read_again(self):
+        store = cr.remember({"through": "2026-10-20", "payments": {}}, {"payments": []}, cr.date(2026, 10, 26))
+        self.assertEqual(store["through"], "2026-10-20")
