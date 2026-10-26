@@ -63,6 +63,23 @@ class AuditWindowTests(unittest.TestCase):
             sm.collect_audit(Path(folder)/'recovery','2026-10-01','2026-10-25',reader=capture,resume_from=prior)
             self.assertEqual(calls,['2026-10-08','2026-10-22'])
 
+    def test_sunday_audit_is_a_rolling_window_not_everything_since_october(self):
+        # 26 Oct 2026 review: a fixed 1 Oct start added about six minutes to every Sunday run
+        seen = []
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder);catalogue = root/'catalogue.json';catalogue.write_text('[]')
+            mapping = root/'mapping.csv';mapping.write_text('EPOS Product ID,Review Status\n')
+            def run_command(cmd, *, log_path, env):
+                seen.append((cmd[cmd.index('--from-date')+1], cmd[cmd.index('--through-date')+1]))
+                return 0
+            class Sunday(datetime):
+                @classmethod
+                def now(cls, tz=None):return datetime(2026,11,22,18,tzinfo=ZoneInfo('Africa/Lagos'))
+            run = dr.DailyRun('2026-11-21',root=root/'daily',runner=run_command,send_slack=False,env={})
+            with mock.patch.object(dr,'datetime',Sunday):
+                run.stock_movement_review(dr.StepResult(name='stock'),{'sources':{'catalogue':{'path':str(catalogue)},'mapping':{'path':str(mapping)}}})
+        self.assertEqual(seen[0], ('2026-10-26', '2026-11-22'))  # 28 days, four bounded sections
+
     def test_audit_resume_refuses_full_financial_routine(self):
         with self.assertRaises(ValueError):dr.DailyRun('2026-10-24',stock_audit_resume=Path('/missing'))
 

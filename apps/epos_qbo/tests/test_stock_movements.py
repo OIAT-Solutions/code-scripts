@@ -67,7 +67,9 @@ class StockMovementPortalTests(CompanyAOpsFixtureMixin, TestCase):
         ledger = self.tmp / "ops/company_a/stock_follow/posted.json"
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.write_text(json.dumps({"event3": {"adjustment": "1", "doc": "ST261010-x"}}))
-        self.assertEqual([i["extra"]["event"]["event_id"] for i in self.kinds()], ["event1"])
+        # 26 Oct 2026 review: an eligible event that has NOT been posted (e.g. held by the nightly delivery or audit
+        # checks) keeps its card; only posted ones (event3) are hidden
+        self.assertEqual([i["extra"]["event"]["event_id"] for i in self.kinds()], ["event1", "event2"])
 
     def test_products_quickbooks_does_not_count_get_no_card(self):
         self.event["epos_product_id"] = "777"

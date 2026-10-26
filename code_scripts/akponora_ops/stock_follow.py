@@ -309,6 +309,12 @@ def post(plan_dir: Path, *, client, approval_ref: str, expect_sha: str) -> dict:
             raise
         made = (resp.json() or {}).get("InventoryAdjustment", {}) if getattr(resp, "status_code", 0) == 200 else {}
         if not made.get("Id"):
+            code = getattr(resp, "status_code", 0) or 0
+            # 26 Oct 2026 review: a definite 4xx rejection created nothing; leaving the journal at "sending" made
+            # every later night refuse all stock posting. Only an unclear outcome stays uncertain.
+            journal.put("stock", doc, digest(p), "rejected" if 400 <= code < 500 else "unknown",
+                        {"payload": p, "events": events, "source_shas": source_shas, "http": code,
+                         "reason": str(getattr(resp, "text", ""))[:500]})
             results.append({"doc": doc, "status": "FAILED", "qbo_id": "",
                             "detail": f"HTTP {getattr(resp, 'status_code', '?')}: {str(getattr(resp, 'text', ''))[:300]}"})
             break

@@ -609,7 +609,10 @@ class DailyRun:
         end = datetime.now(ZoneInfo("Africa/Lagos")).date()
         # Sunday: re-read the full open-period movement history to catch older edits.
         # Other days overlap three days. Every selected detail is still freshly read.
-        start = (date(2026, 10, 1) if end.weekday() == 6 else max(date(2026, 10, 1), end - timedelta(days=2))).isoformat()
+        # Sunday completeness audit: a rolling window (26 Oct 2026 review: a fixed 1 Oct start added ~6 minutes a week)
+        audit_days = max(7, int(self.base_env.get("OIAT_COMPANY_A_STOCK_AUDIT_DAYS", "28") or 28))
+        start = (max(date(2026, 10, 1), end - timedelta(days=audit_days - 1)) if end.weekday() == 6
+                 else max(date(2026, 10, 1), end - timedelta(days=2))).isoformat()
         command = [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
             "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)]

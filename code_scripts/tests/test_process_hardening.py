@@ -115,6 +115,23 @@ class PaymentRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.qbo.posts), 1)
         self.assertTrue(sheet.tabs[ps.CREDIT_PAYMENTS][1][10].startswith('NP-'))
 
+    def test_a_failed_lookup_before_sending_is_retried_not_held_forever(self):
+        # 26 Oct 2026 review: a QBO read error before any write was recorded as an uncertain write
+        sheet = IdentifiedSheet(credit=[pay('CR261005-389764', 58200)])
+        ps_rows = sheet.ensure_payment_ids(ps.CREDIT_PAYMENTS, sheet.read(ps.CREDIT_PAYMENTS, 11))  # IDs installed
+        real = self.qbo.query_all
+        def flaky(sql, entity):
+            if entity == 'Payment' and "TxnDate = '" in sql:
+                raise ConnectionError('QuickBooks read timed out')
+            return real(sql, entity)
+        with mock.patch.object(self.qbo, 'query_all', side_effect=flaky):
+            first = self.run_sheet(sheet)
+        self.assertEqual(first['credit'][0]['status'], 'held')
+        self.assertEqual(self.qbo.posts, [])
+        second = self.run_sheet(sheet)
+        self.assertEqual(second['credit'][0]['status'], 'posted')
+        self.assertEqual(len(self.qbo.posts), 1)
+
     def test_distinct_identical_partial_payments_keep_ids_through_sort_and_edits(self):
         sheet = IdentifiedSheet(credit=[pay('CR261005-389764', 10000), pay('CR261005-389764', 10000)])
         self.run_sheet(sheet)
@@ -132,6 +149,17 @@ class PaymentRecoveryTests(unittest.TestCase):
         for row in sheet.tabs[ps.CREDIT_PAYMENTS][1:]:row += [''] * (11-len(row));row[10] = 'NP-' + 'a'*20
         with self.assertRaises(ps.SheetError):self.run_sheet(sheet)
         self.assertEqual(self.qbo.posts, [])
+
+    def test_an_edited_copy_gets_its_own_identity_instead_of_stopping_the_step(self):
+        # 26 Oct 2026 review: copying a row to start a similar payment stopped every payment, every night
+        sheet = IdentifiedSheet(credit=[pay('CR261005-389764', 10000), pay('CR261005-389764', 5000, day='07/10/2026')])
+        for row in sheet.tabs[ps.CREDIT_PAYMENTS][1:]:
+            row += [''] * (11 - len(row))
+            row[10] = 'NP-' + 'a' * 20
+        rows = sheet.ensure_payment_ids(ps.CREDIT_PAYMENTS, sheet.read(ps.CREDIT_PAYMENTS, 11))
+        ids = [r[10] for r in rows[1:]]
+        self.assertEqual(ids[0], 'NP-' + 'a' * 20)
+        self.assertNotEqual(ids[1], ids[0])
 
     def test_status_updates_follow_identity_after_sort_and_edited_source_stops(self):
         sheet=IdentifiedSheet(credit=[pay('CR261005-389764',10000),pay('CR261005-389764',5000)])
@@ -185,6 +213,21 @@ class StockHardeningTests(unittest.TestCase):
         self.assertEqual(len(sf.ledger()), 1)
         sf.post(self.tmp/'p', client=self.qbo, approval_ref='test', expect_sha=plan['payloads_sha256'])
         self.assertEqual(len(self.qbo.posts), 1)
+
+    def test_a_rejected_stock_adjustment_does_not_block_later_nights(self):
+        # 26 Oct 2026 review: a definite 4xx left the journal at "sending", so every later night refused all stock
+        events = sf.collect([self.fixture.capture([event('a')])])
+        plan = sf.plan(events, self.tmp/'p', s=self.s, approve_over_cap=False)
+        class Rejected:
+            status_code, text = 400, '{"Fault": "ValidationFault"}'
+            def json(self): return {}
+        with mock.patch.object(self.qbo, 'post_json', return_value=Rejected()):
+            r = sf.post(self.tmp/'p', client=self.qbo, approval_ref='test', expect_sha=plan['payloads_sha256'])
+        self.assertEqual(r['results'][0]['status'], 'FAILED')
+        journal = WorkState(self.tmp/'state'/sf.TOOL/'work.sqlite3')
+        self.assertEqual(sf.recover_stock_operations(self.qbo, journal), [])  # nothing left "uncertain"
+        sf.post(self.tmp/'p', client=self.qbo, approval_ref='test', expect_sha=plan['payloads_sha256'])
+        self.assertEqual(len(self.qbo.posts), 1)  # the fixed retry posts once
 
     def test_delivery_overlap_holds_positive_count_change(self):
         folder=self.tmp/'bills';folder.mkdir()

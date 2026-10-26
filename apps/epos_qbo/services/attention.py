@@ -408,7 +408,9 @@ def stock_movement_items(runs, errors):
             kind, why = sf.classify({**event, "_day": sf.lagos_day(event["occurred_at_epos"], path)}, cap)
         except (KeyError, ValueError, TypeError, ArithmeticError):
             return False, ""
-        return bool(kind) and (not why or why.startswith("worth ") or why in ("before 1 October", "no quantity change")), why
+        # posted events are hidden above; an eligible-but-unposted one (e.g. held by the nightly delivery or
+        # audit checks the portal cannot see) keeps its card (26 Oct 2026 review)
+        return bool(kind) and (why.startswith("worth ") or why in ("before 1 October", "no quantity change")), why
 
     items, seen = [], set()
     for n, (run, path) in enumerate(sorted(reports, key=lambda pair: pair[1].stat().st_mtime, reverse=True)):

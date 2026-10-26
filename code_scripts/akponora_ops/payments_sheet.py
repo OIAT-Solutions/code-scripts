@@ -200,12 +200,27 @@ class GoogleSheet:
             raise SheetError(f"{tab}: column K is occupied; cannot install payment identities")
         updates, seen = [(f"'{tab}'!K1", ["Payment ID"])], set()
         rows[0][10] = "Payment ID"
+        # a copied row carries the original's ID: the Posted row keeps it, an unposted copy gets a new one
+        # (26 Oct 2026 review: one copied row stopped the whole payments step every night)
+        keeper = {}
+        for n, row in enumerate(rows[1:], 2):
+            pid = clean(row[10]) if len(row) > 10 else ""
+            if pid and any(clean(c) for c in row[:7]) and (pid not in keeper or clean(row[7]) == POSTED):
+                if pid in keeper and clean(rows[keeper[pid] - 1][7]) == POSTED:
+                    raise SheetError(f"{tab}: two Posted rows share Payment ID {pid}; review them")
+                keeper[pid] = n
         for n, row in enumerate(rows[1:], 2):
             if not any(clean(c) for c in row[:7]):
                 continue
             pid = clean(row[10])
             if pid and not re.fullmatch(r"NP-[0-9a-f]{20}", pid):
                 raise SheetError(f"{tab} row {n}: invalid Payment ID")
+            if pid and keeper.get(pid) != n:
+                original = rows[keeper[pid] - 1] if pid in keeper else []
+                if clean(row[7]) == POSTED or [clean(c) for c in row[:7]] == [clean(c) for c in original[:7]]:
+                    # an identical copy may be an accidental duplicate payment: stop, as before
+                    raise SheetError(f"{tab}: duplicate Payment ID; copied rows need a new identity")
+                pid = ""  # an edited copy (a new, similar payment): give it its own identity below
             if not pid:
                 pid = "NP-" + uuid.uuid4().hex[:20]
                 row[10] = pid
@@ -526,6 +541,15 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
         try:
             found = recover_payment(client, kind, body_json, [key, legacy_key], qbo.setdefault("payment_lookup", {})) \
                 if prior or key != legacy_key else None
+        except SheetError as exc:
+            updates.append((n, [f"Held: {exc}", "", now_text()]))
+            results.append({**row, "status": "held", "reason": str(exc)})
+            continue
+        except Exception as exc:  # noqa: BLE001 - a QuickBooks read failed before anything was sent: retry next run
+            updates.append((n, [f"Held: QuickBooks could not be checked ({str(exc)[:120]}); will retry", "", now_text()]))
+            results.append({**row, "status": "held", "reason": f"lookup failed: {exc}"})
+            continue
+        try:
             if found:
                 posted[key] = {"payment_id": str(found["Id"]), "at": now_text(), "kind": kind,
                                "doc": target_key, "source_sha": source_sha}
@@ -558,7 +582,10 @@ def process(kind: str, rows: list[list], targets: dict, qbo: dict, *, s: dict, c
                 posted[key] = {"payment_id": made["Id"], "at": now_text(), "kind": kind, "doc": target_key,
                                "source_sha": source_sha, "verification_required": True}
                 save_posted()
-            journal.put("payment", key, source_sha, "unknown", {"reason": why, "kind": kind, "payload": body_json})
+            code = getattr(resp, "status_code", 0) or 0
+            # a definite 4xx rejection created nothing: retryable once the row is fixed (26 Oct 2026 review)
+            state = "rejected" if not made.get("Id") and 400 <= code < 500 else "unknown"
+            journal.put("payment", key, source_sha, state, {"reason": why, "kind": kind, "payload": body_json})
             updates.append((n, [f"Held: {why}", made.get("Id", ""), now_text()]))
             results.append({**row, "status": "failed", "reason": why})
             break  # stop on the first problem; the rest wait for the next run
