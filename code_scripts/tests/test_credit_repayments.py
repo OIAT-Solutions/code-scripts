@@ -37,6 +37,16 @@ INVOICES = [{"Id": "80642", "DocNumber": "CR261005-389764", "TxnDate": "2026-10-
              "CustomerRef": {"value": "334"}}]
 
 
+class Resp:
+    """Shaped like the requests.Response QBOClient.post_json returns (not a dict)."""
+
+    def __init__(self, body, status_code=200):
+        self.body, self.status_code, self.text = body, status_code, json.dumps(body)
+
+    def json(self):
+        return self.body
+
+
 def qbo(payments=()):
     return {"customers": CUSTOMERS, "invoices": [dict(i) for i in INVOICES], "payments": list(payments), "book_close": ""}
 
@@ -146,7 +156,7 @@ class FakeQBO:
         self.n += 1
         rec = dict(body, Id=str(self.n))
         self.payments.append(rec)
-        return {"Payment": rec}
+        return Resp({"Payment": rec})
 
     def get_json(self, path):
         pid = path.rsplit("/", 1)[1]
@@ -200,7 +210,7 @@ class CorrectionQBO(FakeQBO):
             dep = dict(body, SyncToken=str(int(body["SyncToken"]) + 1),
                        TotalAmt=round(sum(l["Amount"] for l in body["Line"]), 2))
             self.deposits[dep["Id"]] = dep
-            return {"Deposit": dep}
+            return Resp({"Deposit": dep})
         return super().post_json(path, body, requestid)
 
     def get_json(self, path):
@@ -333,3 +343,9 @@ class ReadOnceTests(unittest.TestCase):
     def test_a_failed_read_is_read_again(self):
         store = cr.remember({"through": "2026-10-20", "payments": {}}, {"payments": []}, cr.date(2026, 10, 26))
         self.assertEqual(store["through"], "2026-10-20")
+
+    def test_a_refused_post_is_reported_not_taken_as_created(self):
+        with self.assertRaisesRegex(RuntimeError, "refused \\(400\\)"):
+            cr.created(Resp({"Fault": {}}, 400), "Payment")
+        self.assertEqual(cr.created(Resp({"Payment": {"Id": "9"}}), "Payment"), {"Id": "9"})
+

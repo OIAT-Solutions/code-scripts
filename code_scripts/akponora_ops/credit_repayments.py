@@ -172,6 +172,16 @@ def remember(store: dict, cap_data: dict, today: date) -> dict:
     return store
 
 
+def created(resp, entity: str) -> dict:
+    """The entity QuickBooks returned. QBOClient.post_json gives the raw response (26 Oct: treating it as a dict
+    crashed right after the first correction Payment was created); a refusal raises with QuickBooks' message."""
+    if hasattr(resp, "status_code"):
+        if resp.status_code != 200:
+            raise RuntimeError(f"QuickBooks refused ({resp.status_code}): {resp.text[:300]}")
+        resp = resp.json() or {}
+    return (resp or {}).get(entity) or {}
+
+
 def payloads_sha(payloads: list[dict]) -> str:
     return hashlib.sha256("\n".join(json.dumps(p, sort_keys=True) for p in payloads).encode()).hexdigest()
 
@@ -479,7 +489,7 @@ def post(plan_dir: Path, *, client, approval_ref: str, expect_sha: str, include_
             continue
         body = dict(p, PrivateNote=f"{p['PrivateNote']} | approval {approval_ref}"[:4000])
         try:
-            made = client.post_json("/payment", body, f"epos-repay-{key}").get("Payment") or {}
+            made = created(client.post_json("/payment", body, f"epos-repay-{key}"), "Payment")
         except Exception as exc:  # noqa: BLE001 - recorded; the tag lookup makes a retry safe
             results.append({"key": key, "status": FAILED, "qbo_id": "", "detail": str(exc)[:300]})
             continue
@@ -610,7 +620,11 @@ def post_corrections(plan_dir: Path, *, client, approval_ref: str, expect_sha: s
                 pid = str(found[0]["Id"])
             else:
                 body = dict(pay, PrivateNote=f"{pay['PrivateNote']} | correction, approval {approval_ref}"[:4000])
-                made = client.post_json("/payment", body, f"epos-repay-{key}").get("Payment") or {}
+                try:
+                    made = created(client.post_json("/payment", body, f"epos-repay-{key}"), "Payment")
+                except Exception as exc:  # noqa: BLE001 - the tag lookup above makes a retry safe
+                    results.append({"key": key, "status": FAILED, "payment": "", "detail": str(exc)[:300]})
+                    break
                 pid = str(made.get("Id") or "")
                 if not pid:
                     results.append({"key": key, "status": FAILED, "detail": "QuickBooks did not return a payment"})
@@ -634,7 +648,7 @@ def post_corrections(plan_dir: Path, *, client, approval_ref: str, expect_sha: s
             break
         before = money(dep.get("TotalAmt"))
         try:
-            client.post_json("/deposit", corrected_deposit(dep, item, pid), f"epos-repay-dep-{key}")
+            created(client.post_json("/deposit", corrected_deposit(dep, item, pid), f"epos-repay-dep-{key}"), "Deposit")
         except Exception as exc:  # noqa: BLE001 - the link check above makes a retry safe
             results.append({"key": key, "status": FAILED, "payment": pid, "detail": str(exc)[:300]})
             break
