@@ -257,3 +257,13 @@ Owner: "If the run reads yesterday's info from EPOS, that should be that." Agree
    TotalRecords; falls back to UI paging). The stock comparison stays daily (the snapshot takes ~29 s); the Sunday
    wide audit is gone (stock takes are view-only, confirmed in Chrome 26 Oct).
 
+
+### Claude — 26 October: repayment corrections recorded (owner yes)
+
+Posted by the owner's commands: Payments 81285/81286 (Precious N1,000 ×2, deposit 80701), 81287 (Vera N534,800,
+deposit 80862), 81288 (Vera N50, deposit 81054), 81289 (Vera N2,750 Transfer, deposit 81054; tender confirmed in
+EPOS). Each deposit total unchanged; till overage lowered by the same amount. 81287's N87,000 and 81288's N50 were
+then applied to Vera's 29 Sep invoice CR260929-389764 (balance N618,799.99). The code now reads credit invoices from
+1 Sep (`INVOICES_FROM`). Vera QBO N618,799.99 vs EPOS N623,149.99: the N4,350 is her 25 Oct 19:02 Credit sale,
+invoiced by the 25 Oct business-day run. Precious: N400 credit in both. QBOClient.post_json returns the raw
+response — use `created()`; fakes in tests now return response-shaped objects.
