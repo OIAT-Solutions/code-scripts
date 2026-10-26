@@ -155,8 +155,8 @@ def parse_customer_rows(rows: list[list[str]]) -> list[dict]:
         name = " ".join(f"{get('FIRST NAME')} {get('LAST NAME')}".split())
         if not name:
             continue  # the totals row
-        out.append({"name": name, "balance": str(money(get("CURRENT BALANCE")) or Decimal(0)),
-                    "max_credit": str(money(get("MAX CREDIT")) or Decimal(0)),
+        out.append({"name": name, "balance": f"{money(get('CURRENT BALANCE')) or Decimal(0):.2f}",
+                    "max_credit": f"{money(get('MAX CREDIT')) or Decimal(0):.2f}",
                     "last_transaction": get("LAST TRANSACTION DATE")})
     return out
 
