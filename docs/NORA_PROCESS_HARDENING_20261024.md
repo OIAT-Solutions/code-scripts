@@ -179,3 +179,64 @@ Portal inbox now has 40 cards, no read errors: nine bills, one supplier (CWAY), 
 Encrypted local backup/isolated restore verifies 2,676 files. Separate offsite destination/key custody remains pending. Private detailed records are at `/data/ops/company_a/supplier_review/20261025/`, the fresh plan/results at `/data/ops/company_a/portal_reads/nora_supplier_20261025/bills/`, and local evidence under gitignored `outputs/nora_supplier_release_20261025/`. Preserve original failed full-run/stock recovery evidence.
 
 Build note: use repository `docker/code-update.Dockerfile` for SSH code-only deployment. A full scheduler Dockerfile build hit Windows Docker credential-helper failures. A temporary anonymous public-image config resolved authentication, but that full build would refresh dependencies and was stopped by verifying its exact candidate-only docker.exe command. No financial/service process was stopped. Final candidate uses the established code-update recipe on the validated previous image; root filesystem layer-prefix comparison proves the original dependency base was preserved. Rollback image tag: `oiat-portal:nora-before-suppliers-20261025`; rollback code only while idle, never restore financial state or delete the new suppliers/bills.
+
+
+## Claude — 26 October: credit repayments from EPOS, and review fixes
+
+Owner asked (26 Oct): know from EPOS when a credit sale is paid, not only from the November staff sheet; review
+Codex's work; get both agents on the same page. Built on `e425272`; all 549 core and 423 portal tests pass.
+
+**Where EPOS records repayments (verified live, read-only).** Reporting › Customer › *Customer Credit*
+(`CustomerCredits.aspx`, grid `MainContent_gvCredit`) lists every payment taken onto a customer account
+(customer, date/time, amount). Classic reports › *Completed Transactions* (`CompleteTransactions.aspx`,
+`MainContent_gvTransactions`) has the same payment with staff, till and tender. Reporting › Customer › *Customer
+Report* gives CURRENT BALANCE (negative = owes). They are NOT in the BookKeeping export. Live 26 Oct: Precious
+Akporeha N1,000 ×2 (5 Oct, Transfer), VERA AKPOREHA N534,800 (9 Oct 14:19, Transfer, Ernest Jaitto, Till2), N2,750
+Transfer + N50 Cash (15 Oct). Vera's EPOS balance −N623,149.99; QBO open CR invoices for her N447,800.
+
+**New step `repayments`** (daily_run, after credit, before banking; `credit_repayments.py`). Reads the last 30
+days, one QBO Payment per EPOS payment into Undeposited Funds (72), oldest open CR invoices first, remainder
+unapplied credit. Identity: `PaymentRefNum EPR-<key>` + memo `| epos-repay <key> |` (key = hash customer +
+EPOS time + amount); ledger `state/credit_repayments/posted.json`; never posted twice. HOLD: unknown customer,
+mixed/missing tender, day already banked, closed period, before 5 Oct; over N2m waits. **Off by default**:
+`OIAT_COMPANY_A_CREDIT_REPAYMENTS=plan|post` in the environment or in
+`STATE_ROOT/ops/company_a/credit_repayments/settings.env`. Live read-only trial 26 Oct 02:35 Lagos: 5 payments,
+all tenders found, both customers matched, all HOLD (days already banked), 144 s, one EPOS login, no writes.
+
+**Banking (`uf_deposits`).** Tagged repayment Payments join the day's receipts (`repayment_receipt`) and are
+linked into deposits with `TxnType Payment`; re-check reads `/payment/{id}`. A repayment is therefore banked with
+the till money and no longer booked as Till Overage (that is what happened on 9 Oct: overage N535,250, of which
+N534,800 was Vera). Untagged Payments are never touched. A day with only repayments is still NO_SALES.
+
+**Payments sheet.** A staff credit row for money EPOS already recorded (same customer as the row's invoice, same
+amount, ±1 day) is linked to that Payment, never posted again; same customer/day with another amount HOLDs.
+Rows for money that never passed the till post as before. `load_qbo` now also reads tagged Payments.
+
+**Corrections for already-banked days** (`plan-corrections` read-only, `post-corrections` writes, each needs an
+owner yes): record the Payment, then put it into that day's own UF deposit and lower its Till Overage line by the
+same amount — deposit total/banks unchanged. Deposit SyncToken is checked before any write; a Payment made without
+its deposit change is planned again and finished once. Overage available: 5 Oct N3,775 (Precious N2,000), 9 Oct
+N535,250 (Vera N534,800), 15 Oct N3,880 (Vera N2,800). NOT posted yet.
+
+**Review of `origin/master..e425272` — fixed here (`fd09e1b`):**
+1. stock_follow: a definite 4xx left the journal at `sending`, so every later night refused all stock posting →
+   now `rejected` (only unclear outcomes stay uncertain).
+2. Sunday audit re-read from a fixed 1 Oct (+~6 min/week) → rolling 28 days (`OIAT_COMPANY_A_STOCK_AUDIT_DAYS`).
+3. Portal hid stock events `classify` thought eligible but `nightly` held (`_audit_only`, `delivery_overlap`) →
+   only posted / over-cap card / pre-Oct / zero-qty / NonInventory are hidden.
+4. payments_sheet: a QBO read error before any write was journaled `unknown` (row held forever) → held and
+   retried next run; a definite 4xx is `rejected` (retryable).
+5. A copied sheet row carrying column K stopped the whole tab → an edited copy gets a new Payment ID; identical
+   copies and two Posted rows sharing an ID still stop (Codex's guard kept).
+
+**Review — NOT changed, owner decisions needed:**
+- `money_integrity.overage_overlap` holds a whole banking day for any overage (even N1 within tolerance) when the
+  sheet has any repayment that day, with no approve path. With EPOS repayments now in receipts this mostly
+  disappears for till repayments; it still fires for sheet-only repayments.
+- New Stock / no-reason changes now always need review (owner decision of 12 Oct had them posting as NA);
+  the cap now applies to the whole EPOS transfer.
+- Exact-match checks on already-posted invoices/bills re-HOLD on every re-plan after any mapping/alias/QBO edit
+  (cannot double-post, but grows the queue; credit re-checks every day since 5 Oct nightly).
+- If bills fails, `delivery_overlaps` silently returns events unchanged on a normal night.
+- One missing archive file fails the whole backup; nightly full restore re-reads every blob (~15 s now, grows).
+- Sunday audit holds repeat weekly with no way to clear them.

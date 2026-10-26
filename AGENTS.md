@@ -1,5 +1,13 @@
 # Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
 
+## Claude, 26 Oct 2026 — credit repayments from EPOS + review fixes (read this first)
+
+Built on top of Codex's `e425272`, same private branch `codex/nora-process-hardening` (owner: "you both should be
+on the same page"). Commits after `e425272`: credit repayments (`credit_repayments.py`, banking + payments-sheet
+integration, corrections for already-banked days) and five review fixes. Full notes:
+[`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) section "Claude — 26 October".
+Fast-forward to the latest branch head before editing; do not rewrite these commits. Keep it private (no public push).
+
 ## Active branch work — 24 Oct 2026 whole-process hardening
 
 Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.
