@@ -26,7 +26,8 @@ import csv
 import json
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -176,11 +177,28 @@ def requestid(doc: str) -> str:
 
 
 # ---------------------------------------------------------------- the step
+def done_path(state_root: Path | None = None) -> Path:
+    return mapping_path(state_root).parent / "credit_days_done.json"
+
+
+def done_days(state_root: Path | None = None) -> dict:
+    try:
+        return json.loads(done_path(state_root).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def days_to_do(business_day: str, state_root: Path | None = None) -> list[str]:
+    """Credit-sale days not yet finished. A day is finished once every invoice for it is verified in QuickBooks
+    (owner, 26 Oct 2026: credit sales are one and done; repayments come from the sheet/EPOS, not a re-check)."""
     start, end = date.fromisoformat(FROM_DAY), date.fromisoformat(business_day)
+    finished = done_days(state_root)
     out = []
     d = start
     while d <= end:
+        if d.isoformat() in finished:
+            d += timedelta(days=1)
+            continue
         if (credit_sales.day_dir(d.isoformat(), state_root) / "credit_raw.csv").exists() or \
                 (credit_sales.day_dir(d.isoformat(), state_root) / "mixed_raw.csv").exists():
             out.append(d.isoformat())
@@ -353,5 +371,14 @@ def run(out: Path, *, business_day: str, client, write_client=None, dry_run: boo
                     prior = work.get("credit", doc)
                     work.put("credit", doc, prior["source_sha"] if prior else "", "review",
                              {"reason": inv["reason"], "owner": "OIAT", "previous": prior["evidence"] if prior else {}})
+    if not dry_run:
+        finished = done_days(state_root)
+        for day in days:
+            day_invoices = [i for i in res["invoices"] if i["day"] == day]
+            if day_invoices and all(i["status"] in (EXISTS, POSTED) for i in day_invoices) or \
+                    (not day_invoices and day not in source_frames):  # a mixed-only day: reported once, nothing to post
+                finished[day] = {"at": datetime.now(ZoneInfo("Africa/Lagos")).isoformat(timespec="seconds"),
+                                 "invoices": [i.get("invoice_id") for i in day_invoices]}
+        dump_json(done_path(state_root), finished)
     dump_json(out / "credit_invoices.json", res)
     return res

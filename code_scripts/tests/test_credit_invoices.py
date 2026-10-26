@@ -144,6 +144,7 @@ class InvoiceTests(Base):
         before = len(self.qbo.posts)
         inv = next(i for i in self.qbo.invoices if i["DocNumber"] == "CR261005-389764")
         inv["DocNumber"] += ".0"
+        ci.done_path(self.root).unlink()  # the existing-invoice check, as on a day's first check
         r = self.run_ci(self.qbo)
         by_doc = {i["doc"]: i for i in r["invoices"]}
         self.assertEqual(by_doc["CR261005-389764"]["status"], ci.EXISTS)
@@ -154,9 +155,19 @@ class InvoiceTests(Base):
         before = len(self.qbo.posts)
         inv = self.qbo.invoices[0]
         inv["TotalAmt"] = 1
+        ci.done_path(self.root).unlink()  # the existing-invoice check, as on a day's first check
         r = self.run_ci(self.qbo)
         self.assertTrue(any(i["status"] == ci.HELD for i in r["invoices"]))
         self.assertEqual(len(self.qbo.posts), before)
+
+    def test_a_finished_day_is_not_checked_again(self):
+        # owner 26 Oct 2026: a credit sale is one and done; no nightly re-check of every day since 5 Oct
+        self.run_ci(self.qbo)
+        self.assertIn("2026-10-05", ci.done_days(self.root))
+        calls = len(getattr(self.qbo, "calls", []) or [])
+        self.assertEqual(ci.days_to_do("2026-10-05", self.root), [])
+        r = self.run_ci(self.qbo)
+        self.assertEqual(r["invoices"], [])
 
     def test_plan_mode_posts_nothing(self):
         r = self.run_ci(self.qbo, post=False)

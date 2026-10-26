@@ -49,6 +49,7 @@ class InvoiceHardeningTests(Base):
             if change == 'customer':target['CustomerRef'] = {'value': 'wrong'}
             elif change == 'duplicate':self.qbo.invoices.append({**target, 'Id': 'duplicate'})
             else:target['Line'][0]['SalesItemLineDetail']['Qty'] = 99
+            ci.done_path(self.root).unlink(missing_ok=True)  # 26 Oct: finished days are not re-checked
             result = self.run_ci(self.qbo)
             self.assertTrue(any(x['status'] == ci.HELD for x in result['invoices']), change)
             self.assertEqual(len(self.qbo.posts), before)
@@ -58,9 +59,11 @@ class InvoiceHardeningTests(Base):
         self.config.product_conversion_file = mapping
         self.run_ci(self.qbo)
         with mock.patch.object(ci, 'invoice_lines', side_effect=AssertionError('unexpected retransform')):
+            ci.done_path(self.root).unlink(missing_ok=True)  # 26 Oct: finished days are not re-checked
             result = self.run_ci(self.qbo)
             self.assertEqual(result['reused_prepared'], 3)
             self.qbo.invoices[0]['TotalAmt'] = 1
+            ci.done_path(self.root).unlink(missing_ok=True)
             result = self.run_ci(self.qbo)
             self.assertTrue(any(x['status'] == ci.HELD for x in result['invoices']))
 
