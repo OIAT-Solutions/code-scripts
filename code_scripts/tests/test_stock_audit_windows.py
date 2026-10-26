@@ -11,6 +11,27 @@ from zoneinfo import ZoneInfo
 from code_scripts.akponora_ops import daily_run as dr, stock_movements as sm, epos_adjustments as reader
 
 
+
+_CURSOR_DIR = None
+
+
+def setUpModule():  # noqa: N802 - unittest hook: the stock-movement "last run" marker never touches real state
+    import tempfile as _tf
+    from unittest import mock as _mock
+
+    global _CURSOR_DIR
+    _CURSOR_DIR = _tf.TemporaryDirectory()
+    _p = _mock.patch("code_scripts.akponora_ops.daily_run.movement_cursor_path",
+                     lambda: __import__("pathlib").Path(_CURSOR_DIR.name) / "cursor.json")
+    _p.start()
+
+
+def tearDownModule():  # noqa: N802
+    from unittest import mock as _mock
+
+    _mock.patch.stopall()
+    _CURSOR_DIR.cleanup()
+
 class AuditWindowTests(unittest.TestCase):
     @staticmethod
     def empty_capture(path, start, sources, company, *, through_date):
@@ -63,27 +84,40 @@ class AuditWindowTests(unittest.TestCase):
             sm.collect_audit(Path(folder)/'recovery','2026-10-01','2026-10-25',reader=capture,resume_from=prior)
             self.assertEqual(calls,['2026-10-08','2026-10-22'])
 
-    def test_sunday_audit_is_a_rolling_window_not_everything_since_october(self):
-        # 26 Oct 2026 review: a fixed 1 Oct start added about six minutes to every Sunday run
+    def windows_for(self, today, cursor=None):
         seen = []
+        if cursor:
+            dr.save_movement_cursor(date.fromisoformat(cursor))
+        else:
+            dr.movement_cursor_path().unlink(missing_ok=True)
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder);catalogue = root/'catalogue.json';catalogue.write_text('[]')
             mapping = root/'mapping.csv';mapping.write_text('EPOS Product ID,Review Status\n')
             def run_command(cmd, *, log_path, env):
-                seen.append((cmd[cmd.index('--from-date')+1], cmd[cmd.index('--through-date')+1]))
+                seen.append((cmd[cmd.index('--from-date')+1], cmd[cmd.index('--through-date')+1], '--weekly-audit' in cmd))
                 return 0
-            class Sunday(datetime):
+            class Clock(datetime):
                 @classmethod
-                def now(cls, tz=None):return datetime(2026,11,22,18,tzinfo=ZoneInfo('Africa/Lagos'))
+                def now(cls, tz=None):return datetime.fromisoformat(today).replace(hour=18, tzinfo=ZoneInfo('Africa/Lagos'))
             run = dr.DailyRun('2026-11-21',root=root/'daily',runner=run_command,send_slack=False,env={})
-            with mock.patch.object(dr,'datetime',Sunday):
+            with mock.patch.object(dr,'datetime',Clock):
                 run.stock_movement_review(dr.StepResult(name='stock'),{'sources':{'catalogue':{'path':str(catalogue)},'mapping':{'path':str(mapping)}}})
-        self.assertEqual(seen[0], ('2026-10-26', '2026-11-22'))  # 28 days, four bounded sections
+        return seen[0]
+
+    def test_reads_since_the_last_clean_capture_and_no_sunday_wide_audit(self):
+        # owner 26 Oct 2026: completed EPOS stock takes are view-only, so only new changes are read
+        self.assertEqual(self.windows_for('2026-11-22', cursor='2026-11-21'), ('2026-11-21', '2026-11-22', False))  # Sunday too
+        self.assertEqual(self.windows_for('2026-11-18'), ('2026-11-16', '2026-11-18', False))  # no marker yet: 3 days
+
+    def test_a_missed_week_catches_up_in_bounded_sections(self):
+        self.assertEqual(self.windows_for('2026-11-22', cursor='2026-11-10'), ('2026-11-10', '2026-11-22', True))
 
     def test_audit_resume_refuses_full_financial_routine(self):
         with self.assertRaises(ValueError):dr.DailyRun('2026-10-24',stock_audit_resume=Path('/missing'))
 
     def test_sunday_daily_command_runs_actual_bounded_collector(self):
+        # 26 Oct 2026: the wide read now only happens as a catch-up after missed nights (here: last clean 1 Oct)
+        dr.save_movement_cursor(date(2026, 10, 1))
         calls = []
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder);catalogue = root/'catalogue.json';catalogue.write_text('[]')

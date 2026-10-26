@@ -113,6 +113,29 @@ def read_json(path: Path, default=None):
         return default
 
 
+def movement_cursor_path() -> Path:
+    from code_scripts.akponora_ops.common import state_dir
+
+    return state_dir("stock_movements") / "cursor.json"
+
+
+def movement_start(end: date) -> date:
+    """The last cleanly captured day (read again for overlap), else three days back; never before 1 Oct."""
+    floor = date(2026, 10, 1)
+    try:
+        last = date.fromisoformat(json.loads(movement_cursor_path().read_text())["through"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return max(floor, end - timedelta(days=2))
+    return max(floor, min(last, end))
+
+
+def save_movement_cursor(end: date) -> None:
+    from code_scripts.akponora_ops.common import dump_json
+
+    dump_json(movement_cursor_path(), {"through": end.isoformat(),
+                                       "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+
+
 def read_step_limit(cmd: list[str], env: dict) -> int:
     limit = max(60, int(env.get("OIAT_READ_STEP_TIMEOUT_SECONDS", "1200")))
     if "code_scripts.akponora_ops.stock_movements" in cmd and "--weekly-audit" in cmd:
@@ -498,7 +521,8 @@ class DailyRun:
             res.status, res.detail = SKIPPED, "no stock-movement capture in this run"
             return
         end = datetime.now(TZ).date()
-        auto_from = max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
+        # events in this run's capture window post automatically (a missed night's catch-up included)
+        auto_from = getattr(self, "movement_from", None) or max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
         bills_dir = self.step_dir("bills")
         if "bills" not in self.only:
             # A stock-only recovery must still check current deliveries. Refresh PO evidence
@@ -607,17 +631,17 @@ class DailyRun:
         out = self.step_dir("movements")
         # Sales normally posts yesterday; staff stock additions must include today.
         end = datetime.now(ZoneInfo("Africa/Lagos")).date()
-        # Sunday: re-read the full open-period movement history to catch older edits.
-        # Other days overlap three days. Every selected detail is still freshly read.
-        # Sunday completeness audit: a rolling window (26 Oct 2026 review: a fixed 1 Oct start added ~6 minutes a week)
-        audit_days = max(7, int(self.base_env.get("OIAT_COMPANY_A_STOCK_AUDIT_DAYS", "28") or 28))
-        start = (max(date(2026, 10, 1), end - timedelta(days=audit_days - 1)) if end.weekday() == 6
-                 else max(date(2026, 10, 1), end - timedelta(days=2))).isoformat()
+        # Since the last clean capture (owner, 26 Oct 2026): completed EPOS stock takes and adjustments are view-only
+        # (checked in the back office), so there is nothing older to re-read and no weekly wide audit. The last
+        # captured day is read again (one day overlap; events are de-duplicated by id). Missed nights catch up.
+        start_day = movement_start(end)
+        start = start_day.isoformat()
+        self.movement_from = start
         command = [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
             "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)]
-        if end.weekday() == 6 or self.stock_audit_resume:
-            command.append("--weekly-audit")
+        if (end - start_day).days >= 7 or self.stock_audit_resume:
+            command.append("--weekly-audit")  # a long catch-up is split into <=7-day sections
         if self.stock_audit_resume:
             # A recovery may cross midnight; retain the original audit's start, extend its
             # end to today, and freshly collect every section overlapping recent stock.
@@ -626,6 +650,8 @@ class DailyRun:
             command.extend(["--resume-audit", str(self.stock_audit_resume)])
         rc = self.run_step("movements", command, out)
         report = read_json(out / "summary.json", {}) or {}
+        if report and not report.get("errors") and not rc and not self.dry_run and not self.stock_audit_resume:
+            save_movement_cursor(end)
         events = report.get("events") or []
         res.counts["movement_events"] = len(events)
         res.counts["movement_capture_errors"] = len(report.get("errors") or [])

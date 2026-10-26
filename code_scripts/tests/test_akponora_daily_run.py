@@ -36,6 +36,27 @@ def step_of(cmd) -> str:
     raise AssertionError(cmd)
 
 
+
+_CURSOR_DIR = None
+
+
+def setUpModule():  # noqa: N802 - unittest hook: the stock-movement "last run" marker never touches real state
+    import tempfile as _tf
+    from unittest import mock as _mock
+
+    global _CURSOR_DIR
+    _CURSOR_DIR = _tf.TemporaryDirectory()
+    _p = _mock.patch("code_scripts.akponora_ops.daily_run.movement_cursor_path",
+                     lambda: __import__("pathlib").Path(_CURSOR_DIR.name) / "cursor.json")
+    _p.start()
+
+
+def tearDownModule():  # noqa: N802
+    from unittest import mock as _mock
+
+    _mock.patch.stopall()
+    _CURSOR_DIR.cleanup()
+
 class FakeRunner:
     """Stands in for ``run_command``: records calls, writes the evidence each job would write."""
 
@@ -95,6 +116,7 @@ class DailyRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             for enabled, incomplete in ((False, False), (True, False), (True, True)):
                 with self.subTest(enabled=enabled, incomplete=incomplete):
+                    dr.movement_cursor_path().unlink(missing_ok=True)
                     calls = []
                     def runner(cmd, *, log_path, env):
                         calls.append(cmd)
@@ -123,6 +145,8 @@ class DailyRunTests(unittest.TestCase):
                     # an unreadable adjustment is a review item, not a failed run (7-8 Oct 2026)
                     self.assertEqual(result.status, dr.REVIEW if enabled else dr.OK)
                     self.assertEqual(result.exit_code, 0)
+                    # only a complete capture moves the "last read" marker (26 Oct 2026)
+                    self.assertEqual(dr.movement_cursor_path().exists(), enabled and not incomplete)
                     if incomplete:
                         self.assertTrue(any("could not read 1 adjustment" in r for r in result.review))
 
