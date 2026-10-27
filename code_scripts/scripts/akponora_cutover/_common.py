@@ -103,7 +103,7 @@ def epos_login(page, cfg) -> None:
 
     reused = epos_session.restore(page.context, cfg.company_key)
     goto_retry(page, EPOS_LOGIN_URL)
-    if reused and not epos_session.on_login_page(page):
+    if epos_session.reuse(page, reused, lambda: goto_retry(page, EPOS_LOGIN_URL)):
         epos_session.save(page.context, cfg.company_key)
         print("EPOS: reused this run's login", flush=True)
         return

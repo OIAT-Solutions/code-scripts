@@ -182,17 +182,21 @@ def run(
     context = browser.new_context()
     page = context.new_page()
     reused = epos_session.restore(context, config.company_key)  # only inside a Nora daily run
-    for attempt in range(1, _GOTO_MAX_RETRIES + 1):
-        try:
-            page.goto(_EPOS_URL)
-            break
-        except Exception as e:
-            if attempt < _GOTO_MAX_RETRIES:
-                print(f"  [Retry {attempt}/{_GOTO_MAX_RETRIES}] page.goto failed: {e}. Retrying in {_GOTO_RETRY_DELAY_S}s...")
-                time.sleep(_GOTO_RETRY_DELAY_S)
-            else:
-                raise
-    if reused and not epos_session.on_login_page(page):
+
+    def open_report():
+        for attempt in range(1, _GOTO_MAX_RETRIES + 1):
+            try:
+                page.goto(_EPOS_URL)
+                break
+            except Exception as e:
+                if attempt < _GOTO_MAX_RETRIES:
+                    print(f"  [Retry {attempt}/{_GOTO_MAX_RETRIES}] page.goto failed: {e}. Retrying in {_GOTO_RETRY_DELAY_S}s...")
+                    time.sleep(_GOTO_RETRY_DELAY_S)
+                else:
+                    raise
+
+    open_report()
+    if epos_session.reuse(page, reused, open_report):
         print("  EPOS: reused this run's login")
     else:
         page.get_by_role("textbox", name="Username or email address").click()

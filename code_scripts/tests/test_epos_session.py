@@ -14,13 +14,16 @@ from code_scripts.scripts.akponora_cutover import _common
 
 class Context:
     def __init__(self, cookies=()):
-        self.saved, self.added = list(cookies), []
+        self.saved, self.added, self.cleared = list(cookies), [], 0
 
     def cookies(self):
         return self.saved
 
     def add_cookies(self, cookies):
         self.added += cookies
+
+    def clear_cookies(self):
+        self.cleared += 1
 
 
 class Page:
@@ -34,7 +37,7 @@ class Page:
     def locator(self, sel):
         page = self
         return mock.Mock(count=lambda: 1 if page.report else 0,
-                         or_=lambda other: mock.Mock(first=mock.Mock(wait_for=lambda timeout: None)))
+                         or_=lambda other: mock.Mock(first=mock.Mock(wait_for=lambda **kw: None)))
 
     def get_by_role(self, role, name):
         page = self
@@ -79,6 +82,36 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(es.on_login_page(Page(report=True)))
         self.assertTrue(es.on_login_page(Page(report=False)))
 
+    def test_a_hidden_first_report_element_still_counts_as_logged_in(self):
+        # 27 Oct 2026: SageReport.aspx starts with a hidden MainContent_ tooltip; waiting for it to be
+        # visible took every logged-in page for the login form.
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch()
+        except Exception as exc:  # noqa: BLE001 - no browser in this environment
+            self.skipTest(f"Chromium not available: {exc}")
+        try:
+            page = browser.new_page()
+            page.set_content('<span id="MainContent_Tooltip" style="display:none">tip</span>'
+                             '<div id="MainContent_timeControl">dates</div>')
+            self.assertFalse(es.on_login_page(page, timeout_ms=3000))
+            page.set_content('<input aria-label="Username or email address"><input type="password">')
+            self.assertTrue(es.on_login_page(page, timeout_ms=3000))
+        finally:
+            browser.close()
+            pw.stop()
+
+    def test_a_page_not_taken_as_logged_in_is_reloaded_without_the_saved_login(self):
+        reloads = []
+        page = Page(report=False)
+        self.assertFalse(es.reuse(page, True, lambda: reloads.append(1)))
+        self.assertEqual((page.context.cleared, reloads), (1, [1]))
+        page = Page(report=True)
+        self.assertTrue(es.reuse(page, True, lambda: reloads.append(1)))
+        self.assertFalse(es.reuse(Page(report=True), False, lambda: reloads.append(1)))
+        self.assertEqual((page.context.cleared, reloads), (0, [1]))
+
 
 class EposLoginTests(SessionTests):
     cfg = SimpleNamespace(company_key="company_a", epos_username="u", epos_password="p")
@@ -99,6 +132,7 @@ class EposLoginTests(SessionTests):
         es.save(Context([{"name": "s", "value": "1", "domain": "w", "path": "/"}]), "company_a")
         page = self.login(Page(report=False))
         self.assertIn("Password", page.filled)
+        self.assertEqual(page.context.cleared, 1)  # the stale cookies are dropped before logging in
 
     def test_without_the_daily_run_flag_nothing_is_saved(self):
         with mock.patch.dict(os.environ, {es.ENV: ""}):

@@ -67,15 +67,31 @@ def save(context, company_key: str) -> None:
 
 def on_login_page(page, timeout_ms: int = 20000) -> bool:
     """False only when the back-office report page itself is showing (a ``MainContent_`` element on
-    www.eposnowhq.com); the login form, a timeout or anything else means: log in as before."""
+    www.eposnowhq.com); the login form, a timeout or anything else means: log in as before.
+
+    The element only has to be present: on SageReport.aspx the first ``MainContent_`` element is a hidden
+    tooltip, and waiting for it to be visible failed every step of the 27 Oct 2026 run."""
     form = page.get_by_role("textbox", name="Username or email address")
     try:
-        page.locator('[id^="MainContent_"]').or_(form).first.wait_for(timeout=timeout_ms)
+        page.locator('[id^="MainContent_"]').or_(form).first.wait_for(state="attached", timeout=timeout_ms)
     except Exception:  # noqa: BLE001 - unknown page: log in
         return True
     if (urlparse(page.url).hostname or "") == LOGIN_HOST or form.count() > 0:
         return True
     return page.locator('[id^="MainContent_"]').count() == 0
+
+
+def reuse(page, reused: bool, reload) -> bool:
+    """True when this run's saved login is working on ``page``. Otherwise the caller logs in as before:
+    if saved cookies were loaded they are dropped and ``reload()`` opens the page again, so it really shows
+    the login form (a page wrongly taken for the login form must not leave a login that cannot be typed)."""
+    if not reused:
+        return False
+    if not on_login_page(page):
+        return True
+    page.context.clear_cookies()
+    reload()
+    return False
 
 
 def clear(company_key: str) -> None:

@@ -293,3 +293,17 @@ response — use `created()`; fakes in tests now return response-shaped objects.
   read (same rule `stock_movements` already applies). Received details are kept in
   `stock_movements/received_details.jsonl` (21 days) and reused when the list row is unique and matches
   (location/staff/time/status); metrics `reused_details`, `empty_html_details`.
+
+## 27 Oct 2026: login sharing broke the run (fixed, not yet deployed)
+
+The 27 Oct 18:00 run (business date 26 Oct) failed catalogue, bills, sales and stock changes, and repayments could
+not read EPOS. Products and the stock-levels check worked. Nothing was posted; the repayments `seen.json` and
+the stock-movements cursor did not move, so the next good run picks up 26 Oct as normal.
+
+Cause: `epos_session.on_login_page` waited for the first `MainContent_` element to be *visible*. On
+SageReport.aspx (the page most steps open) that element is a hidden tooltip, so every reused, logged-in page was
+taken for the login form after 20 s, and the step then timed out typing into a login box that was not there.
+
+Fix: wait for the element to be present (`state="attached"`), and `epos_session.reuse()` drops the saved cookies
+and reloads the page before any fallback login, so a wrong guess costs one extra login, never a failed step.
+A real-Chromium test reproduces the hidden-tooltip page.
