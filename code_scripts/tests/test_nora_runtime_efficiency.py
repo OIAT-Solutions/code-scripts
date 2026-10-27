@@ -147,3 +147,45 @@ class ReceivedPOEvidenceTests(unittest.TestCase):
             self.assertEqual(details, {})
             self.assertEqual((root / 'po_details.jsonl').read_text(), '')
             self.assertEqual(json.loads((root / 'capture_metrics.json').read_text())['missing_details'], 1)
+
+class DirectPODetailTests(unittest.TestCase):
+    """26 Oct: each new PO is read with the Details button's own POST from the list page (no list reload)."""
+
+    order = {"OrderRef": 4181, "Id": 90401, "DateReceived": "2026-10-26T16:10:35", "TotalValueReceived": 100}
+
+    def capture(self, html):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            page = mock.MagicMock()
+            page.evaluate.return_value = html
+            page.locator.return_value.evaluate_all.return_value = []
+            resp = mock.Mock(url="https://example/GetPurchaseOrders"); resp.request.method = "GET"
+            resp.text.return_value = json.dumps({"orders": [self.order]})
+            page.expect_response.return_value.__enter__.return_value.value = resp
+            page.on.side_effect = lambda event, handler: handler(resp)
+            pw = mock.MagicMock(); pw.chromium.launch.return_value.new_context.return_value.new_page.return_value = page
+            context = mock.MagicMock(); context.__enter__.return_value = pw
+            with mock.patch.object(bills, "sync_playwright", return_value=context), \
+                 mock.patch.object(bills, "company_config"), mock.patch.object(bills, "epos_login"), \
+                 mock.patch.object(bills, "goto_retry"):
+                _, details = bills.capture_epos(root, order_from="2026-10-01", order_to="2026-10-26",
+                                                want=lambda o: True, cacheable=bills.received_order_cacheable,
+                                                cache_path=root / "cache.jsonl")
+            metrics = json.loads((root / "capture_metrics.json").read_text())
+            return page, details, metrics
+
+    def test_details_read_directly_without_clicking(self):
+        html = 'x var jsonData = {"OrderRef": 4181, "Products": [{"ProductId": 7, "QuantityReceived": 3}]}; y'
+        page, details, metrics = self.capture(html)
+        self.assertEqual(page.evaluate.call_args.args[1], 90401)
+        self.assertEqual(details["4181"]["Products"][0]["ProductId"], 7)
+        self.assertEqual((metrics["detail_pages_captured"], metrics["missing_details"]), (1, 0))
+        page.locator.return_value.evaluate_all.assert_not_called()
+
+    def test_a_wrong_or_missing_direct_read_falls_back_to_the_details_button(self):
+        for html in ('var jsonData = {"OrderRef": 999, "Products": []}', None, "<html>login</html>"):
+            with self.subTest(html=str(html)[:20]):
+                page, details, metrics = self.capture(html)
+                self.assertEqual(details, {})
+                page.locator.return_value.evaluate_all.assert_called()
+                self.assertEqual(metrics["missing_details"], 1)

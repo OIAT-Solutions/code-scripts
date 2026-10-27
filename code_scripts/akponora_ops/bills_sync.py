@@ -346,6 +346,31 @@ def received_order_cacheable(order: dict) -> bool:
     return parse_epos_ts(order.get("DateReceived")) is not None
 
 
+# The Details button posts {id, timezoneOffset} to this URL (knockout ``postJson``). Sending the same form with
+# fetch from the list page reads one PO in ~1.4 s instead of reloading and refiltering the list for each order.
+DETAILS_JS = """async (id) => {
+  const el = document.querySelector('[data-qa-id="purchase-order__orders-list__details"]');
+  const tz = el && window.ko ? ko.unwrap(ko.contextFor(el).$root.timezoneOffset) : null;
+  if (tz === null || tz === undefined || id === null || id === undefined) return null;
+  const body = new URLSearchParams({id: JSON.stringify(id), timezoneOffset: JSON.stringify(tz)});
+  document.querySelectorAll('input[name^="__RequestVerificationToken"]').forEach(i => body.append(i.name, i.value));
+  const r = await fetch('/Stock/PurchaseOrder/Details/', {method: 'POST', body, credentials: 'same-origin'});
+  return r.ok ? await r.text() : null;
+}"""
+
+
+def direct_detail(page, order: dict) -> dict | None:
+    """One PO's Details model read from the list page, or None (the click path then reads it)."""
+    try:
+        html = page.evaluate(DETAILS_JS, order.get("Id"))
+        d = extract_po_model(html) if isinstance(html, str) else None
+    except Exception:  # noqa: BLE001 - the click path is the fallback
+        return None
+    if not d or str(d.get("OrderRef")) != str(order.get("OrderRef")) or not isinstance(d.get("Products"), list):
+        return None
+    return d
+
+
 def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str = COMPANY,
                  cacheable=lambda o: False, cache_path: Path | None = None,
                  fallback_cache_paths=()) -> tuple[list, dict]:
@@ -433,6 +458,26 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
         captured_pages = 0
         print(f"EPOS: {len(orders)} POs ordered {order_from}..{order_to}; {len(needed)} detail page(s) to open"
               + (f" ({len(cached)} unchanged PO(s) read from saved evidence)" if cached else ""), flush=True)
+
+        def keep(ref, d):
+            nonlocal captured_pages
+            d["_captured_at"] = now_iso()
+            d["_list_fingerprint"] = po_fingerprint(by_ref[ref])
+            with open(details_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(d) + "\n")
+            details[ref] = d
+            needed.discard(ref)
+            captured_pages += 1
+            if cache_path is not None and ref in by_ref:
+                with open(cache_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"ref": ref, "fingerprint": po_fingerprint(by_ref[ref]), "detail": d})
+                             + "\n")
+            print(f"PO {ref}: {len(d.get('Products') or [])} line(s)", flush=True)
+
+        for ref in sorted(needed):
+            d = direct_detail(page, by_ref[ref])
+            if d is not None:
+                keep(ref, d)
         for _ in range(3):
             if not needed:
                 break
@@ -468,18 +513,7 @@ def capture_epos(ev: Path, *, order_from: str, order_to: str, want, company: str
                     print(f"PO {ref}: incomplete product detail; retrying", flush=True)
                     open_list(page)
                     continue
-                d["_captured_at"] = now_iso()
-                d["_list_fingerprint"] = po_fingerprint(by_ref[ref])
-                with open(details_path, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(d) + "\n")
-                details[ref] = d
-                needed.discard(ref)
-                captured_pages += 1
-                if cache_path is not None and ref in by_ref:
-                    with open(cache_path, "a", encoding="utf-8") as fh:
-                        fh.write(json.dumps({"ref": ref, "fingerprint": po_fingerprint(by_ref[ref]), "detail": d})
-                                 + "\n")
-                print(f"PO {ref}: {len(d.get('Products') or [])} line(s)", flush=True)
+                keep(ref, d)
                 open_list(page)
         browser.close()
     if cache_path is not None and Path(cache_path).exists():
