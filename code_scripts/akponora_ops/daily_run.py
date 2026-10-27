@@ -1672,12 +1672,18 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
             except Exception:  # noqa: BLE001
                 pass
         return EXIT_FAILED
+    from code_scripts import epos_session
+
+    # one EPOS login for the whole run, shared with the step processes; removed when the run ends
+    os.environ[epos_session.ENV] = "1"
     try:
         run = DailyRun(day, dry_run=a.dry_run, only=a.only, runner=runner, slack=slack, send_slack=send,
                        uf_client=uf_client, uf_write_client=uf_write_client, uf_sheet=uf_sheet,
                        stock_audit_resume=a.stock_audit_resume)
         summary = run.execute()
     finally:
+        epos_session.clear(COMPANY)
+        os.environ.pop(epos_session.ENV, None)
         lock.release()
     print(technical_text(summary))
     return summary["exit_code"]

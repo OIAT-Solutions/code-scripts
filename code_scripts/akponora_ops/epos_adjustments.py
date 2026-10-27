@@ -21,7 +21,6 @@ DETAIL_JS = """() => { const g = t => { const e = document.getElementById(t); re
   return {url: location.href, info: g('MainContent_dvTransfers'), items: g('MainContent_gvItems'),
           tables: Array.from(document.querySelectorAll('table[id]')).map(t => t.id)}; }"""
 # Read the same authenticated HTML page without loading its images/scripts in a new tab.
-# Every detail is fetched freshly; this is not immutable caching or the EPOS API.
 HTML_DETAIL_JS = """async url => {
   const response = await fetch(url, {credentials:'same-origin'});
   if (!response.ok) throw new Error('Stock detail HTTP ' + response.status);
@@ -67,16 +66,63 @@ def row_dates(cells):
     return found
 
 
-def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *, through_date=None) -> None:
+# Owner, 26 Oct 2026: EPOS is read once. Completed stock takes are view-only (checked in the back office: the
+# details page has only Back/Export/Print), so a "Received" detail read on an earlier night is reused when its
+# list row (location, staff, time to the second) is unique and matches the saved detail. Anything else is read.
+CACHE_DAYS = 21
+
+
+def _info(detail: dict) -> dict:
+    return {r[0]: " ".join(str(r[1]).split()) for r in (detail.get("info") or []) if len(r) == 2}
+
+
+def reusable(detail: dict, cells: list) -> bool:
+    info = _info(detail)
+    return (info.get("Status") == "Received" and bool(info.get("Date")) and info.get("Date") in cells
+            and info.get("Staff", "") in cells and info.get("Location", "") in cells
+            and detail.get("_list_cells", cells) == cells)
+
+
+def load_cache(path: Path | None, start: datetime) -> dict:
+    """{key: detail} of Received details read on earlier nights, keeping the last ``CACHE_DAYS``."""
+    if path is None or not path.exists():
+        return {}
+    keep, cutoff = {}, start.timestamp() - CACHE_DAYS * 86400
+    for line in path.read_text().splitlines():
+        try:
+            row = json.loads(line)
+            when = datetime.strptime(_info(row["detail"]).get("Date", ""), "%d/%m/%Y %H:%M:%S")
+        except (ValueError, KeyError, TypeError):
+            continue
+        if when.timestamp() >= cutoff:
+            keep[row["key"]] = row["detail"]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps({"key": k, "detail": d}) + "\n" for k, d in keep.items()))
+    tmp.replace(path)
+    return keep
+
+
+def default_cache_path() -> Path:
+    from code_scripts.akponora_ops.common import state_dir
+
+    return state_dir("stock_movements") / "received_details.jsonl"
+
+
+def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *, through_date=None,
+                       cache_path: Path | None | str = "default") -> None:
     from urllib.parse import unquote, urljoin
 
     from playwright.sync_api import sync_playwright
 
     started = time.monotonic()
-    metrics = {"fresh_html_details": 0, "browser_detail_fallbacks": 0, "lists": 0}
+    metrics = {"fresh_html_details": 0, "browser_detail_fallbacks": 0, "lists": 0, "reused_details": 0,
+               "empty_html_details": 0}
     cfg = company_config(company_key)
     start = datetime.strptime(from_date, "%Y-%m-%d")
     end = datetime.strptime(through_date, "%Y-%m-%d") if through_date else None
+    if cache_path == "default":
+        cache_path = default_cache_path() if company_key == "company_a" else None
+    cache = load_cache(cache_path, start)
     if end and not 0 <= (end - start).days < 7:
         raise ValueError("Each stock browser capture must cover at most seven days")
     stop_before = start
@@ -109,6 +155,9 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *
         while True:
             rows = page.evaluate(ROWS_JS, f"MainContent_{grid}")
             metrics["lists"] += 1
+            counts = {}
+            for r in rows:
+                counts[json.dumps(r["cells"])] = counts.get(json.dumps(r["cells"]), 0) + 1
             print(name, "page", pageno, len(rows), rows[0]["cells"] if rows else None, flush=True)
             if not rows:
                 break
@@ -120,6 +169,13 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *
                 if (pageno, i) in done or not r["btn"]:
                     continue
                 sig = r["cells"]
+                key = f"{name}|{json.dumps(sig)}"
+                known = cache.get(key)
+                if known and counts[json.dumps(sig)] == 1 and reusable(known, sig):
+                    with out_det.open("a") as fh:
+                        fh.write(json.dumps({**known, "_page": pageno, "_row": i, "_list_cells": sig}) + "\n")
+                    metrics["reused_details"] += 1
+                    continue
                 for attempt in range(3):
                     try:
                         # the browser submits the list's own "View Details" postback; we read the redirect
@@ -158,7 +214,12 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *
                             metrics["fresh_html_details"] += 1
                         except Exception:
                             d = None
-                        if not d or not d.get("info") or not d.get("items") or d.get("_has_pager"):
+                        if (d and d.get("info") and d.get("items") is None
+                                and "MainContent_gvItems" not in (d.get("tables") or [])):
+                            # no item grid in the page at all: an empty adjustment. The full browser
+                            # read found the same (items None) for every such record on 26 Oct.
+                            metrics["empty_html_details"] += 1
+                        elif not d or not d.get("info") or not d.get("items") or d.get("_has_pager"):
                             metrics["browser_detail_fallbacks"] += 1
                             det = page.context.new_page()
                             det.goto(urljoin(url, loc), wait_until="domcontentloaded")
@@ -179,6 +240,11 @@ def scrape_adjustments(out: Path, from_date: str, what: str, company_key: str, *
                         d.update({"_page": pageno, "_row": i, "_list_cells": sig})
                         with out_det.open("a") as fh:
                             fh.write(json.dumps(d) + "\n")
+                        if cache_path is not None and counts[json.dumps(sig)] == 1 and reusable(d, sig):
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            with cache_path.open("a") as fh:
+                                fh.write(json.dumps({"key": key, "detail": {k: v for k, v in d.items()
+                                                                           if k not in ("_page", "_row")}}) + "\n")
                         break
                     except Exception as exc:  # noqa: BLE001
                         print("  retry", pageno, i, str(exc)[:150], flush=True)

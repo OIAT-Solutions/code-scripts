@@ -97,12 +97,21 @@ def goto_retry(page, url: str, *, attempts: int = 3, timeout_ms: int = 90000, pa
 
 
 def epos_login(page, cfg) -> None:
-    """Log in to EPOS Now back office with the pipeline credentials (never printed)."""
+    """Log in to EPOS Now back office with the pipeline credentials (never printed). In a Nora daily run the
+    run's existing login is reused when EPOS still accepts it (code_scripts.epos_session)."""
+    from code_scripts import epos_session
+
+    reused = epos_session.restore(page.context, cfg.company_key)
     goto_retry(page, EPOS_LOGIN_URL)
+    if reused and not epos_session.on_login_page(page):
+        epos_session.save(page.context, cfg.company_key)
+        print("EPOS: reused this run's login", flush=True)
+        return
     page.get_by_role("textbox", name="Username or email address").fill(cfg.epos_username)
     page.get_by_role("textbox", name="Password").fill(cfg.epos_password)
     page.get_by_role("button", name="Log in").click()
     page.wait_for_load_state("networkidle")
+    epos_session.save(page.context, cfg.company_key)
 
 
 # ---------------------------------------------------------------- QBO (GET only)

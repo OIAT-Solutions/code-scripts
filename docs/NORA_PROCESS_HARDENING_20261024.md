@@ -279,3 +279,17 @@ response — use `created()`; fakes in tests now return response-shaped objects.
   `timezoneOffset`) with fetch from the list page (`DETAILS_JS`, ~1.4 s/PO, checked in Chrome); the click path
   remains the fallback for any PO it cannot read. Deployed `28b358f` 27 Oct 02:3x Lagos; rollback image
   `oiat-portal:rollback-20261027-po`.
+
+### Claude — 27 October: one EPOS login per run; stock takes read once
+
+- `code_scripts/epos_session.py`: daily_run sets `OIAT_EPOS_SESSION_REUSE=1` (inherited by step processes). The
+  first EPOS login saves the browser cookies (never the password) to `<STATE_ROOT>/epos_session/company_a.json`
+  (0600, ignored after 30 min, refreshed by each user, deleted in daily_run's `finally`). `_common.epos_login`,
+  `epos_playwright` (sales CSV) and `epos_stocklevels_playwright` (snapshots) load them and log in only if the
+  report page (`MainContent_*` on www.eposnowhq.com) is not showing. Without the flag (Goldplates, manual tools)
+  nothing changes. Prints "EPOS: reused this run's login".
+- `epos_adjustments.scrape_adjustments`: 26 Oct's 192 s stock-change read spent ~100 s on 20 EMPTY stock takes
+  (no gvItems table) re-opened in a browser tab that found the same nothing; these are now accepted from the HTML
+  read (same rule `stock_movements` already applies). Received details are kept in
+  `stock_movements/received_details.jsonl` (21 days) and reused when the list row is unique and matches
+  (location/staff/time/status); metrics `reused_details`, `empty_html_details`.

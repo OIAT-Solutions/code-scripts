@@ -13,6 +13,7 @@ page directly; stock changes are read since the last clean capture (`stock_movem
 audit — completed stock takes are view-only in EPOS); a credit-sale day whose invoices are all in QBO is finished
 (`credit_days_done.json`); credit repayments are read since the last good read (`credit_repayments/seen.json`).
 Whether a bill/invoice was paid comes from the Google Sheets, not EPOS.
+One EPOS login per daily run (`code_scripts/epos_session.py`, `OIAT_EPOS_SESSION_REUSE=1` set by daily_run only; cookies in `<state>/epos_session/company_a.json`, 0600, 30 min, deleted at run end). Empty stock takes (no item grid in the page) are accepted from the HTML read instead of a slow browser fallback.
 
 ## Active branch work — 24 Oct 2026 whole-process hardening
 
@@ -37,7 +38,7 @@ Stock-only follow-up now requires explicit zero missing PO details. Browser row 
 Freshly read recent stock; only complete historical observations under two hours old can resume. Preserve failed evidence.
 Sales and bills already posted: never replay the full financial day for this recovery.
 Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
-Stock editability is unknown: keep checking details for edits, no immutable movement-detail cache.
+Stock editability (26 Oct, Claude): completed stock takes are view-only in EPOS (details page: Back/Export/Print only), so a Received detail is reused from `stock_movements/received_details.jsonl` when its list row is unique and matches; everything else is read fresh.
 
 25 Oct Toronto supplier follow-up is authorized: create Moses Bapivavy, A+ Company and Kay Jay Zenith Limited;
 apply six owner-confirmed supplier aliases; continue demonstrated routine repeat purchases.
