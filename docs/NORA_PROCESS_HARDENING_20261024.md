@@ -316,3 +316,15 @@ already drops a netted zero row, but required Cost Price to net too, and EPOS re
 Owner rule (Marvin chat 27 Oct): `transform.drop_netted_zero_rows` now ignores a leftover cost when the
 row's `_Conversion Proof` shows EPOS rows of one product, both signs, summing to zero. A zero line with
 cost and no matching refund still fails the day.
+
+## 27 Oct 2026: 26 Oct re-run (owner yes) after both fixes
+
+Run `run_231914Z` (started 00:19 Lagos 28 Oct): no failed steps, 6 min 48 s. Every EPOS step reused the one
+login and the login file was deleted at the end. Sales: 6 receipts posted, EPOS = QBO N3,337,675 (the rice
+and a ROYAL CIRCLE WHISKY200ml sale+refund dropped). Credit: Vera CR261026-389764 N6,100 (Invoice 81419).
+Repayments (post mode): nothing new. Stock follow-up ST261027-2304a posted (81420). Catalogue: 10 items
+created. PO read: 0 new details (all 224 cached, 10 s); stock takes: 102 reused, 7 fresh, 0 browser
+fallbacks (58 s). Because the run crossed midnight, the movements cursor and repayments `seen.json` are
+"through 2026-10-28" (27 Oct fully read).
+GPFH: paper invoice 0005963 (27 Oct, 100 crates of eggs, N600,000, "not paid", CHL-HQ) is in neither EPOS
+(Goldplate accounts at N0, biggest 27 Oct sale N71,650, no egg stock change) nor QBO (last GPFH invoice 22 Sep).
