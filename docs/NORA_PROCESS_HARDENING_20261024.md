@@ -307,3 +307,12 @@ taken for the login form after 20 s, and the step then timed out typing into a l
 Fix: wait for the element to be present (`state="attached"`), and `epos_session.reuse()` drops the saved cookies
 and reloads the page before any fallback login, so a wrong guess costs one extra login, never a failed step.
 A real-Chromium test reproduces the hidden-tooltip page.
+
+## 27 Oct 2026: same-day sale and refund no longer stops the sales day
+
+The 26 Oct dry run (after the login fix) stopped at sales: SR-20261026-0005 (Card) sold one SHORT GRAIN
+RICE(painter) at 17:55 (N5,000, cost N3,875.95) and refunded it at 18:10 (-N5,000, cost 0). The transform
+already drops a netted zero row, but required Cost Price to net too, and EPOS records refunds at cost 0.
+Owner rule (Marvin chat 27 Oct): `transform.drop_netted_zero_rows` now ignores a leftover cost when the
+row's `_Conversion Proof` shows EPOS rows of one product, both signs, summing to zero. A zero line with
+cost and no matching refund still fails the day.

@@ -351,6 +351,42 @@ class OctoberControlTests(CompanyAUploadHarness):
         self.assertTrue(evidence["complete"])
         self.assertEqual(len(evidence["payloads"]), 1)
 
+    def test_october_refund_at_zero_cost_still_cancels_its_sale(self):
+        # 26 Oct 2026: EPOS records a refund at Cost Price 0, so the sale's cost (N3,875.95) is left over
+        sale = self.october_raw(qty=1, total=120000)
+        sale["Cost Price"] = 3875.94752
+        voided = pd.concat([sale, self.october_raw(qty=-1, total=-120000)], ignore_index=True)
+        kept = self.october_raw()
+        kept.loc[:, "Tender"] = "Transfer"
+        csv_path = self.transform_to_csv(pd.concat([voided, kept], ignore_index=True), "2026-10-01")
+        self.assertEqual(pd.read_csv(csv_path)["Memo"].tolist(), ["Transfer"])
+        code, posts, _ = self.run_upload(csv_path, "2026-10-01", dry_run=True)
+        self.assertEqual((code, posts), (0, []))
+        self.assertTrue(json.loads(self.evidence_path().read_text())["complete"])
+
+    def test_october_zero_line_with_cost_but_no_matching_refund_still_fails_the_day(self):
+        odd = self.october_raw(qty=0, total=0)
+        odd["Cost Price"] = 3875.94752
+        kept = self.october_raw()
+        kept.loc[:, "Tender"] = "Transfer"
+        csv_path = self.transform_to_csv(pd.concat([odd, kept], ignore_index=True), "2026-10-01")
+        self.assertEqual(sorted(pd.read_csv(csv_path)["Memo"]), ["Cash", "Transfer"])
+        buf = []
+        with mock.patch("builtins.print", side_effect=lambda *a, **k: buf.append(" ".join(map(str, a)))):
+            code, posts, _ = self.run_upload(csv_path, "2026-10-01", dry_run=True)
+        self.assertEqual((code, posts), (1, []))
+        self.assertIn("Zero sale quantity", "\n".join(buf))
+
+    def test_sale_and_refund_proof_needs_one_product_both_signs_and_a_zero_sum(self):
+        from code_scripts.transform import _sale_and_refund_cancel
+        part = lambda q, pid="1614750": {"product_id": pid, "row_id": f"EPOS-{pid}", "quantity": str(q)}
+        self.assertTrue(_sale_and_refund_cancel(json.dumps([part(-1.0), part(1.0)])))
+        self.assertTrue(_sale_and_refund_cancel(json.dumps([part(2), part(-1), part(-1)])))
+        self.assertFalse(_sale_and_refund_cancel(json.dumps([part(0)])))
+        self.assertFalse(_sale_and_refund_cancel(json.dumps([part(1), part(-1, "999")])))
+        self.assertFalse(_sale_and_refund_cancel(json.dumps([part(2), part(-1)])))
+        self.assertFalse(_sale_and_refund_cancel("not json"))
+
     def test_october_failure_writes_hold_and_blocks_until_cleared(self):
         raw = pd.concat([self.october_raw(), self.october_raw()], ignore_index=True)
         raw.loc[1, "Tender"] = "Transfer"

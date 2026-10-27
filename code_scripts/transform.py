@@ -122,6 +122,19 @@ def aggregate_product_rows(out: pd.DataFrame, *, preserve_descriptions: bool = F
     return aggregated
 
 
+def _sale_and_refund_cancel(proof) -> bool:
+    """True when a conversion proof lists EPOS rows of one product with positive and negative quantities
+    that add up to exactly zero."""
+    try:
+        parts = json.loads(proof)
+        quantities = [float(p["quantity"]) for p in parts]
+        products = {(p.get("product_id"), p.get("row_id")) for p in parts}
+    except (TypeError, ValueError, KeyError):
+        return False
+    return (len(quantities) >= 2 and len(products) == 1 and abs(sum(quantities)) < 1e-9
+            and any(q > 0 for q in quantities) and any(q < 0 for q in quantities))
+
+
 def drop_netted_zero_rows(out: pd.DataFrame) -> pd.DataFrame:
     """Drop aggregated rows whose quantity and every money column sum to zero.
 
@@ -129,6 +142,12 @@ def drop_netted_zero_rows(out: pd.DataFrame) -> pd.DataFrame:
     net stock movement, but the October Inventory path refuses non-positive
     quantities. Any row with a non-zero quantity or amount is kept, so real
     refunds still fail the day for reviewed handling.
+
+    EPOS records a refund at Cost Price 0 (26 Oct 2026: SHORT GRAIN RICE(painter)
+    sold N5,000 at cost N3,875.95, refunded -N5,000 at cost 0), so a real
+    sale-and-refund never nets its cost. Owner rule (Marvin chat 27 Oct 2026): a
+    row whose cost is left over is still dropped when its conversion proof shows
+    EPOS rows of one product, some sold and some refunded, adding up to zero.
     """
     sum_cols = [c for c in _AGG_SUM_COLS if c in out.columns]
     if "ItemQuantity" not in sum_cols:
@@ -136,8 +155,13 @@ def drop_netted_zero_rows(out: pd.DataFrame) -> pd.DataFrame:
     numeric = out[sum_cols].apply(pd.to_numeric, errors="coerce")
     zero = numeric["ItemQuantity"].abs().lt(1e-9)
     for c in sum_cols:
-        if c != "ItemQuantity":
+        if c not in ("ItemQuantity", "Cost Price"):
             zero &= numeric[c].abs().lt(0.005)
+    if "Cost Price" in sum_cols:
+        cost_zero = numeric["Cost Price"].abs().lt(0.005)
+        if "_Conversion Proof" in out.columns:
+            cost_zero |= out["_Conversion Proof"].map(_sale_and_refund_cancel)
+        zero &= cost_zero
     if zero.any():
         names = ", ".join(sorted(set(out.loc[zero, "Item(Product/Service)"].astype(str))))
         print(f"[INFO] Dropped {int(zero.sum())} netted zero row(s) (sale and refund cancel out): {names}")
