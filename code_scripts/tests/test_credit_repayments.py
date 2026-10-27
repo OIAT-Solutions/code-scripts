@@ -312,7 +312,7 @@ class ReadOnceTests(unittest.TestCase):
         self.assertEqual(cr.window_days("2026-06-01", today), 90)
 
     def nightly(self, captured, dry_run=False):
-        with mock.patch.object(cr, "capture", side_effect=lambda out, days, recheck: dict(
+        with mock.patch.object(cr, "capture", side_effect=lambda out, days, recheck, known: dict(
                 captured, credit_read=True, payments=[dict(x) for x in captured["payments"]] +
                 [dict(x, tender="Transfer") for x in recheck])) as cap:
             r = cr.run(self.tmp / "out", client=None, dry_run=dry_run, env={})
@@ -359,3 +359,40 @@ class InvoiceWindowTests(unittest.TestCase):
         cr.load_qbo(client)
         sql = [c.args[0] for c in client.query_all.call_args_list if "Invoice" in c.args[0]][0]
         self.assertIn("TxnDate >= '2026-09-01'", sql)
+
+
+class CaptureReadOnceTests(unittest.TestCase):
+    """A repayment already read with its tender is not looked up in Completed Transactions again."""
+
+    def run_capture(self, known):
+        page = mock.MagicMock()
+        page.evaluate.side_effect = lambda js, *a: (CREDIT_GRID if a == ("MainContent_gvCredit",) else
+                                                     TXN_ROWS if a else CUSTOMER_GRID)
+        page.content.return_value = ""
+        pw = mock.MagicMock()
+        pw.chromium.launch.return_value.new_context.return_value.new_page.return_value = page
+        ctx = mock.MagicMock(); ctx.__enter__.return_value = pw
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch("playwright.sync_api.sync_playwright", return_value=ctx), \
+             mock.patch("code_scripts.scripts.akponora_cutover._common.company_config"), \
+             mock.patch("code_scripts.scripts.akponora_cutover._common.epos_login"), \
+             mock.patch("code_scripts.scripts.akponora_cutover._common.goto_retry"), \
+             mock.patch("code_scripts.akponora_ops.epos_adjustments.select_calendar_date") as cal:
+            res = cr.capture(Path(tmp), days=7, known=known)
+        return res, cal
+
+    def test_known_payments_skip_the_transactions_lookup(self):
+        known = {}
+        for row in CREDIT_GRID[1:4]:
+            p = pay(row[2], str(cr.money(row[3])), customer=row[0])
+            known[cr.payment_key(p["customer"], p["when"], cr.money(p["amount"]))] = p
+        res, cal = self.run_capture(known)
+        cal.assert_not_called()
+        self.assertEqual({p["tender"] for p in res["payments"]}, {"Transfer"})
+        self.assertEqual(res["errors"], [])
+
+    def test_a_new_payment_is_still_looked_up(self):
+        res, cal = self.run_capture({})
+        self.assertEqual(cal.call_count, 3)  # 5, 9 and 15 Oct
+        vera = next(p for p in res["payments"] if p["when"] == "09/10/2026 14:19:15")
+        self.assertEqual(vera["tender"], "Transfer")

@@ -249,9 +249,11 @@ def totals_of(rows: list[list[str]]) -> list[Decimal]:
     return [t for t in (money(r[8]) for r in rows if len(r) > 9) if t is not None]
 
 
-def capture(out: Path, *, days: int = 30, recheck: list[dict] = (), company_key: str = COMPANY) -> dict:
+def capture(out: Path, *, days: int = 30, recheck: list[dict] = (), known: dict | None = None,
+            company_key: str = COMPANY) -> dict:
     """Read Customer Credit (last ``days``), each payment's Completed Transactions row, and the Customer Report.
     ``recheck``: payments read on an earlier night whose tender was not found yet, looked up again.
+    ``known``: payments already read with their tender (by payment_key); they are not looked up again.
     Clicks only login, the report filters/Apply, the transactions calendar, sort and page links. Never edits."""
     from playwright.sync_api import sync_playwright
 
@@ -284,9 +286,15 @@ def capture(out: Path, *, days: int = 30, recheck: list[dict] = (), company_key:
         payments = parse_credit_rows(grid or [])
         new = {(x["customer"], x["when"], x["amount"]) for x in payments}
         payments += [dict(x) for x in recheck if (x["customer"], x["when"], x["amount"]) not in new]
+        for pay in payments:
+            if not pay.get("tender"):
+                pay.pop("tender", None)
+            seen_pay = (known or {}).get(payment_key(pay["customer"], pay["when"], money(pay["amount"])))
+            if seen_pay and seen_pay.get("tender"):  # read once: a payment never changes
+                pay.update({k: seen_pay[k] for k in ("tender", "staff", "device") if k in seen_pay})
 
         by_day: dict[str, list[dict]] = {}
-        for pay in payments:
+        for pay in (x for x in payments if not x.get("tender")):
             by_day.setdefault(parse_when(pay["when"]).date().isoformat(), []).append(pay)
         for day, todo in sorted(by_day.items()):
             goto_retry(page, TRANSACTIONS_URL)
@@ -682,7 +690,8 @@ def run(out: Path, *, client, write_client=None, dry_run: bool = False, env=None
         today, done = datetime.now(LAGOS).date(), ledger()
         store = seen()
         recheck = [x for k, x in store["payments"].items() if not x.get("tender") and k not in done]
-        cap_data = capture(out, days=window_days(store["through"], today), recheck=recheck)
+        cap_data = capture(out, days=window_days(store["through"], today), recheck=recheck,
+                           known=store["payments"])
         store = remember(store, cap_data, today)
         if not dry_run:
             dump_json(seen_path(), store)
