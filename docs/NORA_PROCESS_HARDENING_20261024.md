@@ -267,3 +267,15 @@ then applied to Vera's 29 Sep invoice CR260929-389764 (balance N618,799.99). The
 1 Sep (`INVOICES_FROM`). Vera QBO N618,799.99 vs EPOS N623,149.99: the N4,350 is her 25 Oct 19:02 Credit sale,
 invoiced by the 25 Oct business-day run. Precious: N400 credit in both. QBOClient.post_json returns the raw
 response — use `created()`; fakes in tests now return response-shaped objects.
+
+### Claude — 26/27 October: repayments switched on; faster PO detail reads
+
+- 26 Oct 18:17 Lagos run (business day 25 Oct) clean: repayments plan-only found the 5 known payments all DONE,
+  `seen.json` through 2026-10-26, no capture errors; Vera's 25 Oct N4,350 invoiced (CR261025), QBO balance
+  N623,149.99 = EPOS. Owner yes: `/data/ops/company_a/credit_repayments/settings.env` now
+  `OIAT_COMPANY_A_CREDIT_REPAYMENTS=post` (backup `settings.env.bak_20261026_plan`; no env override).
+- PO details were already read once (cache); the catalogue step's 205 s was 13 genuinely new POs, each costing a
+  list reload + refilter. `bills_sync.capture_epos` now posts the Details button's own form (`id`,
+  `timezoneOffset`) with fetch from the list page (`DETAILS_JS`, ~1.4 s/PO, checked in Chrome); the click path
+  remains the fallback for any PO it cannot read. Deployed `28b358f` 27 Oct 02:3x Lagos; rollback image
+  `oiat-portal:rollback-20261027-po`.
