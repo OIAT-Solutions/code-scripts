@@ -4,12 +4,15 @@ import base64
 import hashlib
 import hmac
 import json
+import threading
+from datetime import datetime, timezone
 from unittest import mock
 
 from django.test import Client, TestCase
 from django.urls import reverse
 
 from apps.epos_qbo.models import CompanyConfigRecord, QboWebhookEvent
+from apps.epos_qbo.services.qbo_webhook_notifications import send_pending_notifications
 
 
 def _signature(body: bytes, token: str) -> str:
@@ -34,23 +37,26 @@ class QuickBooksWebhookViewTests(TestCase):
         )
 
     @mock.patch.dict("os.environ", {"QBO_WEBHOOK_VERIFIER_TOKEN": "test-verifier-token"})
-    @mock.patch("apps.epos_qbo.webhooks.process_qbo_webhook_body", return_value=2)
-    def test_valid_signature_processes_payload_without_login(self, process_payload):
+    @mock.patch("apps.epos_qbo.webhooks._after_response")
+    @mock.patch("apps.epos_qbo.webhooks.accept_qbo_webhook_body", return_value=["a", "b"])
+    def test_valid_signature_processes_payload_without_login(self, process_payload, after_response):
         response = self._post({"eventNotifications": []})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["notifications_sent"], 2)
+        self.assertEqual(response.json()["notifications_queued"], 2)
         process_payload.assert_called_once_with({"eventNotifications": []})
+        after_response.assert_called_once_with(send_pending_notifications, ["a", "b"])
 
     @mock.patch.dict("os.environ", {"QBO_WEBHOOK_VERIFIER_TOKEN": "test-verifier-token"})
-    @mock.patch("apps.epos_qbo.webhooks.process_qbo_webhook_body", return_value=1)
-    def test_no_slash_url_processes_payload_without_login(self, process_payload):
+    @mock.patch("apps.epos_qbo.webhooks._after_response")
+    @mock.patch("apps.epos_qbo.webhooks.accept_qbo_webhook_body", return_value=["a"])
+    def test_no_slash_url_processes_payload_without_login(self, process_payload, _after_response):
         response = self._post({"eventNotifications": []}, url="/epos-qbo/webhooks/quickbooks")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["notifications_sent"], 1)
+        self.assertEqual(response.json()["notifications_queued"], 1)
         process_payload.assert_called_once_with({"eventNotifications": []})
 
     @mock.patch.dict("os.environ", {"QBO_WEBHOOK_VERIFIER_TOKEN": "test-verifier-token"})
-    @mock.patch("apps.epos_qbo.webhooks.process_qbo_webhook_body")
+    @mock.patch("apps.epos_qbo.webhooks.accept_qbo_webhook_body")
     def test_invalid_signature_rejected(self, process_payload):
         response = self._post({"eventNotifications": []}, token="wrong-token")
         self.assertEqual(response.status_code, 401)
@@ -66,8 +72,9 @@ class QuickBooksWebhookViewTests(TestCase):
         self.assertEqual(response.status_code, 503)
 
     @mock.patch.dict("os.environ", {"QBO_WEBHOOK_VERIFIER_TOKEN": "test-verifier-token"})
-    @mock.patch("apps.epos_qbo.webhooks.process_qbo_webhook_body", return_value=1)
-    def test_cloudevents_array_payload_is_accepted(self, process_payload):
+    @mock.patch("apps.epos_qbo.webhooks._after_response")
+    @mock.patch("apps.epos_qbo.webhooks.accept_qbo_webhook_body", return_value=["a"])
+    def test_cloudevents_array_payload_is_accepted(self, process_payload, _after_response):
         payload = [
             {
                 "specversion": "1.0",
@@ -86,6 +93,12 @@ class QuickBooksWebhookViewTests(TestCase):
 
 class QuickBooksWebhookNotificationTests(TestCase):
     def setUp(self):
+        now = mock.patch(
+            "apps.epos_qbo.services.qbo_webhook_notifications._now",
+            return_value=datetime(2026, 6, 12, 18, 0, tzinfo=timezone.utc),
+        )
+        now.start()
+        self.addCleanup(now.stop)
         self.company = CompanyConfigRecord.objects.create(
             company_key="company_a",
             display_name="Oreva Innovations & Tech",
@@ -105,7 +118,7 @@ class QuickBooksWebhookNotificationTests(TestCase):
                                 "name": "Item",
                                 "id": "14895",
                                 "operation": "Create",
-                                "lastUpdated": "2026-06-11T18:55:00.000Z",
+                                "lastUpdated": "2026-06-12T14:55:00.000Z",
                             }
                         ]
                     },
@@ -213,7 +226,7 @@ class QuickBooksWebhookNotificationTests(TestCase):
                                 "name": "Customer",
                                 "id": "42",
                                 "operation": "Update",
-                                "lastUpdated": "2026-06-11T19:00:00.000Z",
+                                "lastUpdated": "2026-06-12T15:00:00.000Z",
                             }
                         ]
                     },
@@ -297,3 +310,100 @@ class QuickBooksWebhookNotificationTests(TestCase):
         self.assertTrue(event.is_test_event)
         self.assertEqual(event.status, QboWebhookEvent.STATUS_SENT)
         self.assertEqual(event.realm_id, "310687")
+
+    def _customer_payload(self, last_updated: str) -> dict:
+        return {
+            "eventNotifications": [
+                {
+                    "realmId": "9341455406194328",
+                    "dataChangeEvent": {
+                        "entities": [
+                            {"name": "Customer", "id": "42", "operation": "Update", "lastUpdated": last_updated}
+                        ]
+                    },
+                }
+            ]
+        }
+
+    @mock.patch("apps.epos_qbo.services.qbo_webhook_notifications.send_slack_success")
+    @mock.patch.dict("os.environ", {"QBO_WEBHOOK_SLACK_URL": "https://hooks.slack.test/qbo-default"})
+    def test_october_resent_change_is_recorded_but_not_posted_again(self, send_slack):
+        # 22-28 Oct 2026: Intuit resent one batch 56 times and each copy was posted to Slack again.
+        from apps.epos_qbo.services.qbo_webhook_notifications import process_qbo_webhook_payload
+
+        payload = self._customer_payload("2026-06-12T15:00:00.000Z")
+        self.assertEqual(process_qbo_webhook_payload(payload), 1)
+        self.assertEqual(process_qbo_webhook_payload(payload), 0)
+
+        send_slack.assert_called_once()
+        first, second = QboWebhookEvent.objects.order_by("id")
+        self.assertEqual(first.status, QboWebhookEvent.STATUS_SENT)
+        self.assertEqual(second.status, QboWebhookEvent.STATUS_SKIPPED)
+        self.assertIn("resent", second.skip_reason)
+
+    @mock.patch("apps.epos_qbo.services.qbo_webhook_notifications.send_slack_success")
+    @mock.patch.dict("os.environ", {"QBO_WEBHOOK_SLACK_URL": "https://hooks.slack.test/qbo-default"})
+    def test_resent_change_is_posted_when_the_earlier_post_failed(self, send_slack):
+        from apps.epos_qbo.services.qbo_webhook_notifications import process_qbo_webhook_payload
+
+        payload = self._customer_payload("2026-06-12T15:00:00.000Z")
+        process_qbo_webhook_payload(payload)
+        QboWebhookEvent.objects.update(status=QboWebhookEvent.STATUS_FAILED)
+
+        self.assertEqual(process_qbo_webhook_payload(payload), 1)
+        self.assertEqual(send_slack.call_count, 2)
+
+    @mock.patch("apps.epos_qbo.services.qbo_webhook_notifications.send_slack_success")
+    @mock.patch.dict("os.environ", {"QBO_WEBHOOK_SLACK_URL": "https://hooks.slack.test/qbo-default"})
+    def test_change_older_than_six_hours_is_recorded_without_slack(self, send_slack):
+        from apps.epos_qbo.services.qbo_webhook_notifications import process_qbo_webhook_payload
+
+        self.assertEqual(process_qbo_webhook_payload(self._customer_payload("2026-06-12T11:59:00.000Z")), 0)
+
+        send_slack.assert_not_called()
+        event = QboWebhookEvent.objects.get()
+        self.assertEqual(event.status, QboWebhookEvent.STATUS_SKIPPED)
+        self.assertIn("over 6 hours old", event.skip_reason)
+        self.assertEqual(event.last_updated, "2026-06-12T11:59:00.000Z")
+
+    @mock.patch("apps.epos_qbo.services.qbo_webhook_notifications.send_slack_success")
+    @mock.patch.dict("os.environ", {"QBO_WEBHOOK_SLACK_URL": "https://hooks.slack.test/qbo-default"})
+    def test_change_time_that_cannot_be_read_is_still_posted(self, send_slack):
+        from apps.epos_qbo.services.qbo_webhook_notifications import process_qbo_webhook_payload
+
+        self.assertEqual(process_qbo_webhook_payload(self._customer_payload("")), 1)
+        self.assertEqual(process_qbo_webhook_payload(self._customer_payload("")), 1)
+
+
+class QuickBooksWebhookAfterResponseTests(TestCase):
+    def test_slack_work_runs_on_its_own_thread(self):
+        from apps.epos_qbo.webhooks import _after_response
+
+        seen = []
+        done = threading.Event()
+
+        def work(pending):
+            seen.append((threading.current_thread().name, pending))
+            done.set()
+
+        _after_response(work, ["event"])
+
+        self.assertTrue(done.wait(5))
+        self.assertEqual(seen, [("qbo-webhook-slack", ["event"])])
+
+    def test_a_failure_after_the_response_is_logged_not_raised(self):
+        from apps.epos_qbo.webhooks import _after_response
+
+        done = threading.Event()
+
+        def work(_pending):
+            done.set()
+            raise RuntimeError("Slack down")
+
+        with self.assertLogs("apps.epos_qbo.webhooks", level="ERROR") as logs:
+            _after_response(work, ["event"])
+            self.assertTrue(done.wait(5))
+            for thread in threading.enumerate():
+                if thread.name == "qbo-webhook-slack":
+                    thread.join(5)
+        self.assertIn("QBO webhook Slack notifications failed", logs.output[0])

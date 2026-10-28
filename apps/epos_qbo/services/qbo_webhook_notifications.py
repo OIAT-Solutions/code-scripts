@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 import requests
+from django.utils import timezone
 
 from code_scripts.company_config import get_qbo_api_base_url
 from code_scripts.slack_notify import send_slack_success
@@ -18,6 +20,8 @@ logger = logging.getLogger(__name__)
 QBO_MINOR_VERSION = "70"
 QBO_LOOKUP_TIMEOUT_SECS = 12
 INTUIT_TEST_REALM_ID = "310687"
+# Changes older than this when Intuit delivers them are recorded but not posted to Slack.
+SLACK_MAX_EVENT_AGE = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -29,33 +33,79 @@ class WebhookEntity:
     raw_event_id: str = ""
 
 
+@dataclass(frozen=True)
+class PendingNotification:
+    event_log: QboWebhookEvent
+    entity: WebhookEntity
+    company: CompanyConfigRecord | None
+    realm_id: str
+    webhook_url: str
+    is_test_event: bool
+
+
 def process_qbo_webhook_payload(payload: dict[str, Any]) -> int:
     """Process Intuit data-change webhooks and forward Slack notifications."""
-    if _is_cloudevents_payload(payload):
-        return _process_cloudevents_payload([payload])
-
-    notifications = payload.get("eventNotifications")
-    if not isinstance(notifications, list):
-        logger.warning("QBO webhook ignored: missing eventNotifications list")
-        return 0
-    return _process_data_change_notifications(notifications)
+    return send_pending_notifications(accept_qbo_webhook_payload(payload))
 
 
 def process_qbo_webhook_body(payload: Any) -> int:
     """Process any supported Intuit webhook body shape."""
+    return send_pending_notifications(accept_qbo_webhook_body(payload))
+
+
+def accept_qbo_webhook_body(payload: Any) -> list[PendingNotification]:
+    """Record each entity in a webhook body and return the ones still to post to Slack.
+
+    This is the quick part: Intuit is answered once it returns, and the QuickBooks item lookups
+    and Slack posts (send_pending_notifications) run afterwards. 22-28 Oct 2026: answering only
+    after 20 item lookups took ~17 s, so Intuit kept resending the same 22 Oct batch every few
+    hours and held back every newer notification behind it.
+    """
     if isinstance(payload, list):
         if all(isinstance(item, dict) for item in payload):
-            return _process_cloudevents_payload(payload)
+            return _accept_cloudevents_payload(payload)
         logger.warning("QBO webhook ignored: array payload contained non-object entries")
-        return 0
+        return []
     if isinstance(payload, dict):
-        return process_qbo_webhook_payload(payload)
+        return accept_qbo_webhook_payload(payload)
     logger.warning("QBO webhook ignored: unsupported payload type %s", type(payload).__name__)
-    return 0
+    return []
 
 
-def _process_data_change_notifications(notifications: list[dict[str, Any]]) -> int:
+def accept_qbo_webhook_payload(payload: dict[str, Any]) -> list[PendingNotification]:
+    if _is_cloudevents_payload(payload):
+        return _accept_cloudevents_payload([payload])
+
+    notifications = payload.get("eventNotifications")
+    if not isinstance(notifications, list):
+        logger.warning("QBO webhook ignored: missing eventNotifications list")
+        return []
+    return _accept_data_change_notifications(notifications)
+
+
+def send_pending_notifications(pending: list[PendingNotification]) -> int:
     sent_count = 0
+    for item in pending:
+        message = _format_entity_notification(
+            company=item.company,
+            realm_id=item.realm_id,
+            entity=item.entity,
+            is_test_event=item.is_test_event,
+        )
+        try:
+            send_slack_success(message, item.webhook_url)
+        except Exception as exc:  # pragma: no cover - send_slack_success currently swallows errors
+            _mark_event_failed(item.event_log, str(exc))
+        else:
+            item.event_log.status = QboWebhookEvent.STATUS_SENT
+            item.event_log.slack_sent = True
+            item.event_log.save(update_fields=["status", "slack_sent"])
+            sent_count += 1
+    return sent_count
+
+
+def _accept_data_change_notifications(notifications: list[dict[str, Any]]) -> list[PendingNotification]:
+    pending: list[PendingNotification] = []
     for notification in notifications:
         if not isinstance(notification, dict):
             continue
@@ -63,16 +113,16 @@ def _process_data_change_notifications(notifications: list[dict[str, Any]]) -> i
         if not realm_id:
             logger.warning("QBO webhook notification skipped: missing realmId")
             continue
-        sent_count += _process_realm_entities(
+        pending += _accept_realm_entities(
             realm_id=realm_id,
             entities=_iter_entities(notification),
             payload_for_log=notification,
         )
-    return sent_count
+    return pending
 
 
-def _process_cloudevents_payload(events: list[dict[str, Any]]) -> int:
-    sent_count = 0
+def _accept_cloudevents_payload(events: list[dict[str, Any]]) -> list[PendingNotification]:
+    pending: list[PendingNotification] = []
     for event in events:
         realm_id = str(event.get("intuitaccountid") or "").strip()
         if not realm_id:
@@ -82,21 +132,21 @@ def _process_cloudevents_payload(events: list[dict[str, Any]]) -> int:
         if entity is None:
             logger.warning("QBO webhook CloudEvent skipped: missing entity details")
             continue
-        sent_count += _process_realm_entities(
+        pending += _accept_realm_entities(
             realm_id=realm_id,
             entities=[entity],
             payload_for_log=event,
         )
-    return sent_count
+    return pending
 
 
-def _process_realm_entities(
+def _accept_realm_entities(
     *,
     realm_id: str,
     entities: list[WebhookEntity],
     payload_for_log: dict[str, Any],
-) -> int:
-    sent_count = 0
+) -> list[PendingNotification]:
+    pending: list[PendingNotification] = []
     company = _find_company_by_realm_id(realm_id)
     is_test_event = realm_id == INTUIT_TEST_REALM_ID
     webhook_url = _company_slack_webhook(company.company_key if company else "", is_test_event=is_test_event)
@@ -119,23 +169,56 @@ def _process_realm_entities(
             logger.info("QBO webhook Slack skipped for %s: no webhook configured", target)
             _mark_event_skipped(event_log, "No QBO webhook Slack URL configured.")
             continue
-
-        message = _format_entity_notification(
-            company=company,
-            realm_id=realm_id,
-            entity=entity,
-            is_test_event=is_test_event,
+        if _already_received(event_log):
+            _mark_event_skipped(event_log, "Intuit resent a change already received; no second Slack message.")
+            continue
+        if not is_test_event and _older_than_slack_limit(entity.last_updated):
+            hours = int(SLACK_MAX_EVENT_AGE.total_seconds() // 3600)
+            _mark_event_skipped(event_log, f"Change was over {hours} hours old when it arrived; recorded without Slack.")
+            continue
+        pending.append(
+            PendingNotification(
+                event_log=event_log,
+                entity=entity,
+                company=company,
+                realm_id=realm_id,
+                webhook_url=webhook_url,
+                is_test_event=is_test_event,
+            )
         )
-        try:
-            send_slack_success(message, webhook_url)
-        except Exception as exc:  # pragma: no cover - send_slack_success currently swallows errors
-            _mark_event_failed(event_log, str(exc))
-        else:
-            event_log.status = QboWebhookEvent.STATUS_SENT
-            event_log.slack_sent = True
-            event_log.save(update_fields=["status", "slack_sent"])
-            sent_count += 1
-    return sent_count
+    return pending
+
+
+def _already_received(event_log: QboWebhookEvent) -> bool:
+    """An earlier copy of the same change was posted, or is being posted, to Slack."""
+    return (
+        QboWebhookEvent.objects.filter(
+            id__lt=event_log.id,
+            realm_id=event_log.realm_id,
+            entity_name=event_log.entity_name,
+            entity_id=event_log.entity_id,
+            operation=event_log.operation,
+            last_updated=event_log.last_updated,
+            status__in=[QboWebhookEvent.STATUS_RECEIVED, QboWebhookEvent.STATUS_SENT],
+        )
+        .exclude(last_updated="")
+        .exists()
+    )
+
+
+def _older_than_slack_limit(last_updated: str) -> bool:
+    """A change made long before Intuit delivered it (for example a backlog released after an outage)."""
+    try:
+        changed = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if changed.tzinfo is None:
+        return False
+    return _now() - changed > SLACK_MAX_EVENT_AGE
+
+
+def _now() -> datetime:
+    return timezone.now()
 
 
 def _is_cloudevents_payload(payload: dict[str, Any]) -> bool:
