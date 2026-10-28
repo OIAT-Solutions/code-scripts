@@ -93,10 +93,15 @@ services:
   # http://web:8000. The public-hostname route and path restriction
   # (Path = epos-qbo/webhooks/quickbooks) are configured on the tunnel in the
   # Cloudflare Zero Trust dashboard; this container only needs the tunnel token.
+  # The version is pinned: "latest" kept a June 2026 copy running after Cloudflare's
+  # 20 Oct 2026 certificate fix (2026.10.2+), since a restart does not download a new one.
+  # The token is read from a file so it does not show in the container's start command.
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.5
     container_name: ${COMPOSE_PROJECT_NAME:-oiat}-cloudflared
-    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}"]
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/run/secrets/tunnel_token"]
+    secrets:
+      - tunnel_token
     depends_on:
       - web
     restart: unless-stopped
@@ -105,3 +110,7 @@ volumes:
   app-data:
   caddy_data:
   caddy_config:
+
+secrets:
+  tunnel_token:
+    file: ${CLOUDFLARE_TUNNEL_TOKEN_FILE:-./secrets/cloudflare_tunnel_token}
