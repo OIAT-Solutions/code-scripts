@@ -1,0 +1,219 @@
+# Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
+
+## Claude, 26 Oct 2026 — credit repayments from EPOS + review fixes (read this first)
+
+Built on top of Codex's `e425272`, same private branch `codex/nora-process-hardening` (owner: "you both should be
+on the same page"). Commits after `e425272`: credit repayments (`credit_repayments.py`, banking + payments-sheet
+integration, corrections for already-banked days) and five review fixes. Full notes:
+[`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) section "Claude — 26 October".
+Fast-forward to the latest branch head before editing; do not rewrite these commits. Keep it private (no public push).
+
+**Read EPOS once (owner, 26 Oct):** EPOS is never re-read for days already read. Products are fetched page by
+page directly; stock changes are read since the last clean capture (`stock_movements/cursor.json`, no Sunday wide
+audit — completed stock takes are view-only in EPOS); a credit-sale day whose invoices are all in QBO is finished
+(`credit_days_done.json`); credit repayments are read since the last good read (`credit_repayments/seen.json`).
+Whether a bill/invoice was paid comes from the Google Sheets, not EPOS.
+One EPOS login per daily run (`code_scripts/epos_session.py`, `OIAT_EPOS_SESSION_REUSE=1` set by daily_run only; cookies in `<state>/epos_session/company_a.json`, 0600, 30 min, deleted at run end). Empty stock takes (no item grid in the page) are accepted from the HTML read instead of a slow browser fallback.
+
+## Active branch work — 24 Oct 2026 whole-process hardening
+
+Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.
+Owner requests a single follow-up branch, production validation/run on that branch, and review before merge.
+Branch `codex/nora-process-hardening`; do not merge to master during implementation.
+Owner said keep today's 17:00 UTC run; it finished 17:19:53 UTC in 19m52s (prior PR #64).
+Private runtime repair `1b1b731` is rebuilt, validated and deployed to web/scheduler on this branch.
+508 core tests and 26 portal tests pass on Mac and isolated server image; 16 live runtime hashes/HTTP/single worker pass.
+Owner said KEEP THE REPAIR PRIVATE: do not push 3ffef33/1b1b731/75f8ce9/follow-up notes to public GitHub without later approval.
+Production received the exact private commit via SSH Git bundle. PR #65 does not include it; keep PR unmerged.
+25 Oct full run failed: Sunday requested 25 days but the collector accepts at most seven.
+Stock-only repair/recovery is authorized by owner chat on 25 Oct; keep PR #65 unmerged.
+Recovery job `dd6cf1b9-d1fd-41c8-9004-88942f45c907` hit the 20-minute read timeout; no stock adjustment ran.
+Its first three sections are complete; timeout scaling and explicit safe stock-only resume are now deployed.
+Resumed job f86bbdb8… was stopped at read-only PO lookup before stock posting; no adjustment ran.
+Final job `bc326c91-0eb2-4781-9bbc-3f6fa500d221` finished with review at 23:22:53 UTC in 7m54s; no failed steps.
+420 stock events: 373 already posted, 47 held, ZERO new adjustments. No recovery rerun is needed.
+All four audit sections/PO coverage are complete, zero missing; local encrypted restore verifies 2,642 files.
+This resumed historical sections: full fresh Sunday collector work is still ~24m28s; no full-run speed claim.
+Stock-only follow-up now requires explicit zero missing PO details. Browser row lookup is bulk, with exact PO identity checks.
+Freshly read recent stock; only complete historical observations under two hours old can resume. Preserve failed evidence.
+Sales and bills already posted: never replay the full financial day for this recovery.
+Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
+Stock editability (26 Oct, Claude): completed stock takes are view-only in EPOS (details page: Back/Export/Print only), so a Received detail is reused from `stock_movements/received_details.jsonl` when its list row is unique and matches; everything else is read fresh.
+
+25 Oct Toronto supplier follow-up is authorized: create Moses Bapivavy, A+ Company and Kay Jay Zenith Limited;
+apply six owner-confirmed supplier aliases; continue demonstrated routine repeat purchases.
+Suppliers 343/344/345 are created and verified; all six links are installed. Deal Radical IDs 124/15
+are recorded as one reporting identity, preserving original bills/payment targets; no QBO merge.
+Private runtime release 75f8ce9 is deployed and verified: 523 core + 47 portal tests pass on Mac/server;
+18 runtime source hashes match both services. All 33 approved bills (N1,861,500) are posted and verified;
+all 33 are visible unpaid in the refreshed payment Sheet (136 open bill choices). Portal: 82 -> 40 cards.
+Encrypted local restore verifies 2,676 files. NO recovery rerun is needed. Do not replay these bills, sales,
+stock or payments. Four large bills and five supplier/unit/cost holds still need review; CWAY needs its seller.
+SSH builds use docker/code-update.Dockerfile to preserve the validated runtime dependencies.
+
+26 Oct owner screenshot confirms SEKI ABIMBOLA KOLAWOLE, active QBO vendor 221, for future Seki purchases.
+Production supplier mapping repaired SEKI ABIBOLA (missing 339 -> 221), added SEKI ABIMBOLA;
+both existing full-name aliases remain 221. Web/scheduler verify the same mapping. No financial writes.
+Owner then explicitly approved egg PO 4017 as a genuine frequent purchase: posted/verified unpaid
+Bill 81284, N336,000, vendor 221, source date 8 Oct. One-PO repeat_ok only; no supplier-wide bypass.
+Payment Sheet shows it unpaid (137 open bill choices), staff entries unchanged. Portal now 39 cards,
+eight bills; PO 4017 is cleared. Do not replay it. No BillPayment or InventoryAdjustment was posted.
+Private evidence: /data/ops/company_a/supplier_review/20261026/seki/applied.json and
+/data/ops/company_a/supplier_review/20261026/seki_bill_4017/final_acceptance.json.
+
+## Deployed work — 24 Oct 2026 runtime efficiency
+
+Historical release: the active branch and no-merge instructions above take precedence.
+
+Read [`docs/NORA_RUNTIME_EFFICIENCY_20261024.md`](docs/NORA_RUNTIME_EFFICIENCY_20261024.md) before continuing this work.
+Implemented from master `7d3bf5b` on `codex/nora-run-efficiency`; PR #64 merged as `8632c76`.
+That release was validated on master before the follow-up branch above.
+Its first scheduled run completed in 19m52s with review and no failed steps; do not attribute that duration to the newer branch.
+Owner authorized implementation on the Mac and validation on the production host before the 17:00 UTC run;
+merge/return production to master only after validation. Preserve all existing financial approval gates.
+No EPOS API. Received POs are immutable; later deliveries use new POs (owner confirmed).
+Never run a financial backfill or change posting limits as a performance test. Check the checkpoint for
+test evidence, deployment state, remaining work and rollback. The old Mac tracker edit is preserved in
+git stash `preserve-local-tracker-before-nora-efficiency-20261024` and gitignored implementation evidence.
+
+
+**Read this before any QBO write, inventory change, or Company A pipeline change.** This file wins over every other plan document.
+
+| Need | Read |
+| --- | --- |
+| **Handover tracker: where things are right now, what's in progress, next steps** | [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md) |
+| What was posted during the cutover, and when | Cutover log, go-live runbook and freeze note removed 5 Oct 2026 (in git history); key IDs are in Status below |
+| Code contract, posting controls, incident response | [`docs/AKPONORA_POSTING_CONTROLS.md`](docs/AKPONORA_POSTING_CONTROLS.md) |
+| Daily running from October: catalogue sync, bills from POs, item guard | [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md) |
+| Server: the one scheduled Company A routine (`daily_run`), env, holds, approvals | [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
+| Operator tools (EPOS pulls, mapping, renames, creates, journals) | [`code_scripts/scripts/akponora_cutover/README.md`](code_scripts/scripts/akponora_cutover/README.md) |
+| Bookkeeper rules | Non-negotiable 10 and the W0 row in Status below |
+| Everything outstanding (checklist) | [`docs/AKPONORA_ROADMAP.md`](docs/AKPONORA_ROADMAP.md) |
+
+**Company:** AKPONORA VENTURES LTD. / NORA MINI MART (`company_a`, QBO realm `9341455406194328`, production).
+**As of:** 2 October 2026 — live on the new items since 1 Oct (see Status).
+**Goal:** from **1 Oct 2026**, till sales post only to **new QBO items**. These are Inventory `AKP-{EPOS master ProductID}`, or NonInventory `AKP-NS-{ProductID}` for products EPOS does not stock-track. QBO perpetual FIFO then gives COGS. Jan–Sep is history on the catch-all.
+
+---
+
+## Non-negotiables
+
+1. **Never delete** QBO products or historical sales receipts.
+2. **Never bulk-inactivate** legacy Inventory items: inactivation zeros qty and posts value to COGS/Shrinkage. (The old `qbo_inv_manager.py` that could do it was removed 5 Oct 2026.)
+3. **Never patch QtyOnHand** on legacy items "to match EPOS". **Never post `InventoryAdjustment`** on the sales/sync path. After go-live the only allowed legacy adjustment is qty → 0 offset to `300150` (W10, per-batch dry-run + chat yes).
+4. **Never import a catalogue onto existing QBO names**, and never create items with default qty (January's importer used qty 10).
+5. **Product identity = EPOS Product ID**, then SKU, then approved unique exact name. **Never barcodes.** Never infer pack size from a trailing `*N`. Use the approved sale multiplier (= what EPOS deducts).
+6. **One physical product = one QBO Inventory item.** Crate/pack/each EPOS buttons map to that item with a multiplier; purchases and costs use the same unit. Never copy a carton cost onto a unit item.
+7. **October sales targets are the new items only.** TxnDate ≥ 2026-10-01 fails closed: no catch-all `15030`, no legacy items, no auto-create. The sales path never creates or patches items (`create_inventory_item` refuses Company A).
+8. **Legacy items are frozen.** They are renamed `LEGACY — {name}` (W5, name only) before the creates, and inactivated safely only after stable operation (W10).
+9. **Asset account for new Inventory is Inventory Asset `77` only.** The `120000` family must end at ₦0 and receive nothing new.
+10. **Bookkeeper: bills and customer invoices are paused** until the owner says the fix is complete. No backdating. Nothing on legacy Inventory items. No new items.
+11. **Every production QBO write needs a chat yes for that specific action** (see Write policy). Dry-run first, verify after.
+
+---
+
+## October end state
+
+| Layer | Source of truth |
+| --- | --- |
+| Physical stock, packs, till buttons, pack deductions | EPOS |
+| Product identity | Approved mapping `STATE_ROOT/mappings/company_a/approved.csv` (EPOS ProductID → new QBO Item Id + multiplier) |
+| Daily sales from 1 Oct | New Inventory / `AKP-NS-` NonInventory items only. Any unmapped line fails the day |
+| Inventory value | New-item subledger = IA `77` GL. Opening = 30 Sep EPOS count, InvStartDate 2026-10-01 |
+| COGS from 1 Oct | QBO FIFO on new items; month-end posts only a verified count variance |
+| Purchases after the fix | Item lines on the **new** `AKP-` items in the item's unit (e.g. 5 cartons × 24 = 120 cans). `AKP-NS-` items: purchases expense to 200xxx |
+| Jan–Sep sales history | Catch-all `15030` (posted through 30 Sep) |
+| New EPOS products after 1 Oct | `catalogue_sync` (never by hand in QBO) |
+| Purchases from October | EPOS received POs → `bills_sync` → reviewed unpaid Bills |
+| Legacy catalogue | Renamed `LEGACY —` (W5), excluded from mapping, inactivated later (W10) |
+
+**Create-night rule:** creating Inventory with QtyOnHand debits IA. A same-night offset (credit IA `77` / debit `300150` = `B + C − V`) makes IA after the creates equal the **30 Sep EPOS value V** only. Recalculate live. Chat yes.
+
+---
+
+## Status (2 Oct 2026) — LIVE
+
+The cutover is done (the cutover log was removed 5 Oct 2026; in git history). Day-to-day running: [`docs/AKPONORA_DAILY_OPERATIONS.md`](docs/AKPONORA_DAILY_OPERATIONS.md).
+
+| ID | What | Status |
+| --- | --- | --- |
+| W0 | Bookkeeper freeze | Bills **can resume on the new `AKP-` items once the owner says so** (prefer the bills sync below). September deliveries billed late go against GRNI `210200`, never items. Still no new items by hand, nothing on `LEGACY —` items |
+| W2/W3 | Canonical mapping v3 | **Done and installed**: 6,150 rules → 4,430 Item Ids, sha `b4d8c640…` |
+| W4 | Pipeline code | On branch `cursor/post-akponora-qbo-writes-51f3` (PR #62), pushed and **deployed to OIAT-SRV-01** (3 Oct 2026) |
+| W5 | Legacy rename | **Done** 1 Oct: 3,879 items `LEGACY — …` |
+| — | QBO closing date | Owner sets **30 Sep 2026** in the QBO UI (not yet confirmed) |
+| W6 / W8 | 30 Sep pack; 25–30 Sep backfill; Sep close journals; GRNI | **Done** (JE 76552, 76553, 76554; GRNI account `210200` Id 87). IA `77` = V ₦148,824,877.40 at 30 Sep; every 120xxx ₦0 |
+| W7 | 3,938 Inventory + 492 NonInventory creates; IA offset JE 80493; equity reclass JE 80500 | **Done** 2 Oct |
+| — | 1 Oct sales | **Posted** 2 Oct (SalesReceipts 80494–80499, ₦3,211,950.00, MATCH, FIFO COGS ₦1,933,536.56) |
+| W9 | Company A daily automation on the server | **On since 3 Oct 2026.** `code_scripts/akponora_ops/daily_run.py`, run by the portal schedule worker (`scheduler` container, "Nora daily routine" schedule) at 18:00 Lagos: products → bills → sales → item check → stock → Undeposited Funds deposits. Status: [`docs/HANDOVER_TRACKER.md`](docs/HANDOVER_TRACKER.md); setup: [`docs/SERVER_SETUP.md`](docs/SERVER_SETUP.md) |
+| W10 | Safe legacy inactivation | After W9 is stable |
+
+### Daily tools — `code_scripts/akponora_ops/`
+
+| Job | What | Writes |
+| --- | --- | --- |
+| `catalogue_sync` | Finds new/changed EPOS products; maps pack children to their master using the EPOS Master Products amount; creates new `AKP-`/`AKP-NS-` items at **qty 0**; checks EPOS stock and PO history and flags unexplained stock; installs the new mapping version. Also runs just before the Company A transform when `OIAT_COMPANY_A_CATALOGUE_SYNC_BEFORE_SALES=1` | Creates + mapping install only with an approval ref (or the automated env gate, capped) |
+| `bills_sync` | Turns received EPOS POs (received ≥ 1 Oct) into unpaid QBO Bills on the mapped items in the item's unit; vendor map, duplicate checks, review sheet + Slack | Posts only bills a human marked `Approve=yes` (or the automated env gate, capped). Never pays |
+| `item_guard` | Daily read-only QBO scan: non-`AKP-` items, lines on `LEGACY —`/`15030`/unmapped items, 120xxx activity, wrong asset account, near-duplicate names, negative stock. Slack alert | None (GET only) |
+| `daily_run` | The single scheduled Company A routine (the portal "Daily routine" schedule; the only scheduler is the portal schedule worker, see `docs/SCHEDULING_AUTHORITY.md`), in order; exit 0/3/2; one Slack summary; global run lock. New suppliers → QBO vendor only with `OIAT_COMPANY_A_VENDOR_AUTO_CREATE` (+ ref, cap 5); near matches hold | Only through each step's own gates |
+
+Enabling any automated write mode on production is a chat-yes action.
+
+Open items:
+
+- Undeposited Funds `100900` ₦29,233,799.99 (25 Sep–1 Oct receipts) awaits the till-sheet deposits; 25, 26 and 29 Sep sheets were blank. `uf_deposits` (daily run step 5, branch `claude/akponora-uf-deposits`) is built and off: needs the Google service-account key, then a chat yes (`docs/SERVER_SETUP.md` §12).
+- 11 items went negative on 1 Oct (deliveries not yet billed); they clear when the October bills are posted.
+- **438 legacy items were never renamed** (W5 renamed only the 3,879 whose names clashed with a new item). They have no Sku and no `LEGACY —` prefix; 428 still carry qty (~₦9.14M), so a bookkeeper could pick them. `item_guard` treats any October line on them as an ALERT. Owner to decide: a W5 follow-up rename (chat yes) or accept. List: `outputs/item_guard_firstrun/report.json` → `legacy_not_renamed`.
+- Equity: `300100` −₦531,210,337.71, `300150` ₦427,977,166.81; full clean-up deferred to year end.
+
+- 492 final NonInventory products. The owner may later turn frozen food, eggs and rice into tracked EPOS masters (one master per family in grams/each, children deduct); any such EPOS change requires a fresh pull and map rebuild before posting.
+- Pack multipliers are no longer inferred from blank `VolumeOfSale`: all 2,212 non-owner products were checked against EPOS Master Products evidence. Five name-suffix and 14 cost-ratio disagreements remain flagged for review, but the map follows EPOS and the 1 Oct stock proof is 100% for comparable families.
+- Staff questions: Ernest's 19 Sep stock adds (deliveries or recounts?), and duplicate POs `3828`/`3829`/`3855`/`3861`.
+- Undeposited Funds is ₦0 through 24 Sep. Receipts posted from 25 Sep on land in `100900` and need depositing by the same till-sheet method (`akponora_ops/uf_deposits`, daily routine step `uf`).
+
+---
+
+## Accounting rules
+
+- **Through September (periodic):** `opening stock + purchases − closing count = COGS`. The September close is one journal set (done; JE 76552–76554):
+  - IA `77` to the 30 Sep EPOS value;
+  - zero every 120xxx sub-account into the matching 200xxx (this clears the GPFH invoice COGS);
+  - a GRNI accrual for unbilled September POs: post-16-Sep receipts to COGS, pre-reset receipts against `300150`, ex-tax; possible-duplicate POs excluded.
+- Negative counts are valued at 0. Missing cost: create at 0 and flag; never invent cost.
+- Don't edit or void old bills or invoices. Correct by journal in the open period (the August-dated GPFH COGS is corrected in September with a memo).
+- **From October (perpetual):** QBO FIFO. Month-end posts only the verified variance between the new-item subledger and the EPOS count.
+
+---
+
+## Code traps (do not repeat January)
+
+| Trap | Guard |
+| --- | --- |
+| Sales upload creating Inventory | `create_inventory_item` refused for Company A / conversion mode |
+| `auto_fix_wrong_type_items` | Must stay `false` for Company A |
+| Conversion flag off | Recreates legacy FIFO COGS. Never set false |
+| Catch-all or legacy target in October | `october_target_error` fails the day |
+| Missing mapping file | Local: `runtime/mappings/company_a/approved.csv` must exist (header-only before W7). Never fall back to an old map |
+| Scheduler posting Company A outside its routine | Company A's sales run only inside its Daily routine: all-company sales runs always exclude it and a Company A sales schedule is refused |
+| Running backfills from the wrong place | Run from the repo root: `OIAT_COMPANIES_DIR=code_scripts/companies python run_pipeline.py --company company_a …` (tokens in `runtime/`) |
+
+---
+
+## Write policy
+
+**Allowed without asking:** read-only QBO/EPOS queries and reports; code and tests; mapping/workbook files on disk; dry-runs.
+
+**Needs a chat yes for the specific action:** sales backfills; journals (Sep close, GRNI, IA offset); W5 renames; W7 creates; installing the mapping; `catalogue_sync apply`; `bills_sync post`; turning on any automated mode (`OIAT_COMPANY_A_CATALOGUE_AUTO_CREATE`, `OIAT_COMPANY_A_BILLS_AUTO_POST`, `OIAT_COMPANY_A_VENDOR_AUTO_CREATE`, enabling the Daily routine schedule, the before-sales hook) or the pipeline/scheduler; any InventoryAdjustment; inactivating any item; Undeposited Funds deposits/transfers; any Bill Payment on `66251`; creating accounts (e.g. the GRNI liability); changing QBO settings.
+
+**Forbidden:** InventoryAdjustment on the sales path; bulk inactivation or deletion of products; legacy qty edits to match EPOS; January-style qty-10 import; catch-all or legacy items as October targets.
+
+---
+
+## Evidence locations (gitignored — never commit)
+
+- `outputs/nora_gaps_2026-09-25/`: final mapping, W5 plan, catalogue pulls, Sep close draft, bills/PO drafts, stock bridge, invoice drift, backfill verification.
+- `outputs/akponora_uf_allocation_2026-09-26/`: Undeposited Funds work.
+- EPOS packs: `../MISC/AKPONORA Investigation/COGS Analysis/As of …/`.
+- Do not commit QBO exports, tokens, workbooks with live stock, or `runtime/`.
+
+Company B (Goldplates) is out of scope unless asked.

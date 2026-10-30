@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% load static %}
+{% block title %}Needs your attention · OIAT Portal{% endblock %}
+{% block head_extra %}{{ block.super }}{% endblock %}
+{% block body_extra %}{{ block.super }}{% endblock %}
+{% block content %}
+{% load tz %}{% timezone "Africa/Lagos" %}
+<div class="nora-workspace nora-queue-page">
+{% for error in errors %}<p role="alert" class="nora-message error">{{ error }}</p>{% endfor %}
+<div class="nora-page-heading"><div><h1>Review queue</h1><p>Open a record to see what was found and what each action does.</p></div>
+{% if can_refresh %}<form method="post" action="{% url 'epos_qbo:attention-refresh' %}">{% csrf_token %}<button type="submit" class="nora-button" {% if rechecking %}disabled{% endif %} title="Checks bills and banking again. Nothing is posted.">{% if rechecking %}Checking…{% else %}Refresh{% endif %}</button></form>{% endif %}</div>
+<section class="nora-panel"><div class="nora-panel-head"><div><h2>Open tasks</h2><p>{{ items|length }} record{{ items|length|pluralize }}</p></div></div>
+<div class="nora-toolbar"><label class="nora-search"><span class="sr-only">Search records</span><input id="queue-search" placeholder="Search records…" autocomplete="off"></label><label><span class="sr-only">Workflow</span><select id="queue-kind"><option value="all">All workflows</option><option value="stock">Stock</option><option value="purchases">Purchases</option><option value="product">Products</option><option value="deposit">Banking</option><option value="flag">Flags</option></select></label></div>
+<div class="nora-table-scroll"><table class="nora-table"><thead><tr><th>Record</th><th>Workflow</th><th>Date</th><th>Why it is here</th><th></th></tr></thead><tbody>
+{% for item in items %}<tr class="queue-row" data-key="{{ item.key }}" data-group="{% if item.kind == 'stock_movement' or item.kind == 'stock_adjust' or item.kind == 'stock_follow' %}stock{% elif item.kind == 'bill' or item.kind == 'vendor' %}purchases{% else %}{{ item.kind }}{% endif %}" data-text="{{ item.title|lower }} {{ item.reason|lower }} {{ item.date }}"><td><strong>{{ item.title }}</strong></td><td>{% if item.kind == 'product' %}Products{% elif item.kind == 'vendor' %}Supplier{% elif item.kind == 'bill' %}Purchases{% elif item.kind == 'deposit' %}Banking{% elif item.kind == 'flag' %}<span class="nora-status neutral">Flag</span>{% elif item.kind == 'hold' %}Sales{% else %}Stock{% endif %}</td><td>{{ item.date|default:'—' }}</td><td class="queue-reason">{{ item.reason|truncatechars:110 }}</td><td><button type="button" class="nora-details queue-open" data-key="{{ item.key }}">Details</button></td></tr>
+{% empty %}<tr><td colspan="5" class="nora-empty">Nothing is waiting for you.</td></tr>{% endfor %}
+<tr id="queue-none" hidden><td colspan="5" class="nora-empty">No records match these filters.</td></tr>
+</tbody></table></div></section>
+<section class="nora-panel"><div class="nora-panel-head"><div><h2>Recent decisions</h2><p>What was approved or skipped in the portal</p></div></div><div class="nora-table-scroll"><table class="nora-table"><thead><tr><th>Decision</th><th>By</th><th>When</th><th>Result</th></tr></thead><tbody>
+{% for record in recent_actions %}<tr><td><a href="{% url 'epos_qbo:run-detail' record.job_id %}"><strong>{{ record.action_label }}</strong> · {{ record.payload.title|default:"Review action" }}</a></td><td>{{ record.actor }}</td><td>{{ record.created_at|date:'j M H:i' }}</td><td>{{ record.result }}</td></tr>{% empty %}<tr><td colspan="4" class="nora-empty">No portal decisions yet.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% for item in items %}<dialog class="nora-drawer" id="item-{{ item.key }}" aria-labelledby="t-{{ item.key }}"><div class="nora-drawer-head"><span class="nora-status neutral">Review</span><button type="button" class="nora-icon-button nora-drawer-close" aria-label="Close details">✕</button></div><div class="nora-drawer-body" id="t-{{ item.key }}">{% include "components/attention_item_body.html" with drawer=True %}</div></dialog>{% endfor %}
+</div>
+<script>
+(function(){const rows=[...document.querySelectorAll('.queue-row')],q=document.getElementById('queue-search'),k=document.getElementById('queue-kind'),none=document.getElementById('queue-none');
+const p=new URLSearchParams(location.search);if(p.get('kind')&&k){k.value=[...k.options].some(o=>o.value===p.get('kind'))?p.get('kind'):'all'}
+function filter(){const t=(q.value||'').toLowerCase(),g=k.value;let n=0;rows.forEach(r=>{const show=(g==='all'||r.dataset.group===g)&&(!t||r.dataset.text.includes(t));r.hidden=!show;if(show)n++});if(none)none.hidden=n>0||!rows.length}
+if(q){q.addEventListener('input',filter);k.addEventListener('change',filter);filter()}
+function open(key){const d=document.getElementById('item-'+key);if(d&&d.showModal){d.showModal();history.replaceState(null,'','#item-'+key)}}
+rows.forEach(r=>r.addEventListener('click',e=>{if(!e.target.closest('a'))open(r.dataset.key)}));
+document.querySelectorAll('.nora-drawer').forEach(d=>{d.querySelector('.nora-drawer-close').addEventListener('click',()=>d.close());d.addEventListener('click',e=>{if(e.target===d)d.close()});d.addEventListener('close',()=>history.replaceState(null,'',location.pathname+location.search))});
+if(location.hash.startsWith('#item-'))open(location.hash.slice(6));})();
+</script>
+{% endtimezone %}
+{% endblock %}
