@@ -6,10 +6,8 @@ Staff use two EPOS reasons: ``Stock Take`` (a recount before a new PO: EPOS corr
 * Stock Take -> account 82 Inventory Shrinkage (count difference), DocNumber ``ST<yymmdd>-<hash>``
 * Wastage    -> account 83 Stock Wastage, DocNumber ``WS<yymmdd>-<hash>`` (hash of the event ids: re-runs give
   the same number, so an adjustment can never be posted twice)
-* no reason (EPOS "n/a", usually a back-office edit shown as "System"), New Stock, New Product
-             -> account 82 too, DocNumber ``NA<yymmdd>-<hash>`` (owner, 12 Oct 2026: may be stock already in
-             the store, may be a delivery without a PO; posted without approval and kept findable by "NA"
-             so bank reconciliation can trace it if money does not add up)
+* no reason (EPOS "n/a"), New Stock, New Product -> delivery/PO review before any posting
+  (whole-process hardening, owner 24 Oct 2026). A possible delivery must not also become a count correction.
 * anything else (Returns, ...), a line whose product/unit is not
   certain (``holds`` / no quantity), or one worth more than the cap (N100,000 by EPOS cost) is not posted
   automatically: over-cap Stock Take/Wastage go to a plan the owner approves in Needs your attention;
@@ -40,6 +38,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from code_scripts.akponora_ops.common import COMPANY, REALM, dump_json, state_dir, write_csv
+from code_scripts.akponora_ops.work_state import WorkState, digest
 
 TOOL = "stock_follow"
 LAGOS = ZoneInfo("Africa/Lagos")
@@ -120,6 +119,21 @@ def classify(e: dict, cap: Decimal) -> tuple[str, str]:
         return kind[0], "no quantity change"
     if e["_day"] < FLOOR:
         return kind[0], "before 1 October"
+    if e.get("_audit_only"):
+        return kind[0], "older movement discovered by completeness audit; explicit review required"
+    if kind[0] == "NA":
+        return kind[0], "delivery/PO review required for New Stock or an unexplained change"
+    if e.get("delivery_overlap"):
+        return kind[0], "possible delivery also recorded by a PO: " + ", ".join(e["delivery_overlap"])
+    try:
+        raw_value = str(e.get("source_value_change") or "").replace("₦", "").replace(",", "").strip()
+        value = Decimal(raw_value)
+        if not value.is_finite():
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        return kind[0], "stock-change value is missing or invalid; approval review required"
+    if money(e.get("_transfer_gross")) > cap:
+        return kind[0], f"worth N{money(e['_transfer_gross']):,.2f} across this adjustment, over the N{cap:,.0f} limit"
     if abs(money(e.get("source_value_change"))) > cap:
         return kind[0], f"worth N{abs(money(e.get('source_value_change'))):,.2f}, over the N{cap:,.0f} limit"
     return kind[0], ""
@@ -132,6 +146,44 @@ def ledger_path() -> Path:
 def ledger() -> dict:
     p = ledger_path()
     return json.loads(p.read_text()) if p.exists() else {}
+
+
+def event_sha(e):
+    return digest({k: e.get(k) for k in ("event_id", "transfer_id", "_day", "epos_product_id", "qbo_item_id",
+                                        "canonical_qty_change", "epos_reason", "source_value_change")})
+
+
+def delivery_overlaps(events, bills_dir):
+    """Conservative review signal, never a claim that two records describe one delivery."""
+    from code_scripts.akponora_ops.common import read_csv
+    plan_path = Path(bills_dir) / "plan.json"
+    lines_path = Path(bills_dir) / "review_lines.csv"
+    if not plan_path.exists() or not lines_path.exists():
+        return events
+    plan = json.loads(plan_path.read_text())
+    dates = {str(e["po"]["ref"]): e["po"]["received_date"] for e in plan.get("entries", [])}
+    received = defaultdict(Decimal)
+    for row in read_csv(lines_path):
+        if row.get("QBO Qty") and row.get("QBO Item Id"):
+            received[(row["PO"], row["QBO Item Id"])] += Decimal(row["QBO Qty"])
+    out = {}
+    for identity, event in events.items():
+        e = dict(event)
+        qty = Decimal(str(e.get("canonical_qty_change") or 0))
+        matches = [ref for (ref, iid), amount in received.items() if qty > 0 and iid == e.get("qbo_item_id")
+                   and qty == amount and ref in dates
+                   and abs((datetime.fromisoformat(e["_day"]) - datetime.fromisoformat(dates[ref])).days) <= 1]
+        if matches:
+            e["delivery_overlap"] = sorted(set(matches))
+        out[identity] = e
+    return out
+
+
+def with_transfer_totals(events):
+    totals = defaultdict(Decimal)
+    for e in events.values():
+        totals[e["transfer_id"]] += abs(money(e.get("source_value_change")))
+    return {k: {**e, "_transfer_gross": str(totals[e["transfer_id"]])} for k, e in events.items()}
 
 
 # ---------------------------------------------------------------- plan
@@ -160,7 +212,8 @@ def build_payloads(events: list[dict], s: dict, *, tag: str) -> list[dict]:
             out.append({"TxnDate": day, "DocNumber": doc, "AdjustAccountRef": {"value": s["accounts"][kind]},
                         "PrivateNote": (f"{what} {day} | {doc} | events {','.join(e['event_id'][:10] for e in chunk)} "
                                         f"| created by {TOOL}")[:4000],
-                        "Line": lines, "_events": [e["event_id"] for e in chunk]})
+                        "Line": lines, "_events": [e["event_id"] for e in chunk],
+                        "_source_shas": {e["event_id"]: event_sha(e) for e in chunk}})
     return out
 
 
@@ -172,15 +225,19 @@ def plan(events: dict, out: Path, *, s: dict, approve_over_cap: bool, tag: str =
     """Write a plan of eligible events not yet posted. ``approve_over_cap`` includes over-cap lines (the owner
     approves them explicitly); otherwise only lines within the cap."""
     done = ledger()
+    events = with_transfer_totals(events)
     rows, chosen = [], []
     for e in sorted(events.values(), key=lambda x: (x["_day"], x["transfer_id"])):
         kind, why = classify(e, s["cap"])
+        edited = done.get(e["event_id"], {}).get("source_sha") not in (None, event_sha(e))
+        if edited:
+            why = "previously posted stock movement was edited; review the original adjustment"
         over = why.startswith("worth ")
         take = kind and e["event_id"] not in done and (not why or (over and approve_over_cap))
         rows.append({"day": e["_day"], "epos_ref": e["transfer_id"], "staff": e.get("staff"), "reason": e.get("epos_reason"),
                      "product": e["name"], "qty_change": e.get("canonical_qty_change"),
                      "value": str(money(e.get("source_value_change"))),
-                     "status": "already posted" if e["event_id"] in done else "in this plan" if take else f"not automatic: {why}"})
+                     "status": f"not automatic: {why}" if edited else "already posted" if e["event_id"] in done else "in this plan" if take else f"not automatic: {why}"})
         if take:
             chosen.append(e)
     payloads = build_payloads(chosen, s, tag=tag)
@@ -191,6 +248,8 @@ def plan(events: dict, out: Path, *, s: dict, approve_over_cap: bool, tag: str =
                "removed_units": str(-sum(Decimal(str(e["canonical_qty_change"])) for e in chosen if Decimal(str(e["canonical_qty_change"])) < 0)),
                "days": sorted({e["_day"] for e in chosen}), "accounts": s["accounts"],
                "payloads_sha256": payloads_sha(payloads) if payloads else "", "financial_writes": False}
+    summary["exposure_absolute"] = str(sum(abs(money(e.get("source_value_change"))) for e in chosen))
+    summary["review_count"] = sum(str(r["status"]).startswith("not automatic:") for r in rows)
     out.mkdir(parents=True, exist_ok=True)
     (out / "payloads.jsonl").write_text("".join(json.dumps(p, sort_keys=True) + "\n" for p in payloads))
     write_csv(out / "review.csv", rows, ["day", "epos_ref", "staff", "reason", "product", "qty_change", "value", "status"])
@@ -211,18 +270,24 @@ def post(plan_dir: Path, *, client, approval_ref: str, expect_sha: str) -> dict:
     if summary.get("status") != READY or not expect_sha or payloads_sha(payloads) != expect_sha:
         raise StopPost("the plan is not READY or changed since it was approved (payloads_sha256 mismatch)")
     book = ledger()
+    journal = WorkState(state_dir(TOOL) / "work.sqlite3")
     results = []
     for p in payloads:
         events, doc = p.pop("_events"), p["DocNumber"]
+        source_shas = p.pop("_source_shas", {})
         if all(e in book for e in events):
             results.append({"doc": doc, "status": "ALREADY_DONE", "qbo_id": book[events[0]]["adjustment"], "detail": ""})
             continue
         existing = [x for x in client.query_all(f"select * from InventoryAdjustment where TxnDate = '{p['TxnDate']}'",
                                                 "InventoryAdjustment") if str(x.get("DocNumber")) == doc]
         if existing:  # posted before the ledger was written (same events -> same number): record it, never re-post
+            if len(existing) != 1 or adjustment_signature(existing[0]) != adjustment_signature(p):
+                raise StopPost("existing stock adjustment has conflicting accounting details")
             for e in events:
-                book[e] = {"adjustment": existing[0]["Id"], "doc": doc, "at": "found in QuickBooks"}
+                book[e] = {"adjustment": existing[0]["Id"], "doc": doc, "at": "found in QuickBooks",
+                           "source_sha": source_shas.get(e)}
             dump_json(ledger_path(), book)
+            journal.put("stock", doc, digest(p), "verified", {"adjustment": existing[0]["Id"], "events": events})
             results.append({"doc": doc, "status": "ALREADY_DONE", "qbo_id": existing[0]["Id"], "detail": "found in QuickBooks"})
             continue
         ids = [ln["ItemAdjustmentLineDetail"]["ItemRef"]["value"] for ln in p["Line"]]
@@ -232,15 +297,32 @@ def post(plan_dir: Path, *, client, approval_ref: str, expect_sha: str) -> dict:
         before = {i: Decimal(str(client.get_json(f"/item/{i}")["Item"].get("QtyOnHand") or 0)) for i in want}
         body = dict(p, PrivateNote=f"{p['PrivateNote']} | approval {approval_ref}"[:4000])
         rid = hashlib.sha256(f"{TOOL}|{REALM}|{doc}|{expect_sha}".encode()).hexdigest()[:36]
-        resp = client.post_json("/inventoryadjustment", body, rid)
+        prior = journal.get("stock", doc)
+        if prior and prior["status"] in ("sending", "unknown"):
+            raise StopPost("previous adjustment outcome is uncertain; reconcile its original document before retrying")
+        journal.put("stock", doc, digest(p), "sending", {"payload": p, "events": events, "source_shas": source_shas})
+        try:
+            resp = client.post_json("/inventoryadjustment", body, rid)
+        except Exception as exc:
+            journal.put("stock", doc, digest(p), "unknown", {"payload": p, "events": events, "source_shas": source_shas,
+                                                             "reason": str(exc)})
+            raise
         made = (resp.json() or {}).get("InventoryAdjustment", {}) if getattr(resp, "status_code", 0) == 200 else {}
         if not made.get("Id"):
+            code = getattr(resp, "status_code", 0) or 0
+            # 26 Oct 2026 review: a definite 4xx rejection created nothing; leaving the journal at "sending" made
+            # every later night refuse all stock posting. Only an unclear outcome stays uncertain.
+            journal.put("stock", doc, digest(p), "rejected" if 400 <= code < 500 else "unknown",
+                        {"payload": p, "events": events, "source_shas": source_shas, "http": code,
+                         "reason": str(getattr(resp, "text", ""))[:500]})
             results.append({"doc": doc, "status": "FAILED", "qbo_id": "",
                             "detail": f"HTTP {getattr(resp, 'status_code', '?')}: {str(getattr(resp, 'text', ''))[:300]}"})
             break
         for e in events:
-            book[e] = {"adjustment": made["Id"], "doc": doc, "at": datetime.now(LAGOS).isoformat(timespec="seconds")}
+            book[e] = {"adjustment": made["Id"], "doc": doc, "at": datetime.now(LAGOS).isoformat(timespec="seconds"),
+                       "source_sha": source_shas.get(e)}
         dump_json(ledger_path(), book)
+        journal.put("stock", doc, digest(p), "verified", {"adjustment": made["Id"], "events": events})
         wrong = []
         for i, diff in want.items():
             after = Decimal(str(client.get_json(f"/item/{i}")["Item"].get("QtyOnHand") or 0))
@@ -255,18 +337,79 @@ def post(plan_dir: Path, *, client, approval_ref: str, expect_sha: str) -> dict:
     return res
 
 
+def adjustment_signature(p):
+    return (p.get("TxnDate"), str((p.get("AdjustAccountRef") or {}).get("value")),
+            sorted((str((l.get("ItemAdjustmentLineDetail") or {}).get("ItemRef", {}).get("value")),
+                    Decimal(str((l.get("ItemAdjustmentLineDetail") or {}).get("QtyDiff", 0))))
+                   for l in p.get("Line") or []))
+
+
+def recover_stock_operations(client, journal):
+    book, remaining = ledger(), []
+    for row in journal.unresolved("stock"):
+        if row["status"] not in ("sending", "unknown"):
+            continue
+        evidence = row["evidence"]
+        payload = evidence.get("payload") or {}
+        found = [x for x in client.query_all(
+            f"select * from InventoryAdjustment where TxnDate = '{payload.get('TxnDate', '')}'", "InventoryAdjustment")
+                 if x.get("DocNumber") == row["identity"]]
+        if len(found) != 1 or adjustment_signature(found[0]) != adjustment_signature(payload):
+            remaining.append(row["identity"])
+            continue
+        for eid in evidence["events"]:
+            book[eid] = {"adjustment": found[0]["Id"], "doc": row["identity"], "at": "recovered in QuickBooks",
+                         "source_sha": evidence.get("source_shas", {}).get(eid)}
+        dump_json(ledger_path(), book)
+        journal.put("stock", row["identity"], row["source_sha"], "verified", {"adjustment": found[0]["Id"]})
+    return remaining
+
+
 # ---------------------------------------------------------------- nightly (daily_run)
 def catchup_done() -> bool:
     return (state_dir(TOOL) / "catchup_posted.json").exists()
 
 
-def nightly(movements_summary: Path, out: Path, *, client=None, write_client=None, env=None, dry_run=False) -> dict:
+def nightly(movements_summary: Path, out: Path, *, client=None, write_client=None, env=None, dry_run=False,
+            bills_dir=None, auto_from_date=None) -> dict:
     """Auto-post this run's eligible events (within the cap) once the catch-up is posted; over-cap ones go to
     an approval plan under portal_reads/stock_follow/."""
     s = settings(env)
-    events = collect([movements_summary])
+    capture = json.loads(movements_summary.read_text())
+    events = with_transfer_totals(collect([movements_summary]))
+    if auto_from_date:
+        events = {identity: {**e, "_audit_only": e["_day"] < auto_from_date} for identity, e in events.items()}
+    if bills_dir is not None:
+        events = delivery_overlaps(events, bills_dir)
     res = {"events": len(events), "posted": [], "waiting_approval": 0, "not_automatic": 0, "note": ""}
+    if capture.get("errors") or capture.get("status") == "INCOMPLETE":
+        res.update(not_automatic=len(events), note="stock capture incomplete; no automatic adjustment is allowed",
+                   warnings=["complete the missing stock-movement evidence before posting"])
+        return res
+    if not dry_run:
+        journal = WorkState(state_dir(TOOL) / "work.sqlite3")
+        checker = client or write_client
+        pending = recover_stock_operations(checker, journal) if checker else [
+            r for r in journal.unresolved("stock") if r["status"] in ("sending", "unknown")]
+        if pending:
+            res.update(not_automatic=len(events), note="uncertain prior stock write needs reconciliation",
+                       warnings=["reconcile the original adjustment document before preparing another event group"])
+            return res
+    done = ledger()
     for e in events.values():
+        if e["event_id"] in done:
+            original = done[e["event_id"]].get("source_sha")
+            prior_source = journal.get("stock_source", e["event_id"]) if not dry_run else None
+            expected = original or (prior_source or {}).get("source_sha")
+            if expected not in (None, event_sha(e)):
+                res["not_automatic"] += 1
+                res.setdefault("warnings", []).append("a previously posted stock movement was edited; reconcile the original adjustment")
+            if not original and not prior_source:
+                res["historical_baselines_needed"] = res.get("historical_baselines_needed", 0) + 1
+            if not dry_run and not prior_source:
+                journal.put("stock_source", e["event_id"], event_sha(e), "verified", {
+                    "transfer_id": e["transfer_id"], "original_posting_checksum_available": bool(original)})
+            continue
         kind, why = classify(e, s["cap"])
         if why.startswith("worth "):
             res["waiting_approval"] += 1

@@ -155,6 +155,8 @@ def execute(action_record):
             cmd.append("--dry-run")
         if data.get("only"):
             cmd.extend(["--only", data["only"]])
+        if data.get("stock_audit_resume"):
+            cmd.extend(["--stock-audit-resume", data["stock_audit_resume"]])
         return subprocess.call(cmd)
     if action_record.action == "unexclude":
         from . import exclusions

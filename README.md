@@ -210,6 +210,8 @@ The portal is reachable **only over Tailscale** (Caddy binds to the host's Tails
 
 Request path: `Intuit → Cloudflare edge → cloudflared → web:8000`.
 
+The endpoint records each change and answers Intuit at once; QuickBooks item lookups and Slack posts run afterwards. Intuit resends a notification it thinks failed (a slow answer counts) and holds newer ones behind it, so a resent change is recorded but not posted to Slack again, and a change over 6 hours old when it arrives (a released backlog) is recorded without a Slack post.
+
 Setup (one-time):
 
 1. In the Cloudflare Zero Trust dashboard (Networks → Tunnels), create a tunnel and copy its **token**.
@@ -219,9 +221,11 @@ Setup (one-time):
    - Service: `HTTP` → `web:8000`
 
    Cloudflare creates the proxied DNS record automatically.
-3. In `.env`, set `CLOUDFLARE_TUNNEL_TOKEN` and add the webhook hostname to `DJANGO_ALLOWED_HOSTS`.
+3. Save the token on one line in `secrets/cloudflare_tunnel_token` next to `docker-compose.yml` (gitignored; cloudflared reads it with `--token-file`, so it is not in the container's start command). In `.env`, add the webhook hostname to `DJANGO_ALLOWED_HOSTS`.
 4. `docker compose up -d cloudflared` and recreate `web` so it picks up the new allowed host.
 5. Register the public URL in the Intuit app: `https://qbo-webhooks.<your-domain>/epos-qbo/webhooks/quickbooks/`.
+
+> The cloudflared image is pinned in `docker-compose.yml`. To upgrade, change the tag, `docker compose pull cloudflared`, then `docker compose up -d --no-deps cloudflared`; restarting the old container keeps the old version.
 
 > On a Windows / Docker Desktop host, pull images from the interactive console before running `docker compose up` over SSH — the credential helper cannot run in a non-interactive session.
 

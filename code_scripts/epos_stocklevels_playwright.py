@@ -8,6 +8,7 @@ from pathlib import Path
 from playwright.sync_api import Playwright, sync_playwright
 
 from code_scripts.artifact_paths import stock_exports_dir
+from code_scripts import epos_session
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config, get_available_companies
 from code_scripts.paths import OPS_ROOT
@@ -167,28 +168,35 @@ def run(
     browser = playwright.chromium.launch(headless=not headful)
     context = browser.new_context(accept_downloads=True)
     page = context.new_page()
+    reused = epos_session.restore(context, config.company_key)  # only inside a Nora daily run
 
-    for attempt in range(1, _GOTO_MAX_RETRIES + 1):
-        try:
-            page.goto(_EPOS_STOCKLEVELS_URL, wait_until="domcontentloaded")
-            break
-        except Exception as e:
-            if attempt < _GOTO_MAX_RETRIES:
-                print(
-                    f"  [Retry {attempt}/{_GOTO_MAX_RETRIES}] page.goto failed: {e}. "
-                    f"Retrying in {_GOTO_RETRY_DELAY_S}s..."
-                )
-                time.sleep(_GOTO_RETRY_DELAY_S)
-            else:
-                raise
+    def open_report():
+        for attempt in range(1, _GOTO_MAX_RETRIES + 1):
+            try:
+                page.goto(_EPOS_STOCKLEVELS_URL, wait_until="domcontentloaded")
+                break
+            except Exception as e:
+                if attempt < _GOTO_MAX_RETRIES:
+                    print(
+                        f"  [Retry {attempt}/{_GOTO_MAX_RETRIES}] page.goto failed: {e}. "
+                        f"Retrying in {_GOTO_RETRY_DELAY_S}s..."
+                    )
+                    time.sleep(_GOTO_RETRY_DELAY_S)
+                else:
+                    raise
 
-    page.get_by_role("textbox", name="Username or email address").click()
-    page.get_by_role("textbox", name="Username or email address").fill(epos_username)
-    page.get_by_role("textbox", name="Password").click()
-    page.get_by_role("textbox", name="Password").fill(epos_password)
-    page.get_by_role("button", name="Log in").click()
+    open_report()
+    if epos_session.reuse(page, reused, open_report):
+        print("EPOS: reused this run's login")
+    else:
+        page.get_by_role("textbox", name="Username or email address").click()
+        page.get_by_role("textbox", name="Username or email address").fill(epos_username)
+        page.get_by_role("textbox", name="Password").click()
+        page.get_by_role("textbox", name="Password").fill(epos_password)
+        page.get_by_role("button", name="Log in").click()
 
     _wait_for_stock_report_ready(page)
+    epos_session.save(context, config.company_key)
 
     apply_selector = _click_apply(page)
     print(f"Applied Stock Report filters via {apply_selector}")

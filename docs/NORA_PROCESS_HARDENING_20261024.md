@@ -1,0 +1,330 @@
+# Nora whole-process hardening — active handover
+
+Started 24 October 2026 at 16:50 UTC. Owner explicitly requests implementing the all-round review in one branch, running production from that branch, and reviewing today's run before any merge to master. Do NOT merge this branch without that later review.
+
+26 OCT PO 4017 ACCEPTANCE (10:46:50 UTC): owner explicitly approved this genuine repeat egg purchase. Recorded one-PO `repeat_ok` with the owner's reason; no supplier-wide repeat bypass. Fresh EPOS list/current QBO plan: 4,027 orders, zero missing details, ten existing bills verified, only PO 4017 READY. Approved payload: 60 trays x 30 eggs = 1,800 mapped each, N336,000, vendor 221 SEKI ABIMBOLA KOLAWOLE, source date 8 Oct. Posted **Bill 81284** and independently re-read supplier/date/item/quantity/tax/total/unpaid balance; all match. Payment Sheet system bill list/dropdown refreshed and re-read: PO 4017 visible fully unpaid, 137 open choices, staff payment inputs unchanged. Portal **39 cards** (eight bills), no read errors, PO 4017 absent. No sales, BillPayments, InventoryAdjustments, other bill postings or automatic-limit changes. Do not replay. Private evidence: `/data/ops/company_a/supplier_review/20261026/seki_bill_4017/`; local `outputs/nora_supplier_release_20261025/seki_bill_*_20261026.json`. Runtime image remains unchanged; no public push or merge.
+
+26 OCT SUPPLIER UPDATE (10:42 UTC): owner screenshot confirms active QBO vendor 221, SEKI ABIMBOLA KOLAWOLE, as the future Seki supplier. Repaired the short SEKI ABIBOLA alias from missing vendor 339 to 221, added SEKI ABIMBOLA, and preserved both full-name aliases already pointing to 221. GET-only QBO client, global run lock and idle check; pinned preview and atomic mapping replacement; all unrelated supplier rows unchanged. Web and scheduler verified mapping SHA `66f75f9c711819137e834857b4ea91804aa7b550780e53328972c3ac7e24b3d9`. No bills, payments or stock adjustments posted. PO 4017 still needs its separate repeat-purchase review; the saved portal plan may continue to show the old supplier reason until replanned. Runtime image remains 75f8ce9; no rebuild/restart is needed for this shared-volume configuration change. Private evidence/rollback CSV: `/data/ops/company_a/supplier_review/20261026/seki/`; local copies under `outputs/nora_supplier_release_20261025/seki_*_20261026.json`. Keep private and do not merge.
+
+CURRENT (25 Oct 21:15 Toronto / 26 Oct 01:15 UTC): private supplier release 75f8ce9 is deployed as image 7705febca1295564362aa6fe091fd621d988b017d8e8ffa92d033642ad43957d. All 33 approved bills are posted and verified (N1,861,500); the payment Sheet shows all 33 unpaid, 136 current open-bill choices, inputs unchanged. Three suppliers created, six aliases installed, 13 bounded recurring-product profiles active. Portal 82 -> 40 cards. 523 core + 47 portal tests pass on Mac/server; 18 source hashes match web/scheduler. Local encrypted restore verifies 2,676 files. No recovery rerun, no public push, no merge to master.
+
+STOCK RECOVERY ACCEPTANCE (25 Oct 23:24 UTC): private repair `1b1b731` is deployed and validated. Final stock-only job `bc326c91-0eb2-4781-9bbc-3f6fa500d221` SUCCEEDED WITH REVIEW in 7m54s, no failed steps: 420 events, 373 already posted, 47 held, ZERO new adjustments. Complete audit/PO evidence, zero missing; encrypted local restore verifies 2,642 files. No further recovery rerun needed. 508 core + 26 portal tests and 16 live hashes/HTTP/single worker pass. Owner said KEEP PRIVATE: no pushing repairs/follow-up notes to public GitHub. PR #65 excludes private commits and stays unmerged. Full fresh Sunday collector sections total ~24m28s; this resumed recovery is not a full routine benchmark. See final acceptance below.
+
+Branch: `codex/nora-process-hardening`, base master `df046f4`. Prior runtime efficiency release PR #64 is already deployed. Company A only; no EPOS API; existing financial caps/approval identities remain unless a documented hardening holds uncertain work. No test financial writes or historical backfills.
+
+## Clock and deployment gate
+
+Next daily schedule is 17:00 UTC. At start only nine minutes remain. Owner answered: KEEP the 17:00 UTC run and deploy AFTER it finishes. Do not change the schedule or interrupt that job. Owner is UNSURE whether completed stock adjustments are editable: continue fresh edit-safe detail checks; do not use immutable movement-detail caching.
+
+## Scope from all-round review
+
+- [x] Durable/atomic per-operation state and recovery after uncertain financial responses.
+- [x] Completed credit-invoice work records; unique existing invoice with exact total/customer/item checks.
+- [x] Separate PO discovery evidence from unresolved accounting work without losing late old orders.
+- [x] Shared appropriately fresh source evidence; keep live validation before financial writes.
+- [x] Incremental movement discovery with edit-safe detail handling and periodic wide completeness checks.
+- [x] Delivery-versus-stock-addition matching/hold; aggregate exposure visibility; retain approved caps.
+- [x] Permanent payment identities with backward-compatible sheet layout, immediate durable save, shared outcomes and uncertain-response reconciliation.
+- [x] Repayment/till overlap checks, physical cash evidence input and bank reconciliation evidence (never invent balances/statements).
+- [x] Focused final stock verification after writes with cutoffs/freshness recorded.
+- [x] Stall handling/progress/review ownership; safe recovery and maintenance documentation.
+- [x] Backup consistency, isolated restore validation and protected retention; encrypted offsite acceptance depends on configured destination/key.
+- [x] November practice fixtures/instructions and initial outstanding-balance evidence. Human training/live opening-balance signoff cannot be fabricated by code.
+- [x] Local/fake-service tests, production-host read-only shadow checks, isolated candidate build/tests, idle activation to branch.
+- [x] Review today's real run; leave branch deployed and PR unmerged pending owner review.
+
+## Evidence and recovery
+
+Evidence under gitignored `outputs/run_performance_20261024/process_hardening/`. Preserve existing `.agents/`, `.playwright-mcp/`, `skills-lock.json`, original tracker stash and server .env backups.
+
+Current known-good image: `oiat-portal:latest` = `sha256:6b8c6ecfdf2bc3bc00e1317faa27d311fb593355df20a9d8be9806df25cac1f2`; save a new rollback tag before activation. Prior older rollback also exists as `oiat-portal:nora-before-efficiency-20261024`.
+
+17:00 UTC checkpoint: implementation underway, no new deployment. Atomic JSON writes, SQLite per-operation work state, grouped complete credit-invoice checks/prepared-work reuse, immediate payment persistence/recovery and permanent IDs in optional column K, stronger stock eligibility and final post-adjustment snapshot are drafted. Credit tests 12 pass; payments 11 pass. Full suite currently has only stock tests needing changes for the explicitly stronger delivery/aggregate-cap policy; do not deploy until all old/new tests pass and live read-only shadows validate actual QBO invoice fields. Stock details remain freshly checked.
+
+Today's 17:00 run must finish using the prior PR #64 image. Do not replay a financial routine merely to benchmark this branch. After it finishes, use its saved evidence for shadow comparisons, deploy the fully validated branch idle, and leave PR unmerged. Update this file with each completed area, tests, SHA, schedule outcome and actual running image.
+
+17:09 UTC: core drafted changes pass all 475 existing code_scripts tests after updating complete-entity fake responses and stock-policy expectations. Still add dedicated interruption/identity/edit/cap regression tests, money cross-checks, discovery work state, backup/restore and production read-only validation before deployment. The 17:00 job is running on the old PR #64 image and remains untouched.
+
+21:19 UTC: resumed after usage interruption. Today's master/PR #64 run completed 17:19:53 UTC in 19m52s, exit 3 (review), no failed steps: catalogue 454s, bills 48s, sales 70s, credit 8s, guard 21s, stock 557s, stock_follow 10s, banking 12s, payments 8s. Billing capture: 0 detail pages, 209 selected, no missing. All three missing catalogue details were Cancelled with no received date/value; branch now excludes these purely cancelled records from receipt capture.
+
+Read-only candidate invoice shadow validated all 5 historical invoices against source/customer/lines/total with 2 QBO reads in 6.666s, temporary state only. Additional drafted changes: batched discovery work records with first-seen aging, repayment/till overlap guards and fresh source checks before automatic banking, physical-cash/bank-evidence validators, encrypted incremental backup/isolated-restore CLI (cryptography 50.0.2 installed locally). None of this branch has been deployed. Offsite destination/key-custodian question is pending. Still implement/add regression tests, finish operational acceptance/retention, validate live browser HTML reader equivalence and real backup/restore, then rebuild/test and activate idle production on this branch. Master must stay unchanged.
+
+21:28 UTC implementation checkpoint: 489 code_scripts tests pass. Added strict existing Bill supplier/date/AP/item/quantity/tax/price checks (paid bills may still match); full creation-history PO list discovery, retaining the active receipt/detail window and accounting cursor. Added same-item/quantity/near-date delivery overlap holds, weekly full open-period fresh stock recheck, final stock-check exception handling, money-evidence/aged-review reports, backup retention and isolated restore hook. Backup Mac path regression fixed. Live stock HTML/full-browser comparison and full-history PO/bill shadow validation are in progress; production remains untouched on master and idle, next run 25 Oct 17:00 UTC. No branch deployment or merge yet.
+
+21:35 UTC validation update: full-history filtered-response wait now proven live: 4,168 orders, active receipt/duplicate window 209, 262 cache hits, ZERO detail pages/missing, 24.370s collection; complete bill shadow 39.286s, 127 exact existing matches, 22 ready, 17 held, no financial writes. Earlier 67-order shadow was the default-list response race and is superseded. Ten fresh stock detail pages match full-browser accounting data (date/status/location/staff/note and all product/quantity/cost/reason values); barcode display decoration excluded, stable TransferID remains URL-based. HTML reads ~0.22–0.36s each versus ~1.53–1.93s browser on these samples. Empty grids/pagers still use full browser fallback. Permanent sheet IDs now read back before use; fresh staff rows checked before payment, and status updates follow IDs if sorted during the run. Historical stock postings without old source hashes establish a labeled observation baseline; this cannot prove there were no edits before the baseline. No new branch deployment yet.
+
+21:38 UTC release preparation: all 494 code_scripts tests pass locally (3.273s), including lost accepted payment/stock responses, duplicate/copied IDs, sorted-row status targeting, changed banking source, aggregate stock cap, delivery overlap, edited movements, exact invoice/bill matches, atomic-file interruption and encrypted incremental SQLite restore/retention/tampering. Upstream master remains df046f4 after fetch. Production idle and still on master; next schedule tomorrow 17:00 UTC. Server recovery preflight: required DB/token/config/mapping files present, 2,274 Company A operational files (~832MB), cryptography 50.0.2 already installed; no backup key/config yet. The candidate backup dependency is therefore already satisfied in the base image. Staff guide and read-only outstanding-balance snapshot tool are implemented; actual November practice, opening-balance acceptance and offsite/key custody remain human actions. Final sheet compatibility/invoice shadows, candidate image validation, real encrypted restore and branch activation remain before completion.
+
+21:42 UTC server validation checkpoint: draft PR #65 created (https://github.com/OIAT-Solutions/code-scripts/pull/65), branch pushed through 2769d32. Production checkout is on this branch; running services still use prior master image. Rollback tag preserved as oiat-portal:nora-before-hardening-20261024. Real backup test exposed cross-filesystem os.replace from container /tmp to /data; fixed with encrypted destination-filesystem temporary publication and added regression. All 495 local tests pass. Final candidate rebuild is underway; do NOT activate before isolated tests, real backup restore and idle check pass. The protected key and backup config were created on /data; no key values were displayed and no financial writes occurred. Offsite and separate key custody are still unconfigured.
+
+21:45 UTC: server candidate passed 495 tests in 33.738s and Django system checks; all 15 changed runtime module hashes matched. Encrypted local set and full isolated restore passed for 2,433 files in 62.254s (including DB/token/mapping/config). Coverage found Oct 1 manual-cutover raw/processed references were not beside archive metadata; exact matching originals DO exist elsewhere under /data/code_scripts. Backup collector now includes those unique exact files and refuses missing/ambiguous declared archive sources; add regression and repeat validation before activation. Subsequent audit-only boundary brings local suite to 496, plus archive-location regression pending. Sunday wide stock audit detects older edits but newly discovered old unposted movements require explicit review, preserving the ordinary three-day auto window. No financial replay or activation has occurred.
+
+21:46 UTC: manual Oct 1 archive originals found elsewhere under the server state root; collector now resolves the unique exact source filenames without moving originals and refuses missing/ambiguous evidence. All 497 local tests pass (3.042s). Final server rebuild/test and repeated encrypted recovery coverage/restore remain before activation. The earlier successful backup/restore is retained; new set must include all 23 raw/processed day references. No production service restart yet.
+
+
+## Deployed result — 24 Oct 21:50 UTC
+
+Runtime code through `606302c` is deployed on **codex/nora-process-hardening**, draft PR [#65](https://github.com/OIAT-Solutions/code-scripts/pull/65). Master remains `df046f4`. Mac and production checkouts stay on the hardening branch. Image `sha256:77cdac0d8fd2faec5593766269664deae516a47afd3fb536756ffae89567ab24` is running in web and scheduler, each with zero restarts at acceptance. All 15 changed runtime modules match the tested Mac sources in BOTH containers. Portal HTTP 200, no active jobs, one schedule worker, Nora enabled for **25 Oct 17:00 UTC / 18:00 Lagos**. Ingress containers were not recreated.
+
+Validation: **497** code_scripts tests pass locally (3.042s) and in the final isolated network-disabled server image (27.948s). Django system check reports no issues. GitHub Gitleaks checks pass. No real QBO transaction was posted as a test and no full financial routine was replayed. Live read-only bill, invoice, stock HTML and existing-adjustment signature checks are above. Payment IDs are initialized/read back in column K only; A:J remains compatible.
+
+Final encrypted local set restored **2,436 files**, with consistent SQLite integrity and every saved checksum verified. All **23 raw and 23 processed archive references** are included, including the uniquely located Oct 1 recovery originals. Incremental repeat: **6 changed / 2,430 reused**, backup plus full isolated restore **16.211s**. Key/config reside on the protected server paths in the staff/recovery guide; key values were never printed. Routine now runs configured backup/restore after financial work under its global lock. Current QBO outstanding balances are captured server-side for owner review; they are not signed November opening balances.
+
+Operational boundaries: unresolved New Stock/no-reason changes and possible delivery/count duplicates HOLD. The existing stock value cap is checked over the whole transfer. Sunday wider source rechecks detect older edits, but a newly discovered old unposted movement is review-only outside the normal three-day automatic window. Historical postings with no original source hash get an explicitly labeled observation baseline; edits before that baseline cannot be ruled out by the new checksum. Missing cash/statement inputs remain "needs evidence". No bank-statement authentication or human count is claimed.
+
+Rollback while idle: tag `oiat-portal:nora-before-hardening-20261024` as `oiat-portal:latest`, recreate only web/scheduler, verify HTTP/schedule/worker. This rollback image is `sha256:6b8c6ecfdf2bc3bc00e1317faa27d311fb593355df20a9d8be9806df25cac1f2`. Do not revert persistent financial ledgers/work databases or restore a backup over production to roll back code. Reconcile any uncertain QBO write before retrying.
+
+### Required acceptance still open
+
+- [ ] Observe the first COMPLETE scheduled run after repair (next: 26 Oct 17:00 UTC), review duration/exceptions, then obtain the owner's decision. The 25 Oct full run failed; selective recovery completed separately. The 24 Oct 19m52s run only validates PR #64. Keep private commits off public GitHub unless the owner later authorizes publication.
+- [ ] Owner selects an offsite destination and separate recovery-key custodian; prove restore from that destination before claiming offsite recovery. The async question is pending. Local encrypted recovery is already validated.
+- [ ] Staff practise in a copy, provide real cash/statement evidence and sign genuine outstanding opening balances at the November cutoff. No staff practice/live signoff has been fabricated.
+
+21:52 UTC final evidence refresh: the outstanding-balance snapshot records 51 open customer invoices and 857 open supplier bills (includes older/manual QBO records; owner review required). Final protected set includes that evidence: 2,437 files restored, all 23 raw/processed archive references included, 5 changed / 2,432 reused, 14.194s backup plus complete isolated restore. Retention removed one superseded same-day index and one unreferenced blob while retaining two independently restorable sets. Both payment tabs have Payment ID headers installed/read back, zero staff payment rows, and no financial test writes.
+
+## 25 October — Sunday failure and authorized stock-only recovery (in progress)
+
+The first hardening scheduled run (job 61b453dd48db4a22b9c86b798a0655bf, business date 24 Oct) ran 17:00:06–17:07:11 UTC, exit 2. Products, bills, sales, credit, guard, payments and encrypted restore completed; stock snapshot completed but movement collection failed before browser capture. Sunday caller requested 1–25 Oct while stock_movements.collect enforces at most seven days. This caller/reader integration gap was introduced by the hardening change; 7m04s is not a valid completed-run performance comparison. Seven sales receipts matched EPOS; four bills and two items were created, so do not replay the entire financial day.
+
+Owner now explicitly authorizes fixing and running the particular pipeline if valid. Stay on codex/nora-process-hardening / PR #65, unmerged. Fix uses explicit weekly audit mode that splits into exact disjoint <=7-day captures, binds both live From and To calendars, and records a completeness index. Preserve daily/financial caps and old-event review-only cutoff. New integration test runs actual Sunday daily command through stock_movements.main, the real collect guard, index and normalizer, with only browser IO replaced. All 503 local tests pass, including stock-only recovery requiring a read-only delivery refresh. Live From/To controls verified on both EPOS pages for 1–7 Oct. Small live capture/normalization and final production candidate/recovery still in progress. No stock recovery write has run yet. Evidence: outputs/nora_stock_recovery_20261025/ (gitignored).
+
+22:22 UTC recovery preparation: all 503 local tests pass (3.134s). Live bounded date controls verified; candidate one-day 25 Oct capture completed with both source lists, zero events/errors (31.549s). A known nonempty 7 Oct read-only capture/normalization is being checked before activation. Stock-only recovery now explicitly refreshes current delivery evidence using bills_sync PLAN only, and refuses stock posting if that refresh fails. No financial recovery has run.
+
+25 Oct recovery validation: 503 tests pass locally (3.134s) and in the isolated network-disabled stock-fix image (22.913s); Django check clean; all 15 changed runtime module hashes match. Candidate nonempty live 7 Oct capture: 16 details / 15 normalized events / zero errors, 52.428s, no QBO writes. This covers real browser date bounds, details, fallback and normalization. Preparing idle activation, then a normal worker PortalReviewAction selecting ONLY stock,stock_follow for business date 24 Oct. That path first collects source, refreshes current deliveries in PLAN mode and applies existing caps/duplicate/old-event holds before any stock write. Products/bills/sales/credit/banking/payment posting are not selected. Original failed full run remains immutable evidence; PR stays unmerged.
+
+25 Oct 22:26 UTC: stock repair ac585e3 deployed to web/scheduler as image sha256:cda5abdca036815d6f3825338017da4588379c877293bc4f1b14001ef0a45a9f. 503 isolated server tests pass, Django clean, all 15 runtime hashes match in both containers, HTTP 200, one worker, next schedule 26 Oct 17:00 UTC unchanged. Rollback tag oiat-portal:nora-before-stock-fix-20261025 preserves image 77cdac0d… (has the Sunday bug, so prefer forward repair). Authorized selective recovery queued via existing PortalReviewAction daily adapter, job dd6cf1b9-d1fd-41c8-9004-88942f45c907, confirmation nora-stock-recovery-20261025-valid-ac585e3. Only stock and stock_follow selected, dry_run=False; no products/bills/sales/credit/banking/payments replay. Worker owns execution/locks. Stock-follow first makes a read-only bills plan for current delivery evidence; old audit events and cap/identity issues remain held. Preserve original failed job and run_170007Z summary hash. Do not queue another recovery; inspect this job/index and wait. PR #65 stays unmerged. Recovery result still pending.
+
+25 Oct 22:48 UTC second issue: recovery dd6cf1b9… stopped at the ordinary 1,200-second read deadline while reading the fourth section. Three sections are complete (149 / 175 / 133 detail records); completed section missing-detail checks pass. No stock_follow ran and no stock recovery write occurred. Original scheduled summary is unchanged. Interrupted recovery folder is /data/ops/company_a/daily/2026-10-24/run_222553Z. Its encrypted recovery restored 2,560 files with verified integrity. Preserve this failed attempt too.
+
+Follow-up repair in preparation: weekly audit read allowance now scales by bounded section count; ordinary daily limit stays unchanged. Explicit stock-only --stock-audit-resume accepts complete historical observations no more than two hours old, validates exact window/source completeness, copies them into NEW evidence, and ALWAYS freshly collects every section overlapping the current three-day window. Original audit/index are unchanged. Reject stale/incomplete/unsafe historical data. This is resumption of one interrupted read, never permanent immutable stock-detail caching. Current suite: 508 local tests pass (3.068s), including real Sunday-to-collector and next-day recovery integration. Portal adapter forwarding tests and isolated server build/tests are pending. Do not queue another attempt until candidate validates and idle activation passes. PR #65 stays unmerged.
+
+25 Oct 22:54 UTC private deployment: owner answered KEEP THE REPAIR PRIVATE after automatic approval rejected public GitHub publication. Do NOT push 3ffef33 or its follow-up notes to public origin without later explicit approval. Production imported the exact Mac commit via an authenticated SSH Git bundle, fast-forwarded the existing codex/nora-process-hardening branch, and rebuilt locally. Runtime image sha256:c7459b2567a917de6993f51f6ade3bc69c148f0e67d62424e5db396e2d2165e3 runs in web/scheduler; 508 core and 26 portal tests pass in isolated network-disabled candidate containers (no prod volume); 16 runtime file hashes match both live services. HTTP 200, zero active jobs before queue, one worker, next schedule 26 Oct 17:00 UTC unchanged. Rollback tag oiat-portal:nora-before-stock-resume-20261025 preserves cda5abd… (has the wide-audit timeout). Master untouched. PR #65 remains draft/unmerged and does NOT include this private commit.
+
+Resumed recovery is queued once via normal PortalReviewAction, confirmation nora-stock-resume-20261025-private-3ffef33, selecting only stock,stock_follow and --stock-audit-resume from run_222553Z/movements/captures/audit_*. Inspect that confirmation/job before any further queue. Original full-run and first recovery evidence remain unchanged. Recent stock is always freshly captured; copied historical observations have explicit provenance/age/window/completeness checks and remain audit-only outside the normal auto window. Result pending.
+
+25 Oct 23:11 UTC: resumed job f86bbdb8… completed all four source sections (558 detail records, 420 normalized stock events, zero capture errors). It then spent over seven minutes scanning the 4,169-row PO browser list for ONE uncached PO (4169; 263 matching cached sources). Stopped only the verified read-only bills_sync PLAN process group in its owning scheduler container at 23:08:25, before stock posting. Parent finished safely failed 23:09:12; stock_follow posted nothing; final snapshot and encrypted restore (2,596 files) passed. The first web-container stop check found no such PID and made no change; the scheduler-container check verified the exact module/plan/output/own process group before SIGTERM. Preserve run_225445Z and its audit.
+
+Additional private repair: resolve needed PO row positions in one browser DOM evaluation rather than thousands of IPC calls, retaining exact returned OrderRef/product-detail checks and retries. Stock-only recovery now requires explicit capture_metrics missing_details == 0, not merely a plan process exit 0; missing/absent proof blocks adjustment. 508 local tests pass (3.226s) including missing/absent coverage holds. Synthetic browser table proves last-row selection among 4,169 rows. Exact live uncached PO 4169 was freshly captured through the browser in 77.345s, one requested/one captured/zero missing, temporary state only and no QBO write. Isolated image validation and activation remain before the next stock-only recovery. Keep all repair commits/private handover notes off public origin per owner instruction. Evidence: outputs/nora_stock_recovery_20261025/po_detail_live_probe.json and stopped_readonly_receipts.json.
+
+25 Oct 23:15 UTC final private activation: code 1b1b731 (Mac/server branch ahead of public origin by two private commits) is running in web/scheduler as sha256:1f2bbc955bff92bbd2093a3201f4dc62e87be2f316fafeb3f137c4f57aa98f09. 508 final isolated server tests pass in 24.078s; 26 adapter tests previously passed and adapter source is unchanged. All 16 runtime hashes match both live services; HTTP 200; one worker; zero active jobs/global lock free before queue; next Nora 26 Oct 17:00 UTC. Rollback tag oiat-portal:nora-before-po-proof-20261025 preserves c7459b… (old slow PO scan, lacks the additional completeness gate). Prefer forward repair. No ingress/settings/numeric limits changed.
+
+Final authorized selective job bc326c91-0eb2-4781-9bbc-3f6fa500d221 is queued via normal worker, confirmation nora-stock-proof-20261025-private-1b1b731, only stock,stock_follow. Resume source is original interrupted run_222553Z's audit, preserving all prior evidence. It copies only validated <2-hour complete historical sections and freshly reads the recent section through current date (now 26 Oct Lagos), then requires fresh complete PO capture before stock eligibility/posting. Do not queue another. Result pending. Private Git bundles are retained under gitignored outputs/nora_stock_recovery_20261025 and on the server at C:/Users/oiatadmin/Documents/prod/nora-stock-resume-3ffef33.bundle and nora-po-proof-1b1b731.bundle; do not publish these. Public origin remains ac585e3; master df046f4; PR #65 does not contain the private repairs.
+
+## Final recovery acceptance — 25 Oct 23:24 UTC
+
+Authorized stock-only job bc326c91-0eb2-4781-9bbc-3f6fa500d221 ran 23:14:59.909–23:22:53.643 UTC (**473.733s / 7m54s**), job succeeded, routine exit 3 (review), NO failed steps. Saved summary: /data/ops/company_a/daily/2026-10-24/run_231501Z/summary.json. Source captured through 26 Oct Lagos because recovery crossed local midnight. Products, bills, sales, credit, item guard, banking and payments all remain explicitly not selected. Original scheduled run_170007Z summary SHA and original interrupted audit index are unchanged. No recovery financial write occurred in any attempt.
+
+Complete four-section evidence: 558 detail records, 420 normalized product-line stock events, zero collection errors, 125 distinct empty transfers. Three historical observations resumed with preserved original files/times, one recent 22–26 Oct section freshly read. Stock stage 361s (snapshot + fresh recent capture/normalization); follow-up 95s. Fresh delivery plan: 4,169 listed POs, 78 selected, 263 matching cached details, one fresh requested/captured PO detail (4169), zero missing; collection 74.445s and complete read-only plan 89.647s. This resolves the actual uncached-detail slow path, rather than testing only cache hits.
+
+Final stock result: **373 already posted; 47 held; zero eligible new adjustments / zero QBO stock writes.** Review reasons: 23 older movements outside the normal current automatic window; 19 products not targeting an approved new Inventory item; one child/untracked stock-owner/unit issue; three New Stock/unexplained delivery changes; one Shrinkage reason outside the approved automatic reasons. No over-cap approval count and no edit warnings in this run. The 373 historical postings without original source checksums now have labeled observation baselines; that cannot prove they were never edited before this observation. No forced catch-up or retrospective quantity correction was performed. Review CSV: run_231501Z/stock_follow/review.csv.
+
+Stock comparison still reports 714 differences and 119 negative QBO items (snapshot cutoff evidence, not a same-time physical count). This capture repair does not resolve those existing stock/accounting exceptions. Do not describe stock as fully reconciled. Current source checks and transaction posting safety passed; unresolved business evidence remains review-only.
+
+Encrypted local set: 2,642 files restored, all checksums and SQLite integrity verified, 59 changed / 2,583 reused, retention keeps three sets. Offsite/separate-key acceptance remains pending. Final HTTP 200, zero queued/running jobs, one scheduler, next Nora 26 Oct 17:00 UTC unchanged. Runtime image remains 1f2bbc955bff92bbd2093a3201f4dc62e87be2f316fafeb3f137c4f57aa98f09, code 1b1b731; Mac/server branch unchanged; master/public origin unmodified by private repairs.
+
+Performance boundary: saved section collector times total **1,467.742s (~24m28s)** across the four saved observations (555 fresh HTML reads, 141 browser fallbacks, 62 list pages), not a separate uninterrupted audit benchmark. The 7m54s successful recovery reuses already completed historical sections; it is NOT a fresh full-audit or full daily-routine timing. Empty-detail browser fallback and separating older completeness work from the daily critical path remain performance opportunities requiring evidence/design review; do not skip fresh current details or loosen posting gates merely for speed. Next full scheduled routine still needs observation and owner review; no merge/return-to-master is authorized here.
+
+No additional stock recovery queue is needed. Keep all private commits/bundles/notes off public GitHub per owner answer. Update only private Mac/server handover copies. Preserve original failed full run, timed-out recovery and intentionally stopped read-only recovery as historical evidence; do not relabel them successful.
+
+## Supplier and duplicate-bill review — 25 October Toronto / 26 October UTC
+
+Read-only follow-up evidence is under gitignored `outputs/nora_review_analysis_20261025/`. The portal snapshot contains 82 cards: 42 bills, 10 supplier decisions, 24 stock cards, five incomplete banking days and one already-banked overage warning. Supplier cards overlap the affected bills; old stock plans repeat events. This is not 82 independent failures.
+
+Owner confirmed these six identities in chat: ALPINE WATER -> vendor 261 ALPINE FRESH TABLE WATER; BURARICH BREAD -> 20 Bunarich Ventures Limited; FLOURISH WATER -> 64 FLOURISH COOL WATER; LEOBERT ENTERPRISES -> 28 Leobert Enterprises; MICHEAL -> 53 MICHEAL IFEANYI AJOKU; UNCLE BAKERY AND CAFE -> 34 UNCLE SAM'S BAKERY & CAFE. All six exact live link preflights pass, including the current polluted LEOBERT note name. **No links have been installed and no bills have been posted during this review.** Prepared payloads are in `confirmed_supplier_previews.json`.
+
+Owner clarified **CWAY is a product bought from different vendors**. Do not approve a global CWAY -> manufacturer/reseller alias. PO 4067 (13 Oct, 86 units CWAY 18.9-litre water, N129,000) needs its actual seller. A+ COMPANY (PO 4099, Vektro/Chapman and Nairamalt drinks), KAY JAY ZENITH LIMITED (4085/4161, Golden Penny products), and MOSESS BAPIVAVY (4112, Dubic malt) still need business identity evidence. Product history and fuzzy suggestions are not confirmation.
+
+Two previously blank suppliers are source-reader defects: PO 4093 says `SUPPLER: JPO INTEGRATED SERVICES LIMITED` (exact active QBO vendor 305), and PO 4148 says `SUPPLER: FLOURISH WATER` (owner-confirmed vendor 64). `_SUPPLIER_RE` requires the missing I. LEOBERT's `MODE OF TRANSFER` label is also not recognized by the payment delimiter, polluting the supplier name. No parser fix is implemented/deployed yet. Fix reading rather than re-entering immutable received POs. SEKI short-name alias points to missing vendor 339, while existing approved full-name aliases and live vendor 221 identify SEKI ABIMBOLA KOLAWOLE; repair needs review and PO 4017 still has a separate possible repeat of September PO 3957.
+
+Duplicate rule currently compares product-set overlap >=75%, equal-quantity share >=50%, amount within 10%, within 14 days; supplier equality is deliberately not required. There are 27 open bills with that signal (20 READY warnings plus seven HOLD bills), 145 candidate pairs, no shared GRNs among those pairs. Comparing against all 420 captured stock-adjustment events found no same-item/equal-positive-quantity event within one day for these bills. That absence is not proof of duplication. Different internal PO/GRN records or two stock increases cannot independently establish two real deliveries: duplicate receiving can increase EPOS stock twice. Supplier-issued invoice/delivery evidence and independently verified counts can corroborate; do not create stock adjustments to pass a bill check.
+
+Proposed follow-up, NOT activated: distinguish already-posted work, verified separate deliveries, bounded owner-approved routine repeats and unresolved evidence. Routine rules should use approved supplier identity, product scope, cadence, quantity/value limits and existing posting/amount gates. The current supplier-wide `routine_repeat` override is broader and must not be presented as independent delivery proof. Analysis/owner identity confirmation does not authorize posting held bills or enabling a broader automatic rule. No runtime, schedule, production mapping or financial changes were made in this review; private notes remain off public GitHub.
+
+Owner follow-up (25 October Toronto): one person currently does PO receiving and duplicate receiving is rare. Owner explicitly says similarity of normal frequent purchases (bread, water, etc.) should not itself block the bills; use purchase-frequency evidence. Treat this as the requested direction for a product-specific expected-repeat classification, while retaining exact-PO/QBO replay prevention, unresolved supplier/unit checks, unusual quantities/prices, existing amount caps and specific financial approval controls. No frequency policy has been implemented or activated yet.
+
+Read-only frequency evidence `supplier_frequency_analysis.json` examines all 198 received POs from 1–24 October with zero missing details in that window, plus 308 current QBO vendor records and 1,886 bills dated from 1 January (3 QBO read requests). Sachet water: 29 receipts / 21 days, qty 25 occurs 23 times; Nutritious Daily Bread: 21 receipts / 20 days, qty 15 occurs 13 times; BVL Kings and Malted Family Bread: 8 receipts each; Yuwa: 6; Goodiez Shawarma Bread: 4. BLISSFUL cake: 5 receipts, qty 100 occurs 3 times. All 20 READY duplicate-warning cards are bread/sachet-water orders, have an earlier identical basket and an identified supplier under existing mappings plus the six owner-confirmed aliases; none has a same-day identical basket for that resolved seller. This supports ordinary-repeat classification, not a claim that frequency independently proves delivery. Whole-window statistics are retrospective; a live classifier must avoid using future receipts to justify an earlier decision.
+
+Supplier shortlist `supplier_shortlist_and_frequency_summary.json`: KAY JAY has no exact name match; ZENITH GLOBAL LINK (295) shares a distinctive word, KAYTOB STORE (203) and MERCY JAY NIG. VENTURES (175) are weak name clues. Product-name history leads are LUKER T NIGERIA ENTERPRISES (65, 9/9 groups), LOCAL MARKET (105, 7/9) and ROHAL ENTERPRISES (247, 6/9). MOSESS has weak name resemblance to MOORE BABIES ENTERPRISES (174), and one similar-product historical bill from ISMAIL ALAGABI (223). CWAY reseller history: DEALRADICALS LIMITED (124, 9 bills), DEAL RADICAL (15, 8), DANKEL VENTURES (122, 6); manufacturer vendor 59 is not assumed to be the seller. Product-name comparisons are leads, not exact entity identity. No merges or supplier assignments were made.
+
+New matcher defect identified, not yet repaired: `norm('A+ COMPANY')` becomes the single letter `A`; `sim` awards 0.90 when that letter appears anywhere in unrelated vendor names. There is no convincing A+ name or comparable-product history match in this read. Do not present those spurious name candidates as strong supplier matches. No private analysis or owner-specific records may be pushed to the public repository.
+
+## Authorized supplier release — 25 October Toronto (in progress)
+
+Owner explicitly approved creating Moses Bapivavy, A+ Company and Kay Jay Zenith Limited, proceeding with the previously confirmed six aliases, treating Deal Radical records 124/15 as the same business, and continuing ordinary frequency-supported purchases. Existing financial caps remain. No new approval question is needed for these actions.
+
+Completed: three QBO suppliers created and re-read: Moses Bapivavy 343 (EPOS MOSESS BAPIVAVY), A+ Company 344, Kay Jay Zenith Limited 345. Six checked aliases installed. Mapping backup, prepared payload hashes and durable action receipts are at `/data/ops/company_a/supplier_review/20261025/`; local gitignored evidence is `outputs/nora_supplier_release_20261025/`. Vendor group metadata records 124/15 without merging, moving balances or changing original bill/payment VendorRefs.
+
+Candidate code fixes supplier-label SUPPLER and MODE OF TRANSFER parsing; protects symbolic A+ identity and short-name suggestions; refuses brand-only CWAY automatic/global links. Optional owner-approved `purchase_patterns.json` beside vendors.csv bounds exact product IDs, allowed vendor IDs, maximum quantity, observed price (10% tolerance), whole bill at N100,000, and >=2 earlier receipt days within 35 days. Reused GRNs and same-day identical baskets remain conflicts. Existing item/unit, manual-bill duplicate and posting checks remain. Changed/missing policy invalidates prepared repeat batches. No future receipts supply frequency evidence.
+
+523 local core tests pass, including 15 new financial/identity regression tests. Read-only candidate shadow on live QBO and temporary state: 198 source POs, 156 already posted, 37 ready, 5 held; 26 expected-repeat classifications; no remaining warning-only bills. Four ready bills remain above the N2m per-bill automatic limit. The other 33 ready bills are within that limit and covered by the owner's supplier/routine recovery instruction. Remaining holds: SEKI broken alias, actual seller for CWAY, PO 4124 and 4157 child-unit evidence, PO 4156 unit-cost evidence. Shadow projected exact JPO vendor 305 link; that link still requires installation during the authorized source-reader recovery.
+
+Production runtime is still 1b1b731 while candidate validation/build is in progress. Do not claim deployment or bill posting yet. Do not rerun sales, banking, stock or customer/supplier payment execution. Refresh only the workbook system lists after verified bill recovery so staff can trace EPOS-PO numbers and supplier names. Keep this release private, remain on codex/nora-process-hardening, and keep PR 65/master unmerged.
+
+## Supplier release acceptance — 25 October Toronto
+
+Private code commit `75f8ce9` is running in both web/scheduler as `sha256:7705febca1295564362aa6fe091fd621d988b017d8e8ffa92d033642ad43957d`. Both live services match all 18 checked runtime source hashes (Windows line endings normalized). 523 core tests and 47 portal tests pass locally and in isolated network-disabled server containers with no production data volume. HTTP 200, zero active jobs, one scheduled Nora routine. Next Nora run: 26 Oct 17:00 UTC / 13:00 Toronto / 18:00 Lagos. This is bill recovery acceptance, not a new complete-routine speed benchmark. Keep branch/PR unmerged and the release private pending the first complete scheduled run review.
+
+Exact owner-approved recovery: fresh EPOS PO list (4,169 rows), 263 selected, 264 valid cached details, zero requested fresh detail pages and ZERO missing details; source collection 29.703s. Full 1–24 Oct plan: 198 received POs, 156 already in QBO, 37 READY, five HOLD. Excluded four READY bills over N2m. Manually reviewed the explicit remaining 33-PO set, pinned plan/payload hashes and total N1,861,500, and posted in two approved review batches (20 + 13). This does not change or loop the standing automated 20-per-run limit. Both batches completed: 33 POSTED, zero held-live, zero verification failures. Every bill was reread and checked for exact supplier/date/items/quantities/tax/total and unpaid balance. No stock adjustments, sales, deposits or payment execution were run. Never replay these bills: durable results and exact DocNumber content checks are the recovery authority.
+
+One operator wrapper attempt stopped before any bill write because it used PO rather than po in fresh-plan metadata. Corrected the field check and continued the same pinned set; the failed attempt posted zero. Extra read-only stock-delta verification matches all 33 item IDs with saved before quantities. Three other item IDs (16166/18334/16181) lack a before quantity in the original review CSV; no zero is inferred. Existing common clean(0) handling makes this a reporting follow-up: preserve the original evidence and distinguish an omitted baseline from a mismatch. All bill-line posting quantities themselves were verified live.
+
+Suppliers: Moses Bapivavy 343 (alias MOSESS BAPIVAVY), A+ Company 344, Kay Jay Zenith Limited 345, all created and reread. Six prior identity confirmations are installed. JPO 305 was already approved; fixing SUPPLER parsing restores its source identity. Vendor groups metadata records DEALRADICALS LIMITED 124 and DEAL RADICAL 15 as the same business without a QBO merge or historical bill/payment reassignment. CWAY remains brand-only, not globally linked.
+
+Installed `STATE_ROOT/mappings/company_a/purchase_patterns.json`, sha256 `2adfad84abece0b7c27f165923ddc25c05c61a43adec60b447a0e693983bcbec`: 13 exact product profiles with approved seller IDs, bounded quantity/price, N100,000 whole-receipt bound, >=2 earlier receipt days within 35 days, reused-GRN and same-day identical-basket guards. Existing bill/item/manual-duplicate checks and automatic posting limits remain. Changed or removed policy invalidates a prepared repeat batch. No cross-supplier identity is inferred from product frequency.
+
+Payment workbook system tabs/Lists B and C refreshed with read-only QBO data. All 33 recovered EPOS-PO references appear exactly once, with full unpaid balances; new suppliers appear on the correct bills. 136 current open-bill dropdown choices and seven current credit-invoice choices. Input tabs digest is unchanged; payment processing was not invoked. Staff select the bill, cross-check its EPOS PO, then enter actual amount/date/account/reference. A payment method hint does not itself settle a bill.
+
+Portal inbox now has 40 cards, no read errors: nine bills, one supplier (CWAY), 24 stock cards, five incomplete banking days and one already-banked overage warning. Remaining bill reviews are PO 4001/4033/4073/4144 (large amounts), 4017 (SEKI alias 339 missing), 4067 (actual CWAY seller), 4124/4157 (stock-owner/unit evidence), 4156 (unit-cost evidence, then also above N2m). Historical stock cards/hidden stock holds were not cleared by this bill recovery. PO 4169 is received on 25 Oct, outside the recovered 1–24 Oct window; its ALPINE supplier link is now resolved and the next ordinary bill run will evaluate it.
+
+Encrypted local backup/isolated restore verifies 2,676 files. Separate offsite destination/key custody remains pending. Private detailed records are at `/data/ops/company_a/supplier_review/20261025/`, the fresh plan/results at `/data/ops/company_a/portal_reads/nora_supplier_20261025/bills/`, and local evidence under gitignored `outputs/nora_supplier_release_20261025/`. Preserve original failed full-run/stock recovery evidence.
+
+Build note: use repository `docker/code-update.Dockerfile` for SSH code-only deployment. A full scheduler Dockerfile build hit Windows Docker credential-helper failures. A temporary anonymous public-image config resolved authentication, but that full build would refresh dependencies and was stopped by verifying its exact candidate-only docker.exe command. No financial/service process was stopped. Final candidate uses the established code-update recipe on the validated previous image; root filesystem layer-prefix comparison proves the original dependency base was preserved. Rollback image tag: `oiat-portal:nora-before-suppliers-20261025`; rollback code only while idle, never restore financial state or delete the new suppliers/bills.
+
+
+## Claude — 26 October: credit repayments from EPOS, and review fixes
+
+Owner asked (26 Oct): know from EPOS when a credit sale is paid, not only from the November staff sheet; review
+Codex's work; get both agents on the same page. Built on `e425272`; all 549 core and 423 portal tests pass.
+
+**Where EPOS records repayments (verified live, read-only).** Reporting › Customer › *Customer Credit*
+(`CustomerCredits.aspx`, grid `MainContent_gvCredit`) lists every payment taken onto a customer account
+(customer, date/time, amount). Classic reports › *Completed Transactions* (`CompleteTransactions.aspx`,
+`MainContent_gvTransactions`) has the same payment with staff, till and tender. Reporting › Customer › *Customer
+Report* gives CURRENT BALANCE (negative = owes). They are NOT in the BookKeeping export. Live 26 Oct: Precious
+Akporeha N1,000 ×2 (5 Oct, Transfer), VERA AKPOREHA N534,800 (9 Oct 14:19, Transfer, Ernest Jaitto, Till2), N2,750
+Transfer + N50 Cash (15 Oct). Vera's EPOS balance −N623,149.99; QBO open CR invoices for her N447,800.
+
+**New step `repayments`** (daily_run, after credit, before banking; `credit_repayments.py`). Reads the last 30
+days, one QBO Payment per EPOS payment into Undeposited Funds (72), oldest open CR invoices first, remainder
+unapplied credit. Identity: `PaymentRefNum EPR-<key>` + memo `| epos-repay <key> |` (key = hash customer +
+EPOS time + amount); ledger `state/credit_repayments/posted.json`; never posted twice. HOLD: unknown customer,
+mixed/missing tender, day already banked, closed period, before 5 Oct; over N2m waits. **Off by default**:
+`OIAT_COMPANY_A_CREDIT_REPAYMENTS=plan|post` in the environment or in
+`STATE_ROOT/ops/company_a/credit_repayments/settings.env`. Live read-only trial 26 Oct 02:35 Lagos: 5 payments,
+all tenders found, both customers matched, all HOLD (days already banked), 144 s, one EPOS login, no writes.
+
+**Banking (`uf_deposits`).** Tagged repayment Payments join the day's receipts (`repayment_receipt`) and are
+linked into deposits with `TxnType Payment`; re-check reads `/payment/{id}`. A repayment is therefore banked with
+the till money and no longer booked as Till Overage (that is what happened on 9 Oct: overage N535,250, of which
+N534,800 was Vera). Untagged Payments are never touched. A day with only repayments is still NO_SALES.
+
+**Payments sheet.** A staff credit row for money EPOS already recorded (same customer as the row's invoice, same
+amount, ±1 day) is linked to that Payment, never posted again; same customer/day with another amount HOLDs.
+Rows for money that never passed the till post as before. `load_qbo` now also reads tagged Payments.
+
+**Corrections for already-banked days** (`plan-corrections` read-only, `post-corrections` writes, each needs an
+owner yes): record the Payment, then put it into that day's own UF deposit and lower its Till Overage line by the
+same amount — deposit total/banks unchanged. Deposit SyncToken is checked before any write; a Payment made without
+its deposit change is planned again and finished once. Overage available: 5 Oct N3,775 (Precious N2,000), 9 Oct
+N535,250 (Vera N534,800), 15 Oct N3,880 (Vera N2,800). NOT posted yet.
+
+**Review of `origin/master..e425272` — fixed here (`fd09e1b`):**
+1. stock_follow: a definite 4xx left the journal at `sending`, so every later night refused all stock posting →
+   now `rejected` (only unclear outcomes stay uncertain).
+2. Sunday audit re-read from a fixed 1 Oct (+~6 min/week) → rolling 28 days (`OIAT_COMPANY_A_STOCK_AUDIT_DAYS`).
+3. Portal hid stock events `classify` thought eligible but `nightly` held (`_audit_only`, `delivery_overlap`) →
+   only posted / over-cap card / pre-Oct / zero-qty / NonInventory are hidden.
+4. payments_sheet: a QBO read error before any write was journaled `unknown` (row held forever) → held and
+   retried next run; a definite 4xx is `rejected` (retryable).
+5. A copied sheet row carrying column K stopped the whole tab → an edited copy gets a new Payment ID; identical
+   copies and two Posted rows sharing an ID still stop (Codex's guard kept).
+
+**Review — NOT changed, owner decisions needed:**
+- `money_integrity.overage_overlap` holds a whole banking day for any overage (even N1 within tolerance) when the
+  sheet has any repayment that day, with no approve path. With EPOS repayments now in receipts this mostly
+  disappears for till repayments; it still fires for sheet-only repayments.
+- New Stock / no-reason changes now always need review (owner decision of 12 Oct had them posting as NA);
+  the cap now applies to the whole EPOS transfer.
+- Exact-match checks on already-posted invoices/bills re-HOLD on every re-plan after any mapping/alias/QBO edit
+  (cannot double-post, but grows the queue; credit re-checks every day since 5 Oct nightly).
+- If bills fails, `delivery_overlaps` silently returns events unchanged on a normal night.
+- One missing archive file fails the whole backup; nightly full restore re-reads every blob (~15 s now, grows).
+- Sunday audit holds repeat weekly with no way to clear them.
+
+### Claude — 26 October (later): read EPOS once
+
+Owner: "If the run reads yesterday's info from EPOS, that should be that." Agreed items 1–3:
+
+1. Every EPOS read starts at the last successful read, not a fixed window. Stock changes: cursor in
+   `<state>/ops/company_a/stock_movements/cursor.json`, saved only after a clean capture. Credit repayments:
+   `<state>/ops/company_a/credit_repayments/seen.json` keeps every payment read; the Customer Credit range is the
+   smallest "Last N days" option since `through`; a payment whose tender was not found is looked up again (by its
+   own day) until found. Completed Transactions sort direction is checked (EPOS can flip it), which is why Vera's
+   N2,750 on 15 Oct was missed on one read.
+2. Credit invoices: a day whose invoices are all EXISTS/POSTED goes into `credit_days_done.json` and is not read
+   again. Paid status comes from the Payments sheet.
+3. Products: fetched directly via the catalogue API pages the page itself uses (count checked against
+   TotalRecords; falls back to UI paging). The stock comparison stays daily (the snapshot takes ~29 s); the Sunday
+   wide audit is gone (stock takes are view-only, confirmed in Chrome 26 Oct).
+
+
+### Claude — 26 October: repayment corrections recorded (owner yes)
+
+Posted by the owner's commands: Payments 81285/81286 (Precious N1,000 ×2, deposit 80701), 81287 (Vera N534,800,
+deposit 80862), 81288 (Vera N50, deposit 81054), 81289 (Vera N2,750 Transfer, deposit 81054; tender confirmed in
+EPOS). Each deposit total unchanged; till overage lowered by the same amount. 81287's N87,000 and 81288's N50 were
+then applied to Vera's 29 Sep invoice CR260929-389764 (balance N618,799.99). The code now reads credit invoices from
+1 Sep (`INVOICES_FROM`). Vera QBO N618,799.99 vs EPOS N623,149.99: the N4,350 is her 25 Oct 19:02 Credit sale,
+invoiced by the 25 Oct business-day run. Precious: N400 credit in both. QBOClient.post_json returns the raw
+response — use `created()`; fakes in tests now return response-shaped objects.
+
+### Claude — 26/27 October: repayments switched on; faster PO detail reads
+
+- 26 Oct 18:17 Lagos run (business day 25 Oct) clean: repayments plan-only found the 5 known payments all DONE,
+  `seen.json` through 2026-10-26, no capture errors; Vera's 25 Oct N4,350 invoiced (CR261025), QBO balance
+  N623,149.99 = EPOS. Owner yes: `/data/ops/company_a/credit_repayments/settings.env` now
+  `OIAT_COMPANY_A_CREDIT_REPAYMENTS=post` (backup `settings.env.bak_20261026_plan`; no env override).
+- PO details were already read once (cache); the catalogue step's 205 s was 13 genuinely new POs, each costing a
+  list reload + refilter. `bills_sync.capture_epos` now posts the Details button's own form (`id`,
+  `timezoneOffset`) with fetch from the list page (`DETAILS_JS`, ~1.4 s/PO, checked in Chrome); the click path
+  remains the fallback for any PO it cannot read. Deployed `28b358f` 27 Oct 02:3x Lagos; rollback image
+  `oiat-portal:rollback-20261027-po`.
+
+### Claude — 27 October: one EPOS login per run; stock takes read once
+
+- `code_scripts/epos_session.py`: daily_run sets `OIAT_EPOS_SESSION_REUSE=1` (inherited by step processes). The
+  first EPOS login saves the browser cookies (never the password) to `<STATE_ROOT>/epos_session/company_a.json`
+  (0600, ignored after 30 min, refreshed by each user, deleted in daily_run's `finally`). `_common.epos_login`,
+  `epos_playwright` (sales CSV) and `epos_stocklevels_playwright` (snapshots) load them and log in only if the
+  report page (`MainContent_*` on www.eposnowhq.com) is not showing. Without the flag (Goldplates, manual tools)
+  nothing changes. Prints "EPOS: reused this run's login".
+- `epos_adjustments.scrape_adjustments`: 26 Oct's 192 s stock-change read spent ~100 s on 20 EMPTY stock takes
+  (no gvItems table) re-opened in a browser tab that found the same nothing; these are now accepted from the HTML
+  read (same rule `stock_movements` already applies). Received details are kept in
+  `stock_movements/received_details.jsonl` (21 days) and reused when the list row is unique and matches
+  (location/staff/time/status); metrics `reused_details`, `empty_html_details`.
+
+## 27 Oct 2026: login sharing broke the run (fixed, not yet deployed)
+
+The 27 Oct 18:00 run (business date 26 Oct) failed catalogue, bills, sales and stock changes, and repayments could
+not read EPOS. Products and the stock-levels check worked. Nothing was posted; the repayments `seen.json` and
+the stock-movements cursor did not move, so the next good run picks up 26 Oct as normal.
+
+Cause: `epos_session.on_login_page` waited for the first `MainContent_` element to be *visible*. On
+SageReport.aspx (the page most steps open) that element is a hidden tooltip, so every reused, logged-in page was
+taken for the login form after 20 s, and the step then timed out typing into a login box that was not there.
+
+Fix: wait for the element to be present (`state="attached"`), and `epos_session.reuse()` drops the saved cookies
+and reloads the page before any fallback login, so a wrong guess costs one extra login, never a failed step.
+A real-Chromium test reproduces the hidden-tooltip page.
+
+## 27 Oct 2026: same-day sale and refund no longer stops the sales day
+
+The 26 Oct dry run (after the login fix) stopped at sales: SR-20261026-0005 (Card) sold one SHORT GRAIN
+RICE(painter) at 17:55 (N5,000, cost N3,875.95) and refunded it at 18:10 (-N5,000, cost 0). The transform
+already drops a netted zero row, but required Cost Price to net too, and EPOS records refunds at cost 0.
+Owner rule (Marvin chat 27 Oct): `transform.drop_netted_zero_rows` now ignores a leftover cost when the
+row's `_Conversion Proof` shows EPOS rows of one product, both signs, summing to zero. A zero line with
+cost and no matching refund still fails the day.
+
+## 27 Oct 2026: 26 Oct re-run (owner yes) after both fixes
+
+Run `run_231914Z` (started 00:19 Lagos 28 Oct): no failed steps, 6 min 48 s. Every EPOS step reused the one
+login and the login file was deleted at the end. Sales: 6 receipts posted, EPOS = QBO N3,337,675 (the rice
+and a ROYAL CIRCLE WHISKY200ml sale+refund dropped). Credit: Vera CR261026-389764 N6,100 (Invoice 81419).
+Repayments (post mode): nothing new. Stock follow-up ST261027-2304a posted (81420). Catalogue: 10 items
+created. PO read: 0 new details (all 224 cached, 10 s); stock takes: 102 reused, 7 fresh, 0 browser
+fallbacks (58 s). Because the run crossed midnight, the movements cursor and repayments `seen.json` are
+"through 2026-10-28" (27 Oct fully read).
+GPFH: paper invoice 0005963 (27 Oct, 100 crates of eggs, N600,000, "not paid", CHL-HQ) is in neither EPOS
+(Goldplate accounts at N0, biggest 27 Oct sale N71,650, no egg stock change) nor QBO (last GPFH invoice 22 Sep).

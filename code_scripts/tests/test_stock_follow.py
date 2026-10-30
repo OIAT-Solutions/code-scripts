@@ -42,7 +42,7 @@ class FakeQBO:
 
 
 def event(eid, reason="Stock Take", qty="20", item="101", when="08/10/2026 13:23:27", value="₦7,879.84", holds=()):
-    return {"event_id": eid * 8, "transfer_id": "5680846", "occurred_at_epos": when, "staff": "Esther Aribatis",
+    return {"event_id": eid * 8, "transfer_id": str(5680846 + sum(ord(c) for c in eid)), "occurred_at_epos": when, "staff": "Esther Aribatis",
             "note": "", "name": "DUBIC MALT CAN 330ml*24", "epos_product_id": "1", "sku": "AKP-1", "qbo_item_id": item,
             "canonical_qty_change": qty, "epos_reason": reason, "source_value_change": value, "holds": list(holds)}
 
@@ -64,7 +64,7 @@ class StockFollowTests(unittest.TestCase):
 
     def test_rules(self):
         cases = [(event("a"), "ST", ""), (event("b", reason="Wastage", qty="-2"), "WS", ""),
-                 (event("c", reason="New Stock"), "NA", ""), (event("d", reason="n/a"), "NA", ""),
+                 (event("c", reason="New Stock"), "NA", "delivery/PO review"), (event("d", reason="n/a"), "NA", "delivery/PO review"),
                  (event("d2", reason="Returns"), "", "is not Stock Take, Wastage"),
                  (event("e", holds=["child unit"]), "ST", "not certain"),
                  (event("f", value="-₦150,000.00"), "ST", "over the N100,000 limit")]
@@ -74,13 +74,12 @@ class StockFollowTests(unittest.TestCase):
             self.assertEqual(k, kind)
             self.assertIn(why, w) if why else self.assertEqual(w, "")
 
-    def test_no_reason_changes_post_to_shrinkage_labelled_na(self):
-        # owner 12 Oct 2026: n/a / New Stock post without approval, findable by "NA" for bank reconciliation
+    def test_no_reason_changes_wait_for_delivery_review(self):
         evs = sf.collect([self.capture([event("n", reason="n/a", qty="24")])])
-        sf.plan(evs, self.tmp / "na", s=self.s, approve_over_cap=False)
-        p = json.loads((self.tmp / "na/payloads.jsonl").read_text().splitlines()[0])
-        self.assertEqual((p["DocNumber"][:2], p["AdjustAccountRef"]["value"]), ("NA", "82"))
-        self.assertIn("no EPOS reason", p["PrivateNote"])
+        summary = sf.plan(evs, self.tmp / "na", s=self.s, approve_over_cap=False)
+        self.assertEqual(summary["events"], 0)
+        self.assertEqual(summary["review_count"], 1)
+        self.assertEqual((self.tmp / "na/payloads.jsonl").read_text(), "")
 
     def test_lagos_day_by_capture_zone(self):
         self.assertEqual(sf.lagos_day("08/10/2026 23:30:00", "daily/x"), "2026-10-09")  # UTC 23:30 -> Lagos 00:30

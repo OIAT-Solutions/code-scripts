@@ -6,12 +6,18 @@ import hmac
 import json
 import logging
 import os
+import threading
 
+from django.db import close_old_connections
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from .services.qbo_webhook_notifications import process_qbo_webhook_body, record_rejected_webhook
+from .services.qbo_webhook_notifications import (
+    accept_qbo_webhook_body,
+    record_rejected_webhook,
+    send_pending_notifications,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +52,23 @@ def quickbooks_webhook(request: HttpRequest) -> HttpResponse:
         )
         return JsonResponse({"error": "payload must be a supported JSON object or array"}, status=400)
 
-    sent_count = process_qbo_webhook_body(payload)
-    return JsonResponse({"status": "ok", "notifications_sent": sent_count})
+    # Record the changes and answer Intuit at once; QuickBooks lookups and Slack posts run after.
+    pending = accept_qbo_webhook_body(payload)
+    if pending:
+        _after_response(send_pending_notifications, pending)
+    return JsonResponse({"status": "ok", "notifications_queued": len(pending)})
+
+
+def _after_response(func, pending) -> None:
+    def run() -> None:
+        try:
+            func(pending)
+        except Exception:  # noqa: BLE001 - a Slack/QBO failure must not crash the worker
+            logger.exception("QBO webhook Slack notifications failed")
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=run, name="qbo-webhook-slack", daemon=True).start()
 
 
 def _valid_intuit_signature(body: bytes, signature: str, verifier_token: str) -> bool:

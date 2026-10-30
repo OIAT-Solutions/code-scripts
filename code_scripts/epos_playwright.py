@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from playwright.sync_api import Playwright, sync_playwright, expect
 import os
 
+from code_scripts import epos_session
 # Load .env file if it exists (makes credential management easier)
 from code_scripts.load_env import load_env_file
 from code_scripts.company_config import load_company_config, get_available_companies
@@ -180,22 +181,30 @@ def run(
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context()
     page = context.new_page()
-    for attempt in range(1, _GOTO_MAX_RETRIES + 1):
-        try:
-            page.goto(_EPOS_URL)
-            break
-        except Exception as e:
-            if attempt < _GOTO_MAX_RETRIES:
-                print(f"  [Retry {attempt}/{_GOTO_MAX_RETRIES}] page.goto failed: {e}. Retrying in {_GOTO_RETRY_DELAY_S}s...")
-                time.sleep(_GOTO_RETRY_DELAY_S)
-            else:
-                raise
-    page.get_by_role("textbox", name="Username or email address").click()
-    page.get_by_role("textbox", name="Username or email address").fill(epos_username)
-    page.get_by_role("textbox", name="Password").click()
-    page.get_by_role("textbox", name="Password").fill(epos_password)
-    page.get_by_role("button", name="Log in").click()
-    
+    reused = epos_session.restore(context, config.company_key)  # only inside a Nora daily run
+
+    def open_report():
+        for attempt in range(1, _GOTO_MAX_RETRIES + 1):
+            try:
+                page.goto(_EPOS_URL)
+                break
+            except Exception as e:
+                if attempt < _GOTO_MAX_RETRIES:
+                    print(f"  [Retry {attempt}/{_GOTO_MAX_RETRIES}] page.goto failed: {e}. Retrying in {_GOTO_RETRY_DELAY_S}s...")
+                    time.sleep(_GOTO_RETRY_DELAY_S)
+                else:
+                    raise
+
+    open_report()
+    if epos_session.reuse(page, reused, open_report):
+        print("  EPOS: reused this run's login")
+    else:
+        page.get_by_role("textbox", name="Username or email address").click()
+        page.get_by_role("textbox", name="Username or email address").fill(epos_username)
+        page.get_by_role("textbox", name="Password").click()
+        page.get_by_role("textbox", name="Password").fill(epos_password)
+        page.get_by_role("button", name="Log in").click()
+
     # Select Custom date range
     page.get_by_label("Show data from").select_option("Custom")
     
@@ -230,6 +239,7 @@ def run(
     filename = output_filename or download.suggested_filename
     save_path = os.path.join(save_dir, filename)
     download.save_as(save_path)
+    epos_session.save(context, config.company_key)
 
     # ---------------------
     context.close()

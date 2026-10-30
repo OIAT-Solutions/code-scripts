@@ -162,8 +162,9 @@ def sr(sid, day, amount, tender, deposit_to="72"):
 
 
 class FakeQBO:
-    def __init__(self, receipts=(), deposits=(), transfers=(), book_close="2026-09-30", accounts=None):
+    def __init__(self, receipts=(), deposits=(), transfers=(), book_close="2026-09-30", accounts=None, payments=()):
         self.receipts = {r["Id"]: json.loads(json.dumps(r)) for r in receipts}
+        self.payments = {r["Id"]: json.loads(json.dumps(r)) for r in payments}
         self.deposits = {d["Id"]: d for d in deposits}
         self.transfers = {t["Id"]: t for t in transfers}
         self.book_close = book_close
@@ -178,7 +179,8 @@ class FakeQBO:
 
     def uf_balance(self):
         linked = {ln["LinkedTxn"][0]["TxnId"] for d in self.deposits.values() for ln in d["Line"] if ln.get("LinkedTxn")}
-        return round(sum(r["TotalAmt"] for r in self.receipts.values() if r["Id"] not in linked), 2)
+        return round(sum(r["TotalAmt"] for r in list(self.receipts.values()) + list(self.payments.values())
+                         if r["Id"] not in linked), 2)
 
     def request(self, method, url, params=None, headers=None, data=None, timeout=None):
         params = params or {}
@@ -188,7 +190,7 @@ class FakeQBO:
             return Resp(200, {"QueryResponse": self._query(params["query"])})
         if method == "GET" and path == "/preferences":
             return Resp(200, {"Preferences": {"AccountingInfoPrefs": {"BookCloseDate": self.book_close}}})
-        for prefix, store, key in (("/salesreceipt/", self.receipts, "SalesReceipt"),
+        for prefix, store, key in (("/salesreceipt/", self.receipts, "SalesReceipt"), ("/payment/", self.payments, "Payment"),
                                    ("/deposit/", self.deposits, "Deposit"), ("/transfer/", self.transfers, "Transfer")):
             if method == "GET" and path.startswith(prefix):
                 return Resp(200, {key: store[path.rsplit("/", 1)[1]]})
@@ -202,7 +204,8 @@ class FakeQBO:
             dep.pop("DocNumber", None)  # like the live company (3 Oct 2026): Deposits keep no DocNumber
             self.deposits[dep["Id"]] = dep
             for ln in (ln for ln in body["Line"] if ln.get("LinkedTxn")):
-                rec = self.receipts[ln["LinkedTxn"][0]["TxnId"]]
+                tid = ln["LinkedTxn"][0]["TxnId"]
+                rec = self.receipts.get(tid) or self.payments[tid]
                 rec.setdefault("LinkedTxn", []).append({"TxnId": dep["Id"], "TxnType": "Deposit"})
             return Resp(200, {"Deposit": dep})
         if method == "POST" and path == "/transfer":
@@ -219,6 +222,9 @@ class FakeQBO:
         if "from SalesReceipt" in sql:
             lo, hi = re.findall(r"TxnDate [<>]= '([^']*)'", sql)
             return {"SalesReceipt": page([r for r in self.receipts.values() if lo <= r["TxnDate"] <= hi])}
+        if "from Payment" in sql:
+            lo, hi = re.findall(r"TxnDate [<>]= '([^']*)'", sql)
+            return {"Payment": page([r for r in self.payments.values() if lo <= r["TxnDate"] <= hi])}
         if "from Deposit" in sql:
             m = re.search(r"DocNumber = '([^']*)'", sql)
             if m:
@@ -498,6 +504,29 @@ class AllocationTests(NoNetwork):
         self.assertEqual(sum(t.values()), Decimal("100.00"))
         self.assertEqual(sorted(t.values()), [Decimal("33.33"), Decimal("33.33"), Decimal("33.34")])
 
+    def test_epos_account_payment_is_banked_with_the_till_money_not_as_overage(self):
+        # 26 Oct 2026: Vera's N534,800 transfer on 9 Oct went to Till Overage because it was not a receipt
+        repay = {"Id": "777", "TxnDate": "2026-10-01", "TotalAmt": 10000.0, "PaymentRefNum": "EPR-abc",
+                 "DepositToAccountRef": {"value": "72"}, "SyncToken": "0",
+                 "PrivateNote": "EPOS account payment VERA AKPOREHA 01/10/2026 12:00:00 Lagos, Transfer by X on Till2"
+                                " | epos-repay 0123456789abcdef | auto by credit_repayments"}
+        other = dict(repay, Id="778", PrivateNote="a payment someone keyed by hand")  # never touched here
+        day = dict(DAY1, tr5=DAY1["tr5"] + 10000, system=DAY1["system"] + 10000)
+        d = self.plan(FakeQBO(DAY1_RECEIPTS, payments=[repay, other]), google({"Oct 2026": block("2026-10-01", day)}),
+                      ["2026-10-01"])["days"][0]
+        self.assertEqual(d["status"], ufd.READY, d["reasons"])
+        summary = json.loads((Path(d["dir"]) / "summary.json").read_text())
+        self.assertEqual(Decimal(summary["receipts_total"]), Decimal("3209500.00"))
+        self.assertEqual(Decimal(summary["overage"]), Decimal("500.00"))  # only the real till overage
+        payloads = [json.loads(x) for x in (Path(d["dir"]) / "payloads.jsonl").read_text().splitlines()]
+        links = {ln["LinkedTxn"][0]["TxnId"]: ln["LinkedTxn"][0]["TxnType"] for p in payloads if p["kind"] == "deposit"
+                 for ln in p["payload"]["Line"] if ln.get("LinkedTxn")}
+        self.assertEqual(links["777"], "Payment")
+        self.assertNotIn("778", links)
+        bank = next(NUMBER[p["payload"]["DepositToAccountRef"]["value"]] for p in payloads if p["kind"] == "deposit"
+                    for ln in p["payload"]["Line"] if (ln.get("LinkedTxn") or [{}])[0].get("TxnId") == "777")
+        self.assertIn(bank, {"100205", "100202"})  # a transfer bank
+
     def test_day_plan_each_bank_equals_sheet_overage_booked_and_receipts_linked_once(self):
         summary = self.plan(FakeQBO(DAY1_RECEIPTS), google({"Oct 2026": block("2026-10-01", DAY1)}), ["2026-10-01"])
         d = summary["days"][0]
@@ -680,6 +709,21 @@ class ScheduledTests(NoNetwork):
         return ufd.run_scheduled(self.out(), business_day=business_day, client=client(fake), source=source, s=s,
                                  accounts=self.accounts(), write_client=client(fake, True), dry_run=dry_run,
                                  from_day=from_day)
+
+    def test_account_payment_posts_into_the_deposit_and_rereads_as_payment(self):
+        repay = {"Id": "777", "TxnDate": "2026-10-01", "TotalAmt": 10000.0, "PaymentRefNum": "EPR-abc",
+                 "DepositToAccountRef": {"value": "72"}, "SyncToken": "0",
+                 "PrivateNote": "EPOS account payment VERA AKPOREHA 01/10/2026 12:00:00 Lagos, Cash by X on Till2"
+                                " | epos-repay 0123456789abcdef | auto by credit_repayments"}
+        fake = FakeQBO(DAY1_RECEIPTS, payments=[repay])
+        day = dict(DAY1, cash1=DAY1["cash1"] + 10000, system=DAY1["system"] + 10000)
+        res = self.scheduled(fake, google({"Oct 2026": month_rows({"2026-10-01": day})}), business_day="2026-10-01", **AUTO)
+        self.assertEqual(res["days"][0]["status"], ufd.DEPOSITED, res["days"][0])
+        self.assertIn(("GET", "/payment/777", {"minorversion": "75"}), [(m, p, {k: v for k, v in q.items() if k == "minorversion"})
+                                                                         for m, p, q in fake.calls])
+        linked = [ln["LinkedTxn"][0] for d in fake.deposits.values() for ln in d["Line"] if ln.get("LinkedTxn")]
+        self.assertEqual([l["TxnType"] for l in linked if l["TxnId"] == "777"], ["Payment"])
+        self.assertEqual(fake.uf_balance(), 0)
 
     def test_gates_off_is_plan_only(self):
         fake, source = self.two_days()

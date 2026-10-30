@@ -36,6 +36,27 @@ def step_of(cmd) -> str:
     raise AssertionError(cmd)
 
 
+
+_CURSOR_DIR = None
+
+
+def setUpModule():  # noqa: N802 - unittest hook: the stock-movement "last run" marker never touches real state
+    import tempfile as _tf
+    from unittest import mock as _mock
+
+    global _CURSOR_DIR
+    _CURSOR_DIR = _tf.TemporaryDirectory()
+    _p = _mock.patch("code_scripts.akponora_ops.daily_run.movement_cursor_path",
+                     lambda: __import__("pathlib").Path(_CURSOR_DIR.name) / "cursor.json")
+    _p.start()
+
+
+def tearDownModule():  # noqa: N802
+    from unittest import mock as _mock
+
+    _mock.patch.stopall()
+    _CURSOR_DIR.cleanup()
+
 class FakeRunner:
     """Stands in for ``run_command``: records calls, writes the evidence each job would write."""
 
@@ -95,6 +116,7 @@ class DailyRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             for enabled, incomplete in ((False, False), (True, False), (True, True)):
                 with self.subTest(enabled=enabled, incomplete=incomplete):
+                    dr.movement_cursor_path().unlink(missing_ok=True)
                     calls = []
                     def runner(cmd, *, log_path, env):
                         calls.append(cmd)
@@ -123,6 +145,8 @@ class DailyRunTests(unittest.TestCase):
                     # an unreadable adjustment is a review item, not a failed run (7-8 Oct 2026)
                     self.assertEqual(result.status, dr.REVIEW if enabled else dr.OK)
                     self.assertEqual(result.exit_code, 0)
+                    # only a complete capture moves the "last read" marker (26 Oct 2026)
+                    self.assertEqual(dr.movement_cursor_path().exists(), enabled and not incomplete)
                     if incomplete:
                         self.assertTrue(any("could not read 1 adjustment" in r for r in result.review))
 
@@ -269,6 +293,36 @@ class DailyRunTests(unittest.TestCase):
         self.assertIn(str(Path(summary["run_dir"]) / "bills" / "review.csv"), text)
         self.assertIn("HOLD_NEAR_MATCH", text)
 
+    def test_repayments_step_is_off_until_switched_on_then_plans_and_reports(self):
+        from code_scripts.akponora_ops import credit_repayments as rp
+
+        summary = self.make(FakeRunner(), env=STANDING).execute()
+        self.assertEqual({s["name"]: s for s in summary["steps"]}["repayments"]["status"], dr.DISABLED)
+
+        class Q:
+            def query_all(self, sql, entity):
+                return {"Customer": [{"Id": "334", "DisplayName": "Mrs VERA AKPOREHA", "Active": True}],
+                        "Invoice": [{"Id": "1", "DocNumber": "CR261020-1", "TxnDate": "2026-10-20", "Balance": 5000,
+                                     "CustomerRef": {"value": "334"}}], "Payment": []}[entity]
+
+            def get_json(self, path):
+                return {"Preferences": {}}
+
+        cap = {"payments": [{"customer": "VERA AKPOREHA", "when": "21/10/2026 10:00:00", "amount": "5000.00",
+                             "tender": "Cash", "staff": "X", "device": "Till1"},
+                            {"customer": "WHO IS THIS", "when": "21/10/2026 11:00:00", "amount": "100.00",
+                             "tender": "Cash"}], "balances": [], "errors": []}
+        with mock.patch.object(rp, "banked_days", return_value=set()), \
+                mock.patch.object(rp, "ledger", return_value={}):
+            run = self.make(FakeRunner(), env={**STANDING, rp.MODE_ENV: "plan"}, only=["repayments"])
+            run.repay_client, run.repay_capture = Q(), cap
+            summary = run.execute()
+        step = {s["name"]: s for s in summary["steps"]}["repayments"]
+        self.assertEqual(step["status"], dr.REVIEW)
+        self.assertEqual(step["counts"]["to_post"], 1)
+        self.assertTrue(any("planned, not posted" in r for r in step["review"]))
+        self.assertTrue(any("WHO IS THIS" in r and "customer" in r for r in step["review"]))
+
     def test_uf_step_runs_in_process_after_guard(self):
         # the step itself is covered in test_uf_deposits.DailyRunUFTests; here: ordering + isolation
         seen = []
@@ -279,7 +333,8 @@ class DailyRunTests(unittest.TestCase):
 
         with mock.patch.object(dr.DailyRun, "step_uf", fake_uf):
             summary = self.make(FakeRunner(), env={**STANDING, dr.UF_ENV: "1"}).execute()
-        self.assertEqual(seen, [["catalogue", "bills", "sales", "credit", "guard", "stock", "stock_follow"]])
+        # repayments run before banking so the day's account payments are in Undeposited Funds (26 Oct 2026)
+        self.assertEqual(seen, [["catalogue", "bills", "sales", "credit", "repayments", "guard", "stock", "stock_follow"]])
         step = {s["name"]: s for s in summary["steps"]}["uf"]
         self.assertEqual(step["status"], dr.FAILED)
         self.assertIn("sheet unreachable", step["detail"])

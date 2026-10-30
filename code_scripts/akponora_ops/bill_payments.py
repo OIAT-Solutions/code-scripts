@@ -8,8 +8,11 @@ the Moniepoint statement and pays them from the right account on the right date.
 Staff convention (owner, 4 Oct 2026) read from the bill memo ``Payment hint: <MODE> [PAID|NOT PAID]
 [from <digits>]`` that ``bills_sync`` writes from the PO note:
 * CASH (not marked NOT PAID) -> paid from Petty Cash on the bill date;
-* TRANSFER PAID from <digits> -> paid from the one active Bank account whose name contains those digits
-  (e.g. MONIEPOINT 4686987227); no unique match -> left open;
+* TRANSFER PAID from <digits> -> paid from the one active Bank account those digits point to. Staff write
+  the Moniepoint **store account** number they know (owner, 29 Oct 2026), e.g. 5688464974, which
+  ``till_accounts.csv`` maps to its QBO account (100202 - MONIEPOINT 4686987227); the number in the QBO
+  account name (4686987227, the bank statement number) is still accepted. Part of a number works when it
+  points to one account; digits that point to none, or to two or more accounts -> left open;
 * CREDIT / NOT PAID / anything else -> left open.
 
 Which bills: ``Bill`` from ``FROM_DAY`` (2026-10-01) with a balance, DocNumber ``EPOS-PO-<ref>`` (made by
@@ -25,6 +28,7 @@ from __future__ import annotations
 import os
 import re
 from decimal import Decimal
+from pathlib import Path
 
 from code_scripts.akponora_ops.common import REALM
 from code_scripts.scripts.akponora_cutover.w7_create_items import sha256_text
@@ -54,24 +58,40 @@ def hint(bill: dict) -> dict:
     return {"mode": m.group("mode"), "paid": (m.group("paid") or "").strip(), "account": m.group("acct") or ""}
 
 
-def pay_from(bill: dict, banks: list[dict]) -> str:
+def store_accounts(path: str | Path | None = None) -> dict[str, str]:
+    """{Moniepoint store (terminal) number: QBO account Id} from the active rows of the till account mapping
+    (``uf_deposits.load_accounts``, the same reader banking uses). Unreadable mapping -> {} (QBO names only)."""
+    from code_scripts.akponora_ops import uf_deposits as ufd
+
+    try:
+        accounts = ufd.load_accounts(Path(path) if path else ufd.accounts_path())
+    except (ufd.StopRun, OSError, ValueError, KeyError):
+        return {}
+    return {tid: str(row["QBO account Id"]).strip() for tid, row in accounts["by_tid"].items() if tid.isdigit()}
+
+
+def pay_from(bill: dict, banks: list[dict], stores: dict[str, str] | None = None) -> str:
     """QBO account Id to pay this bill from, or '' to leave it open (see the module doc)."""
     h = hint(bill)
     if h["mode"] == "CASH" and h["paid"] != "NOT PAID":
         return PETTY_CASH_ID
     if h["mode"] == "TRANSFER" and h["paid"] == "PAID" and h["account"]:
-        hits = [a for a in banks if h["account"] in re.sub(r"\D", "", str(a.get("Name") or ""))]
-        return str(hits[0]["Id"]) if len(hits) == 1 else ""
+        digits = h["account"]
+        active = {str(a["Id"]) for a in banks}
+        by_store = {acct for store, acct in (stores or {}).items() if digits in store} & active
+        by_name = {str(a["Id"]) for a in banks if digits in re.sub(r"\D", "", str(a.get("Name") or ""))}
+        hits = by_store | by_name  # every account the digits could mean: pay only when that is exactly one
+        return hits.pop() if len(hits) == 1 else ""
     return ""
 
 
-def cash_bills(bills: list[dict], banks: list[dict] = ()) -> list[dict]:
+def cash_bills(bills: list[dict], banks: list[dict] = (), stores: dict[str, str] | None = None) -> list[dict]:
     """Open bills_sync bills from FROM_DAY that the PO says were paid, oldest first (key ``_pay_from``)."""
     out = []
     for b in bills:
         if (str(b.get("TxnDate") or "") >= FROM_DAY and Decimal(str(b.get("Balance") or 0)) > 0
                 and str(b.get("DocNumber") or "").startswith(DOC_PREFIX)):
-            acct = pay_from(b, list(banks))
+            acct = pay_from(b, list(banks), stores)
             if acct:
                 out.append({**b, "_pay_from": acct})
     return sorted(out, key=lambda b: (b.get("TxnDate") or "", str(b.get("DocNumber") or "")))
@@ -105,7 +125,8 @@ def pay_cash_bills(client, *, env=None, dry_run: bool = False) -> dict:
     cap_n = int(str(env.get(MAX_ENV) or "").strip() or 30)
     cap_amount = Decimal(str(env.get(MAX_AMOUNT_ENV) or "").strip() or "2000000")
     banks = client.query_all("select * from Account where AccountType = 'Bank' and Active = true", "Account")
-    bills = cash_bills(client.query_all(f"select * from Bill where TxnDate >= '{FROM_DAY}'", "Bill"), banks)
+    bills = cash_bills(client.query_all(f"select * from Bill where TxnDate >= '{FROM_DAY}'", "Bill"), banks,
+                       store_accounts(env.get("OIAT_COMPANY_A_TILL_ACCOUNTS_FILE") or None))
     total = Decimal(0)
     for b in bills:
         row = {"bill_id": b["Id"], "doc": b.get("DocNumber"), "date": b["TxnDate"], "amount": str(b["Balance"]),

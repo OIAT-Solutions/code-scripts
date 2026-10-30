@@ -95,6 +95,9 @@ TOOL = "uf_deposits"
 TZ = ZoneInfo("Africa/Lagos")
 FLOOR = "2026-09-25"  # 1 Jan-24 Sep deposited on 26 Sep 2026
 UF_ACCOUNT_ID = "72"
+LINKABLE = ("SalesReceipt", "Payment")
+REPAY_TAG = re.compile(r"\| epos-repay [0-9a-f]{16} \|")
+REPAY_TENDER = re.compile(r"Lagos, (Cash|Transfer|Card)\b")
 UF_ACCOUNT_NUMBER = "100900"
 DEPOSIT_MINORVERSION = "65"
 REF_PLACEHOLDER = "<APPROVAL_REF>"
@@ -534,6 +537,19 @@ def sheet_reasons(day: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------- receipts
+def repayment_receipt(pmt: dict) -> dict | None:
+    """A credit_repayments Payment (EPOS account payment) as a receipt-like record, else None.
+    Only Payments this pipeline made (memo tag) are banked here; any other Payment is left alone."""
+    note = clean(pmt.get("PrivateNote"))
+    if not REPAY_TAG.search(note):
+        return None
+    m = REPAY_TENDER.search(note)
+    return {"Id": pmt.get("Id"), "TotalAmt": pmt.get("TotalAmt"), "DocNumber": clean(pmt.get("PaymentRefNum")),
+            "PrivateNote": note, "PaymentMethodRef": {"name": m.group(1) if m else ""},
+            "DepositToAccountRef": pmt.get("DepositToAccountRef"), "LinkedTxn": pmt.get("LinkedTxn") or [],
+            "SyncToken": pmt.get("SyncToken"), "TxnDate": pmt.get("TxnDate"), "_txn_type": "Payment"}
+
+
 def tender_kinds(sr: dict) -> tuple[str, set]:
     """(tender text, {cash, card, transfer}) from the PaymentMethod name, else the memo."""
     pm = clean((sr.get("PaymentMethodRef") or {}).get("name"))
@@ -556,7 +572,7 @@ def deposit_links(deposits: list[dict]) -> dict:
                 "txn_date": clean(dep.get("TxnDate"))}
         for line in dep.get("Line") or []:
             for link in line.get("LinkedTxn") or []:
-                if clean(link.get("TxnType")) == "SalesReceipt" and link.get("TxnId"):
+                if clean(link.get("TxnType")) in LINKABLE and link.get("TxnId"):
                     out[clean(link["TxnId"])] = info
     return out
 
@@ -567,7 +583,7 @@ def classify_receipts(day: str, srs: list[dict], links: dict) -> dict:
         amt = r2(D(sr.get("TotalAmt"), Decimal(0)))
         text, kinds = tender_kinds(sr)
         rec = {"id": clean(sr.get("Id")), "doc": clean(sr.get("DocNumber")), "amount": amt, "tender": text,
-               "kinds": sorted(kinds), "sync": clean(sr.get("SyncToken"))}
+               "kinds": sorted(kinds), "sync": clean(sr.get("SyncToken")), "type": sr.get("_txn_type", "SalesReceipt")}
         if amt <= 0:
             zero.append(rec)
             continue
@@ -664,6 +680,11 @@ def fetch_context(client: QBOClient, days: list[str], banks: dict) -> dict:
     by_day = defaultdict(list)
     for sr in srs:
         by_day[clean(sr.get("TxnDate"))].append(sr)
+    # EPOS account payments (credit_repayments) sit in Undeposited Funds with the till money (26 Oct 2026)
+    for pmt in client.query_all(f"select * from Payment where TxnDate >= '{first}' and TxnDate <= '{last}'", "Payment"):
+        receipt = repayment_receipt(pmt)
+        if receipt:
+            by_day[clean(pmt.get("TxnDate"))].append(receipt)
     deposits = client.query_all(f"select * from Deposit where TxnDate >= '{first}'", "Deposit")
     transfers = client.query_all(f"select * from Transfer where TxnDate >= '{first}' and TxnDate <= '{last}'",
                                  "Transfer")
@@ -715,7 +736,7 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
         warns.append(f"{len(rec['zero'])} receipt(s) with a zero total ignored")
     active = rec["pending"] + rec["fixed"]
     e["receipts_total"] = sum((r["amount"] for r in active), Decimal(0))
-    if not active and not rec["outside"]:
+    if not any(r.get("type", "SalesReceipt") == "SalesReceipt" for r in active) and not rec["outside"]:
         e["status"], e["hold_kind"] = HOLD, "no_sales"
         reasons.append(f"no SalesReceipts in QBO for {day} yet (sales not posted?)")
         return e
@@ -733,6 +754,7 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
         reasons.append(why)
         return e
     e["sheet"] = {k: sheet_day[k] for k in ("date", "tab", "row", "actual", "system", "excess")}
+    e["sheet_day_sha256"] = till_sheet.day_fingerprint(sheet_day)
     unfinished = sheet_reasons(sheet_day)
     reasons += unfinished
     if unfinished:
@@ -742,6 +764,12 @@ def plan_day(day: str, *, source, accounts: dict, ctx: dict, s: dict, auto_cap: 
     e["sheet_by_bank"] = sheet_by_bank
     e["sheet_total"] = sum(sheet_by_bank.values(), Decimal(0))
     diff = e["sheet_total"] - e["receipts_total"]
+    from code_scripts.akponora_ops.money_integrity import overage_overlap
+    overlap = overage_overlap(day, diff, s.get("repayments_by_day") or {})
+    if overlap:
+        reasons.append(overlap["reason"])
+        e["money_overlap"] = overlap
+        e["hold_kind"] = "repayment_overlap"
     tol = tolerance(e["receipts_total"], s)
     overage, overage_acct = Decimal(0), None
     over_limit = diff > tol  # owner, 13 Oct 2026: a sheet OVER sales is banked anyway and flagged, not held
@@ -855,7 +883,8 @@ def build_actions(day: str, rec: dict, alloc: dict, banks: dict, ctx: dict, over
         extra = overage_by_bank.get(bank, Decimal(0))
         amount = sum((r["amount"] for r in group), Decimal(0)) + extra
         lines = [{"Amount": float(r["amount"]),
-                  "LinkedTxn": [{"TxnId": r["id"], "TxnType": "SalesReceipt", "TxnLineId": "0"}]} for r in group]
+                  "LinkedTxn": [{"TxnId": r["id"], "TxnType": r.get("type", "SalesReceipt"), "TxnLineId": "0"}]}
+                 for r in group]
         if extra:
             lines.append({"Amount": float(extra), "DetailType": "DepositLineDetail",
                           "Description": overage_note(day, banks[bank]),
@@ -870,6 +899,7 @@ def build_actions(day: str, rec: dict, alloc: dict, banks: dict, ctx: dict, over
         }
         actions.append({"kind": "deposit", "key": doc, "state": "NEW", "bank_id": bank,
                         "receipt_ids": [r["id"] for r in group], "receipt_docs": [r["doc"] for r in group],
+                        "receipt_types": {r["id"]: r.get("type", "SalesReceipt") for r in group},
                         "amount": amount, "payload": payload})
     existing_tu = own_transfers(ctx["transfers"], day)
     planned = set()
@@ -974,7 +1004,7 @@ def day_summary(e: dict, banks: dict) -> dict:
         "deposits_new": sum(1 for a in e["actions"] if a["kind"] == "deposit" and a["state"] == "NEW"),
         "transfers_new": sum(1 for a in e["actions"] if a["kind"] == "transfer" and a["state"] == "NEW"),
         "existing": [f"{a['kind']} {a['key']} (QBO {a.get('qbo_id')})" for a in e["actions"] if a["state"] == "EXISTS"],
-        "sheet": e["sheet"], "sheet_sha256": e["sheet_sha256"],
+        "sheet": e["sheet"], "sheet_sha256": e["sheet_sha256"], "sheet_day_sha256": e.get("sheet_day_sha256", ""),
     }
 
 
@@ -1045,7 +1075,7 @@ def verify_deposit(dep: dict, p: dict) -> list[str]:
     if abs(D(dep.get("TotalAmt"), Decimal(0)) - Decimal(p["amount"])) > CENT / 2:
         problems.append(f"TotalAmt {dep.get('TotalAmt')} != {p['amount']}")
     linked = sorted(clean(link.get("TxnId")) for line in dep.get("Line") or [] for link in line.get("LinkedTxn") or []
-                    if clean(link.get("TxnType")) == "SalesReceipt")
+                    if clean(link.get("TxnType")) in LINKABLE)
     if linked != sorted(p["receipt_ids"]):
         problems.append(f"linked receipts {linked} != {sorted(p['receipt_ids'])}")
     if clean((dep.get("CashBack") or {}).get("Amount")) not in ("", "0", "0.0"):
@@ -1079,12 +1109,14 @@ def post_with_minorversion(client: QBOClient, path: str, body: dict, requestid: 
 
 def recheck_receipts(client: QBOClient, p: dict) -> str:
     """'' when every receipt is still in Undeposited Funds with the planned amount."""
-    expected = {}
+    expected, kinds = {}, {}
     for line in p["payload"]["Line"]:
         if line.get("LinkedTxn"):  # an overage line has no receipt
             expected[line["LinkedTxn"][0]["TxnId"]] = Decimal(str(line["Amount"]))
+            kinds[line["LinkedTxn"][0]["TxnId"]] = line["LinkedTxn"][0].get("TxnType") or "SalesReceipt"
     for rid in p["receipt_ids"]:
-        sr = client.get_json(f"/salesreceipt/{rid}").get("SalesReceipt") or {}
+        kind = kinds.get(rid, "SalesReceipt")
+        sr = client.get_json(f"/{kind.lower()}/{rid}").get(kind) or {}
         if abs(D(sr.get("TotalAmt"), Decimal(0)) - expected[rid]) > CENT / 2:
             return f"receipt {rid} total is now {sr.get('TotalAmt')} (plan {expected[rid]}); re-plan"
         dep_to = clean((sr.get("DepositToAccountRef") or {}).get("value"))
@@ -1151,6 +1183,14 @@ def post_day(day_dir: Path, *, client: QBOClient, approval_ref: str, expect_sha:
             raise StopRun(f"automatic posting needs {ENABLED_ENV}=1, {AUTO_ENV}=1 and {REF_ENV}")
         if Decimal(summary["receipts_total"]) > s["cap"]:
             raise StopRun(f"day total {summary['receipts_total']} over the automatic cap {money(s['cap'])}")
+        if s.get("_till_source") and summary.get("sheet_day_sha256"):
+            fresh, why, _ = till_sheet.fresh_day(s["_till_source"], summary["day"])
+            if not fresh or till_sheet.day_fingerprint(fresh) != summary["sheet_day_sha256"]:
+                raise StopRun("till day changed since planning; refresh and review before banking: " + why)
+        if s.get("_repayment_reader"):
+            from code_scripts.akponora_ops.work_state import digest
+            if digest(s["_repayment_reader"]()) != digest(s.get("repayments_by_day") or {}):
+                raise StopRun("customer repayment input changed since planning; recheck sales-only banking")
     payloads = []
     for line in (day_dir / "payloads.jsonl").read_text().splitlines():
         if line.strip():
@@ -1206,6 +1246,7 @@ def run_scheduled(out: Path, *, business_day: str, client: QBOClient, source, s:
     DEPOSITED is planned on its own; each READY day is posted when the automatic gates are on (never
     on a dry run), whatever happened to the days before it. Per-day state goes to days.json (not on
     a dry run). A post that stops (QBO error / verification) ends posting for this run."""
+    s = {**s, "_till_source": source}
     state = read_state()
     days = open_days(state, from_day or FLOOR, business_day)
     auto = s["auto"] and not dry_run

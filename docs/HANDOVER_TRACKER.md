@@ -1,10 +1,14 @@
 # Handover tracker: OIAT EPOS → QuickBooks (read this first)
 
+## Active whole-process hardening — 24 October 2026
+
+Read [NORA_PROCESS_HARDENING_20261024.md](NORA_PROCESS_HARDENING_20261024.md). Private runtime repair `1b1b731` is rebuilt/deployed on `codex/nora-process-hardening`. **Owner said keep repairs private: do not push private commits/notes to public GitHub.** Mac and server have them via direct SSH Git bundles; PR #65 excludes them and stays draft/unmerged; master remains `df046f4`. 508 core tests, 26 portal tests, 16 runtime hashes/HTTP/single-worker checks pass. Final stock recovery `bc326c91-0eb2-4781-9bbc-3f6fa500d221` finished 25 Oct 23:22:53 UTC in **7m54s**, with review and no failed steps: 420 events, 373 already recorded, 47 held, zero new adjustments. All four audit sections and current PO coverage complete/zero missing; encrypted local restore verifies 2,642 files. Sales/bills/products/payments were not replayed. No further recovery run is needed. This resumed completed history; full fresh Sunday collector sections total ~24m28s, so it is not a complete daily-run speed benchmark. Next full routine 26 Oct 17:00 UTC / 18:00 Lagos still needs acceptance before any merge decision. Staff/opening-balance signoff and offsite/key custody remain pending. See [NORA_STAFF_AND_RECOVERY.md](NORA_STAFF_AND_RECOVERY.md).
+
 ## Deployed runtime improvements — 24 October 2026
 
-Runtime efficiency PR #64 merged as `8632c76` on master. Mac and production checkouts are on master.
-Implementation `7c3d5aa` is running in both web and scheduler; 474 tests and production read-only checks pass.
-The first complete scheduled routine at 17:00 UTC has not run yet; its duration/outcome remains unverified.
+Runtime efficiency PR #64 merged as `8632c76` on master. This was the master baseline before the follow-up branch above.
+That baseline used implementation `7c3d5aa`, with 474 tests and production read-only checks passing. Current runtime is the hardening branch above.
+That scheduled routine completed 24 Oct in 19m52s (review, no failed steps), versus the prior 66m43s. It validates PR #64; the newer hardening branch still needs its own full-run observation.
 Read [NORA_RUNTIME_EFFICIENCY_20261024.md](NORA_RUNTIME_EFFICIENCY_20261024.md) for scope, test evidence,
 production state and rollback. Owner requested validation before the 17:00 UTC scheduled run.
 The dates/revisions in older sections below are historical; use the active checkpoint for this release.
@@ -33,6 +37,7 @@ Governing rules: [`AGENTS.md`](../AGENTS.md). Full checklist: [`AKPONORA_ROADMAP
 | Evidence/data (never commit) | `code-scripts/outputs/…`, `code-scripts/runtime/…`, `../MISC/AKPONORA Investigation/COGS Analysis/As of 30th September 2026/` |
 | Mac QBO token | **Retired** (`runtime/code_scripts/qbo_tokens.sqlite.retired`). **Never call QuickBooks from the Mac.** The server owns the tokens |
 | Production server | `oiat-srv-01` (Windows, Docker Desktop). Repo `C:\Users\oiatadmin\Documents\prod\epos_to_qbo_automation\code-scripts`. Containers: `web`, `scheduler`, `caddy`, `cloudflared` (`akponora-ops` is removed at the next deploy). Data volume `/data` (STATE_ROOT) |
+| Cloudflare Tunnel (28 Oct 2026) | Cloudflare's certificate advisory needs cloudflared 2026.10.2+. `docker-compose.yml` pins `cloudflare/cloudflared:2026.10.5` and reads the token from `secrets/cloudflare_tunnel_token` (written on the server from `.env`). `docker pull` fails over SSH ("logon session does not exist"): pull from the server desktop, then `docker compose up -d --no-deps cloudflared`. The unused Windows cloudflared 2026.6.0 was uninstalled. Twofold's own tunnel is pinned by digest in its `deploy/.env.production` (now the 2026.10.5 digest `sha256:1b1d34d0…bbe53`); only its tunnel was recreated, through `deploy.compose("--profile", "public", "up", "-d", "--no-deps", "--pull", "never", "tunnel")` from WSL. The old token lines were removed from `.env`, and the old `.env.bak_*` copies were deleted. Old portal images (all but `latest` and `rollback-20261027-refund`), the `nora-*` deploy bundles and the 25 Oct Docker build folder were removed from `prod` on 28 Oct. `prod\backups\app-data-backup-inventory-remediation-20260506-103822.tar.gz` is kept: it is the only copy of the Jan to early May 2026 `Uploaded/` sales archives for both companies (live data starts 26 Sep). It is not yet in the encrypted/offsite backup set |
 | SSH to server | `ssh -i ~/.ssh/oiat_server oiatadmin@oiat-srv-01` (Tailscale; key in macOS keychain agent). The shell is `cmd`. Helper: `/private/tmp/claude-501/srv.sh "<cmd>"` (volatile; recreate it with the snippet below) |
 | Portal | `https://portal.oiatsolutions.com` (Tailscale only; Marvin signed in on Chrome on this Mac) |
 | Server docs | [`SERVER_SETUP.md`](SERVER_SETUP.md), [`AKPONORA_DAILY_OPERATIONS.md`](AKPONORA_DAILY_OPERATIONS.md) |

@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -66,7 +67,7 @@ from code_scripts.scripts.akponora_cutover._common import REPO_ROOT, business_da
 
 TOOL = "daily_run"
 TZ = ZoneInfo("Africa/Lagos")
-STEPS = ("catalogue", "bills", "sales", "credit", "guard", "stock", "stock_follow", "uf", "payments")
+STEPS = ("catalogue", "bills", "sales", "credit", "repayments", "guard", "stock", "stock_follow", "uf", "payments")
 DEFAULT_CRON = "0 6 * * *"
 LOCK_WAIT_ENV = "OIAT_COMPANY_A_DAILY_RUN_LOCK_WAIT_MINUTES"
 STEP_SLACK_ENV = "OIAT_COMPANY_A_DAILY_RUN_STEP_SLACK"
@@ -112,14 +113,81 @@ def read_json(path: Path, default=None):
         return default
 
 
+def movement_cursor_path() -> Path:
+    from code_scripts.akponora_ops.common import state_dir
+
+    return state_dir("stock_movements") / "cursor.json"
+
+
+def movement_start(end: date) -> date:
+    """The last cleanly captured day (read again for overlap), else three days back; never before 1 Oct."""
+    floor = date(2026, 10, 1)
+    try:
+        last = date.fromisoformat(json.loads(movement_cursor_path().read_text())["through"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return max(floor, end - timedelta(days=2))
+    return max(floor, min(last, end))
+
+
+def save_movement_cursor(end: date) -> None:
+    from code_scripts.akponora_ops.common import dump_json
+
+    dump_json(movement_cursor_path(), {"through": end.isoformat(),
+                                       "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+
+
+def read_step_limit(cmd: list[str], env: dict) -> int:
+    limit = max(60, int(env.get("OIAT_READ_STEP_TIMEOUT_SECONDS", "1200")))
+    if "code_scripts.akponora_ops.stock_movements" in cmd and "--weekly-audit" in cmd:
+        from code_scripts.akponora_ops.stock_movements import capture_windows
+        windows = capture_windows(cmd[cmd.index("--from-date") + 1], cmd[cmd.index("--through-date") + 1])
+        limit *= len(windows)  # each bounded section gets the ordinary collector allowance
+    return limit
+
+
 def run_command(cmd: list[str], *, log_path: Path, env: dict, cwd: Path = REPO_ROOT) -> int:
     """Run one step subprocess, its stdout+stderr going to ``log_path``. Returns the exit code."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "w", encoding="utf-8") as log:
         log.write(f"$ {' '.join(cmd)}\n")
         log.flush()
-        proc = subprocess.run(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
-    return proc.returncode
+        started = time.monotonic()
+        read_only = any(m in cmd for m in ("code_scripts.akponora_ops.stock_snapshot",
+                                           "code_scripts.akponora_ops.stock_movements",
+                                           "code_scripts.akponora_ops.item_guard"))
+        limit = read_step_limit(cmd, env)
+        proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=os.name != "nt")
+        while True:
+            try:
+                return proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                elapsed = round(time.monotonic() - started, 1)
+                dump_json(log_path.parent / "heartbeat.json", {"pid": proc.pid, "elapsed_seconds": elapsed,
+                          "updated_at": _now_utc(), "status": "stalled" if elapsed > limit else "running",
+                          "safe_to_stop": read_only})
+                if elapsed > limit and read_only:
+                    if os.name != "nt":
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        proc.terminate()
+                    try:
+                        proc.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        if os.name != "nt":
+                            try:
+                                os.killpg(proc.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        else:
+                            proc.kill()
+                        proc.wait()
+                    log.write("Read-only collection exceeded its deadline; no financial writer was interrupted.\n")
+                    return 2
+                # Financial subprocesses are never blindly killed after a possible accepted write.
 
 
 def slack_webhook() -> str | None:
@@ -149,10 +217,15 @@ class DailyRun:
                  root: Path | None = None, runner: Callable = run_command, slack: Callable | None = None,
                  send_slack: bool = True, env: dict | None = None, uf_client=None, uf_write_client=None,
                  uf_sheet=None, python: str = sys.executable, credit_client=None, credit_write_client=None,
-                 payments_client=None, payments_write_client=None, stock_follow_write_client=None):
+                 payments_client=None, payments_write_client=None, stock_follow_write_client=None,
+                 stock_audit_resume: Path | None = None, repay_client=None, repay_write_client=None,
+                 repay_capture: dict | None = None):
         self.date = business_day
         self.dry_run = dry_run
         self.only = list(only) if only else list(STEPS)
+        if stock_audit_resume and set(self.only) != {"stock", "stock_follow"}:
+            raise ValueError("Interrupted stock audit recovery selects only stock,stock_follow")
+        self.stock_audit_resume = stock_audit_resume
         self.runner = runner
         self.slack = slack or send_summary_slack
         self.send_slack = send_slack
@@ -164,6 +237,7 @@ class DailyRun:
         self.credit_write_client = credit_write_client
         self.payments_client, self.payments_write_client = payments_client, payments_write_client
         self.stock_follow_write_client = stock_follow_write_client
+        self.repay_client, self.repay_write_client, self.repay_capture = repay_client, repay_write_client, repay_capture
         self.python = python
         stamp = datetime.now(timezone.utc).strftime("%H%M%SZ")
         self.day_dir = Path(root) if root else _daily_root() / business_day
@@ -396,6 +470,47 @@ class DailyRun:
         if not invoices and not r["mixed"]:
             res.detail = "no credit sales"
 
+    def step_repayments(self, res: StepResult) -> None:
+        """EPOS customer account payments -> QBO Payments into Undeposited Funds (credit_repayments, in-process).
+        Off unless OIAT_COMPANY_A_CREDIT_REPAYMENTS is ``plan`` (read + plan only) or ``post``."""
+        from decimal import Decimal
+
+        from code_scripts.akponora_ops import credit_repayments as rp
+        from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
+
+        setting = rp.setting(self.base_env)
+        if setting not in ("plan", "post"):
+            res.status, res.detail = DISABLED, f"off ({rp.MODE_ENV} not set)"
+            return
+        client = self.repay_client or QBOClient.for_company_a(allow_writes=False)
+        write = None
+        if setting == "post" and not self.dry_run:
+            write = self.repay_write_client or QBOClient.for_company_a(allow_writes=True)
+        try:
+            r = rp.run(Path(res.out), client=client, write_client=write, dry_run=self.dry_run, env=self.base_env,
+                       cap_data=self.repay_capture)
+        except Exception as exc:  # noqa: BLE001 - an EPOS report hiccup must not stop sales/banking
+            res.status, res.detail = REVIEW, f"EPOS customer reports could not be read: {str(exc)[:200]}"
+            res.review.append(f"repayments: {res.detail}")
+            return
+        s, rows = r["summary"], r["rows"]
+        done = {x["key"] for x in r["posted"] if x["status"] in (rp.POSTED, "ALREADY_DONE")}
+        res.counts = {"mode": r["mode"], "payments": len(rows), "counts": s["counts"], "to_post": s["to_post"],
+                      "total_to_post": s["total_to_post"], "posted": r["posted"], "balances": s["balances"],
+                      "posted_total": f"{sum(Decimal(x['amount']) for x in rows if x['key'] in done):.2f}"}
+        for row in rows:
+            if row["status"] == rp.HOLD:
+                res.review.append(f"repayment {row['day']} {row['customer']} N{row['amount']}: {row['reason']}")
+            elif row["status"] in (rp.READY, rp.WAIT) and row["key"] not in done:
+                res.review.append(f"repayment {row['day']} {row['customer']} N{row['amount']} ({row['tender']}): "
+                                  + (row["reason"] or f"planned, not posted ({rp.MODE_ENV}=post to post)"))
+        for e in s["capture_errors"]:
+            res.review.append(f"repayment capture: {e}")
+        failed = [x for x in r["posted"] if x["status"] == rp.FAILED]
+        res.status = FAILED if failed else REVIEW if res.review else OK
+        if not rows:
+            res.detail = "no account payments in EPOS"
+
     def step_stock_follow(self, res: StepResult) -> None:
         """EPOS Stock Take / Wastage adjustments -> QBO InventoryAdjustments (stock_follow, in-process)."""
         from code_scripts.akponora_ops import stock_follow as sf
@@ -405,15 +520,34 @@ class DailyRun:
         if not movements.exists():
             res.status, res.detail = SKIPPED, "no stock-movement capture in this run"
             return
+        end = datetime.now(TZ).date()
+        # events in this run's capture window post automatically (a missed night's catch-up included)
+        auto_from = getattr(self, "movement_from", None) or max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
+        bills_dir = self.step_dir("bills")
+        if "bills" not in self.only:
+            # A stock-only recovery must still check current deliveries. Refresh PO evidence
+            # through today's date in PLAN mode; no bill/vendor/payment write is authorized here.
+            bills_dir = self.step_dir("stock_receipts")
+            rc = self.run_step("stock_receipts", [self.python, "-m", "code_scripts.akponora_ops.bills_sync", "plan",
+                               "--from", auto_from, "--to", end.isoformat(), "--out", str(bills_dir), "--no-slack"], bills_dir)
+            coverage = read_json(bills_dir / "evidence" / "capture_metrics.json", {}) or {}
+            if rc or coverage.get("missing_details") != 0:
+                res.status, res.exit_code = FAILED, rc
+                res.exit_code = rc or 2
+                res.detail = "stock-only recovery needs complete fresh delivery evidence; no stock adjustment allowed"
+                return
         write = None
         if sf.settings(self.base_env)["post"] and not self.dry_run and sf.catchup_done():
             write = self.stock_follow_write_client or QBOClient.for_company_a(allow_writes=True)
-        r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run)
+        r = sf.nightly(movements, Path(res.out), write_client=write, env=self.base_env, dry_run=self.dry_run,
+                       bills_dir=bills_dir, auto_from_date=auto_from)
         res.counts = r
         posted = [x for x in r.get("posted") or [] if x["status"] == "POSTED"]
         failed = [x for x in r.get("posted") or [] if x["status"] == "FAILED"]
         if r.get("waiting_approval"):
             res.review.append(f"{r['waiting_approval']} large stock adjustment(s) over the limit wait for approval")
+        if r.get("not_automatic"):
+            res.review.append(f"{r['not_automatic']} stock change(s) need product, delivery or reason review")
         for w in r.get("warnings") or []:
             res.review.append(f"stock adjustment check: {w}")
         res.detail = r.get("note") or f"{len(posted)} adjustment(s) posted"
@@ -432,7 +566,9 @@ class DailyRun:
         write = None
         if s["post"] and not self.dry_run:
             write = self.payments_write_client or QBOClient.for_company_a(allow_writes=True)
-        r = ps.run(client=client, write_client=write, env=self.base_env, dry_run=self.dry_run, out=Path(res.out))
+        shared = getattr(self, "repayment_source", None)
+        r = ps.run(client=client, write_client=write, sheet=shared["sheet"] if shared else None,
+                   env=self.base_env, dry_run=self.dry_run, out=Path(res.out))
         res.counts = {"post": r["post"], "credit": r["credit"], "bills": r["bills"],
                       "open_credit": r.get("open_credit"), "open_bills": r.get("open_bills")}
         for kind, rows in (("credit payment", r["credit"]), ("bill payment", r["bills"])):
@@ -495,11 +631,27 @@ class DailyRun:
         out = self.step_dir("movements")
         # Sales normally posts yesterday; staff stock additions must include today.
         end = datetime.now(ZoneInfo("Africa/Lagos")).date()
-        start = max(date(2026, 10, 1), end - timedelta(days=2)).isoformat()
-        rc = self.run_step("movements", [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
+        # Since the last clean capture (owner, 26 Oct 2026): completed EPOS stock takes and adjustments are view-only
+        # (checked in the back office), so there is nothing older to re-read and no weekly wide audit. The last
+        # captured day is read again (one day overlap; events are de-duplicated by id). Missed nights catch up.
+        start_day = movement_start(end)
+        start = start_day.isoformat()
+        self.movement_from = start
+        command = [self.python, "-m", "code_scripts.akponora_ops.stock_movements",
             "--capture-live", "--captures", str(out / "captures"), "--catalogue", str(catalogue),
-            "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)], out)
+            "--mapping", str(mapping), "--from-date", start, "--through-date", end.isoformat(), "--out", str(out)]
+        if (end - start_day).days >= 7 or self.stock_audit_resume:
+            command.append("--weekly-audit")  # a long catch-up is split into <=7-day sections
+        if self.stock_audit_resume:
+            # A recovery may cross midnight; retain the original audit's start, extend its
+            # end to today, and freshly collect every section overlapping recent stock.
+            prior = read_json(Path(self.stock_audit_resume) / "audit_index.json", {})
+            command[command.index("--from-date") + 1] = prior.get("from_date", "")
+            command.extend(["--resume-audit", str(self.stock_audit_resume)])
+        rc = self.run_step("movements", command, out)
         report = read_json(out / "summary.json", {}) or {}
+        if report and not report.get("errors") and not rc and not self.dry_run and not self.stock_audit_resume:
+            save_movement_cursor(end)
         events = report.get("events") or []
         res.counts["movement_events"] = len(events)
         res.counts["movement_capture_errors"] = len(report.get("errors") or [])
@@ -531,6 +683,19 @@ class DailyRun:
             from code_scripts.scripts.akponora_cutover.w7_create_items import QBOClient
 
             client = QBOClient.for_company_a(allow_writes=False)
+        # Read the repayment input once for cross-process validation. A failed check must
+        # prevent banking a possibly duplicated repayment as sales overage.
+        from code_scripts.akponora_ops import payments_sheet as ps
+        from code_scripts.akponora_ops.money_integrity import repayment_days
+        pay_settings = ps.settings(self.base_env)
+        if pay_settings["sheet_id"]:
+            pay_sheet = ps.GoogleSheet(pay_settings["sheet_id"], ufd.key_path(s))
+            rows = pay_sheet.read(ps.CREDIT_PAYMENTS, 11)
+            ps.headers_ok(rows, ps.CREDIT_PAY_COLS, ps.CREDIT_PAYMENTS)
+            s["repayments_by_day"] = repayment_days(rows, parse_day=ps.parse_day, parse_money=ps.money)
+            s["_repayment_reader"] = lambda: repayment_days(pay_sheet.read(ps.CREDIT_PAYMENTS, 11),
+                                                             parse_day=ps.parse_day, parse_money=ps.money)
+            self.repayment_source = {"sheet": pay_sheet, "rows": rows}
         source = self.uf_sheet or ufd.sheet_source(s)
         accounts = ufd.load_accounts(ufd.accounts_path(s))
         r = ufd.run_scheduled(Path(res.out), business_day=self.date, client=client, source=source, s=s,
@@ -616,6 +781,21 @@ class DailyRun:
 
     def finish(self) -> dict:
         code = self.overall_exit()
+        # Stock-changing follow-up runs after the first snapshot. Refresh the comparison only
+        # when it actually posted; expose a separate result without repeating movement capture.
+        follow = next((r for r in self.results if r.name == "stock_follow"), None)
+        if follow and (follow.status == FAILED or any(x.get("status") == "POSTED" for x in follow.counts.get("posted") or [])):
+            final = StepResult(name="final_stock", started_at=_now_utc(), out=str(self.step_dir("final_stock")))
+            try:
+                rc = self.run_step("final_stock", [self.python, "-m", "code_scripts.akponora_ops.stock_snapshot", "run",
+                                                   "--out", final.out], Path(final.out))
+                final.status, final.exit_code = (OK if rc == 0 else FAILED), rc
+                final.detail = "fresh EPOS/QBO comparison after stock adjustments; source cutoffs remain explicit"
+            except Exception as exc:
+                final.status, final.detail = FAILED, f"final stock verification failed: {type(exc).__name__}: {exc}"
+            final.finished_at = _now_utc()
+            self.results.append(final)
+            code = self.overall_exit()
         summary = {"tool": TOOL, "company": COMPANY, "business_date": self.date, "dry_run": self.dry_run,
                    "exit_code": code, "status": {0: "clean", 2: "failed", 3: "review"}[code],
                    "run_dir": str(self.run_dir), "started_at": self.started_at, "finished_at": _now_utc(),
@@ -625,8 +805,28 @@ class DailyRun:
                    "links": self.links(),
                    "steps": [asdict(r) for r in self.results],
                    "waiting_for_review": [line for r in self.results for line in r.review]}
+        summary["completion"] = {0: "finished cleanly", 2: "stopped with failures", 3: "finished with review"}[code]
+        summary["exception_owner"] = "OIAT / owner"
+        from code_scripts.paths import STATE_ROOT
+        from code_scripts.akponora_ops.money_integrity import evidence_report, review_register
+        try:
+            summary["money_evidence"] = evidence_report(STATE_ROOT, self.date)
+            summary["review_register"] = review_register(STATE_ROOT)
+        except Exception as exc:
+            summary["operational_review"] = f"evidence register unavailable: {type(exc).__name__}"
         dump_json(self.run_dir / "summary.json", summary)
         dump_json(self.day_dir / "summary.json", summary)
+        if not self.dry_run:
+            from code_scripts.akponora_ops.ops_backup import run_configured
+            try:
+                summary["recovery"] = run_configured(STATE_ROOT)
+            except Exception as exc:
+                summary["recovery"] = {"status": "failed", "reason": type(exc).__name__, "owner": "OIAT"}
+                summary["waiting_for_review"].append("Recovery copy failed; OIAT must check backup storage and restore evidence")
+                if summary["exit_code"] == EXIT_OK:
+                    summary.update(exit_code=EXIT_REVIEW, status="review", completion="finished with review")
+            dump_json(self.run_dir / "summary.json", summary)
+            dump_json(self.day_dir / "summary.json", summary)
         if self.send_slack:
             try:
                 self.slack(closing_text(summary))
@@ -752,7 +952,7 @@ def technical_text(summary: dict) -> str:
 # ---------------------------------------------------------------- the Slack messages (plain English)
 STEP_LABEL = {"catalogue": "Products", "bills": "Bills", "sales": "Sales", "credit": "Credit sales", "guard": "Item check",
               "stock": "Stock", "uf": "Banking", "payments": "Payments sheet",
-              "stock_follow": "Stock adjustments"}
+              "stock_follow": "Stock adjustments", "repayments": "Credit repayments"}
 SHEET_URL = "https://docs.google.com/spreadsheets/d/{}"
 
 
@@ -947,7 +1147,8 @@ def _trend(now: int, before) -> str:
 # message grouped by who has to act. Plain words, no PO numbers or ids; details stay in the portal.
 GREEN, YELLOW, RED = ":large_green_circle:", ":large_yellow_circle:", ":red_circle:"
 STEP_WORD = {"catalogue": "products", "bills": "bills", "sales": "sales", "credit": "credit sales", "guard": "item check",
-             "stock": "stock check", "stock_follow": "stock counts", "uf": "banking", "payments": "payments"}
+             "stock": "stock check", "stock_follow": "stock counts", "uf": "banking", "payments": "payments",
+             "repayments": "credit repayments"}
 
 
 def _needs(n: int) -> str:
@@ -1450,6 +1651,7 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
     ap.add_argument("--date", help="business date YYYY-MM-DD (default: last closed Lagos business day)")
     ap.add_argument("--dry-run", action="store_true", help="write nothing to QBO; no Slack unless --slack")
     ap.add_argument("--only", type=parse_only, help=f"comma-separated subset of {','.join(STEPS)}")
+    ap.add_argument("--stock-audit-resume", type=Path, help="resume a recent interrupted historical audit; only stock,stock_follow")
     ap.add_argument("--slack", action="store_true", help="send the Slack summary on a dry run too")
     ap.add_argument("--no-slack", action="store_true", help="never send the Slack summary")
     a = ap.parse_args(argv)
@@ -1470,11 +1672,18 @@ def main(argv=None, *, runner: Callable = run_command, slack: Callable | None = 
             except Exception:  # noqa: BLE001
                 pass
         return EXIT_FAILED
+    from code_scripts import epos_session
+
+    # one EPOS login for the whole run, shared with the step processes; removed when the run ends
+    os.environ[epos_session.ENV] = "1"
     try:
         run = DailyRun(day, dry_run=a.dry_run, only=a.only, runner=runner, slack=slack, send_slack=send,
-                       uf_client=uf_client, uf_write_client=uf_write_client, uf_sheet=uf_sheet)
+                       uf_client=uf_client, uf_write_client=uf_write_client, uf_sheet=uf_sheet,
+                       stock_audit_resume=a.stock_audit_resume)
         summary = run.execute()
     finally:
+        epos_session.clear(COMPANY)
+        os.environ.pop(epos_session.ENV, None)
         lock.release()
     print(technical_text(summary))
     return summary["exit_code"]

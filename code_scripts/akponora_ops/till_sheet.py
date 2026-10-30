@@ -276,6 +276,20 @@ def find_day(source, day: str) -> tuple[dict | None, str, str]:
     return matches[0], "", sha
 
 
+def day_fingerprint(day: dict) -> str:
+    """Financial day contents, independent of edits to unrelated days in the month tab."""
+    return rows_sha256([[k, day.get(k)] for k in ("date", "boxes", "actual", "system", "excess", "problems")])
+
+
+def fresh_day(source, day: str):
+    tab = tab_name(day)
+    if isinstance(source, XlsxSheetSource):
+        source = XlsxSheetSource(source.path)
+    elif hasattr(source, "_cache"):
+        source._cache.pop(tab, None)
+    return find_day(source, day)
+
+
 # ---------------------------------------------------------------- completeness (shared with uf_deposits)
 MISSING, INCOMPLETE, COMPLETE = "missing", "incomplete", "complete"
 

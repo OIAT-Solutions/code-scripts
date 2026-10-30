@@ -92,7 +92,19 @@ def sha256_file(path: str | Path) -> str:
 
 
 def dump_json(path: str | Path, data) -> None:
-    Path(path).write_text(json.dumps(data, indent=1, default=str) + "\n", encoding="utf-8")
+    # Never leave a truncated financial completion record after a process interruption.
+    import tempfile
+    path = Path(path)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=1, default=str) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
 
 def send_slack(message: str) -> None:

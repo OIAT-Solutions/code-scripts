@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -38,7 +39,10 @@ def normalise(captures, catalogue, mapping_rows, *, from_date, through_date):
         if not tid.isdigit():
             errors.append("Adjustment detail is missing a stable TransferID")
             continue
-        info = {r[0].strip(): r[1].strip() for r in capture.get("info", []) if len(r) == 2}
+        # The generated reference barcode has different HTML/rendered decoration. Identity is
+        # the validated TransferID in the URL; barcode display is not accounting evidence.
+        info = {r[0].strip(): r[1].strip() for r in capture.get("info", [])
+                if len(r) == 2 and r[0].strip() != "Ref. Number"}
         try:
             when = datetime.strptime(info["Date"], "%d/%m/%Y %H:%M:%S")
         except (KeyError, ValueError):
@@ -114,6 +118,23 @@ def normalise(captures, catalogue, mapping_rows, *, from_date, through_date):
 
 def read_capture(folder, *, require_both=True):
     """Check every listed row has a detail capture; no page/row cursor is persisted."""
+    index_path = folder / "audit_index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text())
+        expected = capture_windows(index["from_date"], index["through_date"])
+        chunks = index.get("chunks") or []
+        details, errors = [], list(index.get("errors") or [])
+        if [(c.get("from_date"), c.get("through_date")) for c in chunks] != expected:
+            errors.append("weekly audit index does not cover the requested date range")
+        for chunk in chunks:
+            relative = Path(chunk.get("path") or "")
+            if chunk.get("status") != "complete" or len(relative.parts) != 1 or relative.name in (".", ".."):
+                errors.append(f"audit {chunk.get('from_date')}..{chunk.get('through_date')} was not completed")
+                continue
+            captured, missing = read_capture(folder / relative, require_both=require_both)
+            details.extend(captured)
+            errors.extend(f"audit {chunk['from_date']}..{chunk['through_date']}: {e}" for e in missing)
+        return details, errors
     details, errors = [], []
     for source in ("stocktakes", "stockmovements"):
         listing, detail = folder / f"epos_{source}_list.json", folder / f"epos_{source}_details.jsonl"
@@ -141,22 +162,95 @@ def collect(folder, from_date, through_date, *, reader=None):
         reader = scrape_adjustments
     raw = folder / datetime.now(timezone.utc).strftime("capture_%Y%m%dT%H%M%S_%fZ")
     raw.mkdir(parents=True, exist_ok=False)
-    reader(raw, from_date, "both", COMPANY)
+    reader(raw, from_date, "both", COMPANY, through_date=through_date)
     return raw
+
+
+def capture_windows(from_date, through_date):
+    """Exact, disjoint, inclusive windows; the low-level seven-day limit stays in force."""
+    start, end = date.fromisoformat(from_date), date.fromisoformat(through_date)
+    if start < date(2026, 10, 1) or end < start:
+        raise ValueError("Choose an October-or-later capture window")
+    windows = []
+    while start <= end:
+        stop = min(end, start + timedelta(days=6))
+        windows.append((start.isoformat(), stop.isoformat()))
+        start = stop + timedelta(days=1)
+    return windows
+
+
+def collect_audit(folder, from_date, through_date, *, reader=None, resume_from=None):
+    """Read wider history in bounded chunks; partial audits can never look complete."""
+    windows = capture_windows(from_date, through_date)
+    root = folder / datetime.now(timezone.utc).strftime("audit_%Y%m%dT%H%M%S_%fZ")
+    root.mkdir(parents=True, exist_ok=False)
+    index = {"version": 1, "from_date": from_date, "through_date": through_date, "errors": [],
+             "chunks": [{"from_date": first, "through_date": last, "status": "pending"} for first, last in windows]}
+    if resume_from is not None:
+        # Explicit recovery of one interrupted observation, never a permanent detail cache.
+        # Recent stock is ALWAYS re-read. Only complete historical sections less than two
+        # hours old may be copied, preserving their original files and observation times.
+        source = Path(resume_from).resolve()
+        source_index = source / "audit_index.json"
+        age = datetime.now(timezone.utc).timestamp() - source_index.stat().st_mtime
+        prior = json.loads(source_index.read_text())
+        if (not 0 <= age <= 7200 or prior.get("version") != 1 or prior.get("from_date") != from_date
+                or prior.get("through_date", "") > through_date):
+            raise ValueError("Resume requires the same recent interrupted stock audit")
+        expected_prior = capture_windows(prior["from_date"], prior["through_date"])
+        if [(c.get("from_date"), c.get("through_date")) for c in prior.get("chunks", [])] != expected_prior:
+            raise ValueError("Interrupted audit has invalid date coverage")
+        cutoff = date.fromisoformat(through_date) - timedelta(days=2)
+        for chunk in index["chunks"]:
+            previous = next((c for c in prior["chunks"] if c.get("from_date") == chunk["from_date"]
+                             and c.get("through_date") == chunk["through_date"] and c.get("status") == "complete"), None)
+            if previous is None or date.fromisoformat(chunk["through_date"]) >= cutoff:
+                continue
+            child = (source / previous.get("path", "")).resolve()
+            if child.parent != source or not child.name.startswith("capture_") or read_capture(child)[1]:
+                raise ValueError("Interrupted stock section is incomplete or unsafe")
+            observed = child / "capture_metrics.json"
+            if not observed.exists() or not 0 <= datetime.now(timezone.utc).timestamp() - observed.stat().st_mtime <= 7200:
+                raise ValueError("Interrupted stock section is too old to resume")
+            if json.loads(observed.read_text()).get("window") != [chunk["from_date"], chunk["through_date"]]:
+                raise ValueError("Interrupted stock section has conflicting date evidence")
+            shutil.copytree(child, root / child.name)
+            chunk.update(path=child.name, status="complete", resumed_observation=True)
+        index["resumed_from"] = str(source)
+        index["resumed_index_sha256"] = digest(prior)
+    dump_json(root / "audit_index.json", index)
+    for chunk in index["chunks"]:
+        if chunk["status"] == "complete":
+            continue
+        try:
+            path = collect(root, chunk["from_date"], chunk["through_date"], reader=reader)
+            chunk.update(path=path.name, status="complete")
+        except Exception as exc:
+            chunk["status"] = "failed"
+            index["errors"].append(f"audit capture failed: {type(exc).__name__}: {exc}")
+            dump_json(root / "audit_index.json", index)
+            break
+        dump_json(root / "audit_index.json", index)
+    return root
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--captures", type=Path, required=True)
     ap.add_argument("--capture-live", action="store_true", help="explicitly run the existing VIEW-ONLY EPOS reader into a fresh capture directory")
+    ap.add_argument("--weekly-audit", action="store_true", help="collect a wider range as complete, disjoint seven-day sections")
+    ap.add_argument("--resume-audit", type=Path, help="explicitly resume a recent interrupted audit; recent stock is always re-read")
     ap.add_argument("--catalogue", type=Path, required=True)
     ap.add_argument("--mapping", type=Path, required=True)
     ap.add_argument("--from-date", required=True)
     ap.add_argument("--through-date", required=True)
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args(argv)
+    if a.resume_audit and not (a.capture_live and a.weekly_audit):
+        ap.error("--resume-audit requires --capture-live --weekly-audit")
     if a.capture_live:
-        a.captures = collect(a.captures, a.from_date, a.through_date)
+        a.captures = (collect_audit(a.captures, a.from_date, a.through_date, resume_from=a.resume_audit)
+                      if a.weekly_audit else collect(a.captures, a.from_date, a.through_date))
     captures, capture_errors = read_capture(a.captures)
     result = normalise(captures, load_catalogue_file(a.catalogue), read_csv(a.mapping),
         from_date=a.from_date, through_date=a.through_date)

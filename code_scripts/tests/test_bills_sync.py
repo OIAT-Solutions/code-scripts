@@ -280,11 +280,23 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(s["payload_count"], 1)
 
     def test_existing_docnumber_skips(self):
-        fake = FakeQBO(bills=[{"Id": "77001", "DocNumber": "EPOS-PO-3970", "TxnDate": "2026-10-02", "TotalAmt": 25800.0,
-                               "VendorRef": {"value": "10"}, "Line": []}])
+        _, _, planned, _ = self.f.plan([order(3970, [COKE])])
+        fake = FakeQBO(bills=[{**planned["3970"]["payload"], "Id": "77001", "TotalAmt": 25800.0, "Balance": 0}])
         _, _, e, _ = self.f.plan([order(3970, [COKE])], fake)
         self.assertEqual(e["3970"]["status"], "SKIP")
         self.assertIn("77001", e["3970"]["reasons"][0])
+
+    def test_existing_number_and_total_with_wrong_vendor_or_lines_is_held(self):
+        _, _, planned, _ = self.f.plan([order(3970, [COKE])])
+        for changed in ("vendor", "quantity"):
+            bill = json.loads(json.dumps(planned["3970"]["payload"]))
+            bill.update(Id="77001", TotalAmt=25800.0, Balance=0)
+            if changed == "vendor":
+                bill["VendorRef"]["value"] = "11"
+            else:
+                bill["Line"][0]["ItemBasedExpenseLineDetail"]["Qty"] = 1
+            _, _, entries, _ = self.f.plan([order(3970, [COKE])], FakeQBO(bills=[bill]))
+            self.assertEqual(entries["3970"]["status"], "HOLD")
 
     def test_manual_near_duplicate_holds(self):
         fake = FakeQBO(bills=[{"Id": "76999", "DocNumber": "", "TxnDate": "2026-09-30", "TotalAmt": 25700.0,

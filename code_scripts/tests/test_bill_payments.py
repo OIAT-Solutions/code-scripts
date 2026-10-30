@@ -23,7 +23,8 @@ class FakeQBO:
     def query_all(self, sql, entity):
         if entity == "Account":
             return [{"Id": "1150040002", "Name": "MONIEPOINT 4686987227"}, {"Id": "1150040001", "Name": "MONIEPOINT 4000700275"},
-                    {"Id": "1150040041", "Name": "MONIEPOINT 4000850527"}, {"Id": "29", "Name": "Petty Cash"}]
+                    {"Id": "1150040041", "Name": "MONIEPOINT 4000850527"}, {"Id": "1150040040", "Name": "MONIEPOINT 4000850479"},
+                    {"Id": "29", "Name": "Petty Cash"}]
         assert entity == "Bill" and "TxnDate >= '2026-10-01'" in sql
         return [dict(b) for b in self.bills.values() if b["TxnDate"] >= "2026-10-01"]
 
@@ -84,6 +85,40 @@ class CashPaymentTests(unittest.TestCase):
                  "SUPPLIER: X": ("", "")}
         for note, want in cases.items():
             self.assertEqual(bs.payment_detail(note), want, note)
+
+    def test_transfer_resolves_the_moniepoint_store_number_through_the_till_mapping(self):
+        # Owner 29 Oct 2026: staff write the store account number they know, not the QBO / statement number.
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            mapping = Path(tmp) / "till_accounts.csv"
+            mapping.write_text(
+                "Till sheet line,Terminal / TID,QBO account number,QBO account Id,Kind,Active,Note\n"
+                "CASH (System 1 + System 2),-,100100,29,cash,yes,Physical cash\n"
+                "MONIE POINT POS 1,5024249823,100207,1150040041,card,yes,Moniepoint 4000850527\n"
+                "MONIE POINT POS 4,5015892841,100201,1150040001,card,yes,Moniepoint 4000700275\n"
+                "MONIE POINT POS 5 / TRANSFER,5688464974,100202,1150040002,transfer,yes,Moniepoint 4686987227\n"
+                "MONIE POINT POS 3,5024245533,100206,1150040040,card,yes,Moniepoint 4000850479\n"
+                "MONIE POINT OLD,5099999999,100299,1150049999,card,yes,points at an inactive QBO account\n")
+            env = {"OIAT_COMPANY_A_TILL_ACCOUNTS_FILE": str(mapping)}
+            fake = FakeQBO([bill(20, hint="TRANSFER PAID from 5688464974"),  # store number -> 100202
+                            bill(21, hint="TRANSFER PAID from 5015892841"),  # store number -> 100201
+                            bill(22, hint="TRANSFER PAID from 4686987227"),  # statement number still works
+                            bill(23, hint="TRANSFER PAID from 4974"),        # part of one store number
+                            bill(24, hint="TRANSFER PAID from 5024"),        # 5024249823 and 5024245533: ambiguous
+                            bill(25, hint="TRANSFER PAID from 5099999999"),  # mapped account is not active in QBO
+                            bill(26, hint="TRANSFER PAID from 1234567890")])  # unknown
+            res = bp.pay_cash_bills(fake, env=env)
+        self.assertEqual({r["doc"]: r["account"] for r in res["paid"]},
+                         {"EPOS-PO-20": "1150040002", "EPOS-PO-21": "1150040001",
+                          "EPOS-PO-22": "1150040002", "EPOS-PO-23": "1150040002"})
+
+    def test_store_number_and_name_pointing_at_different_accounts_is_left_open(self):
+        banks = [{"Id": "A", "Name": "MONIEPOINT 1111122222"}, {"Id": "B", "Name": "MONIEPOINT 3333344444"}]
+        b = bill(30, hint="TRANSFER PAID from 22222")
+        self.assertEqual(bp.pay_from(b, banks, {"9999922222": "B"}), "")  # store says B, a QBO name says A
+        self.assertEqual(bp.pay_from(b, banks, {}), "A")
+        self.assertEqual(bp.store_accounts("/no/such/till_accounts.csv"), {})  # unreadable -> QBO names only
 
     def test_caps_off_switch_dry_run_and_failure(self):
         fake = FakeQBO([bill(1), bill(2), bill(3, balance=2500000.0)])

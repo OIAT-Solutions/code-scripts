@@ -26,7 +26,8 @@ import csv
 import json
 import os
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -35,6 +36,7 @@ import pandas as pd
 from code_scripts import credit_sales
 from code_scripts.akponora_ops.common import COMPANY, REALM, dump_json
 from code_scripts.scripts.akponora_cutover.w7_create_items import sha256_text
+from code_scripts.akponora_ops.work_state import WorkState, digest
 
 FROM_DAY = "2026-10-05"  # the Credit tender was switched on in EPOS on 5 Oct 2026
 MODE_ENV = "OIAT_COMPANY_A_CREDIT_INVOICES"
@@ -175,16 +177,75 @@ def requestid(doc: str) -> str:
 
 
 # ---------------------------------------------------------------- the step
+def done_path(state_root: Path | None = None) -> Path:
+    return mapping_path(state_root).parent / "credit_days_done.json"
+
+
+def done_days(state_root: Path | None = None) -> dict:
+    try:
+        return json.loads(done_path(state_root).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def days_to_do(business_day: str, state_root: Path | None = None) -> list[str]:
+    """Credit-sale days not yet finished. A day is finished once every invoice for it is verified in QuickBooks
+    (owner, 26 Oct 2026: credit sales are one and done; repayments come from the sheet/EPOS, not a re-check)."""
     start, end = date.fromisoformat(FROM_DAY), date.fromisoformat(business_day)
+    finished = done_days(state_root)
     out = []
     d = start
     while d <= end:
+        if d.isoformat() in finished:
+            d += timedelta(days=1)
+            continue
         if (credit_sales.day_dir(d.isoformat(), state_root) / "credit_raw.csv").exists() or \
                 (credit_sales.day_dir(d.isoformat(), state_root) / "mixed_raw.csv").exists():
             out.append(d.isoformat())
         d += timedelta(days=1)
     return out
+
+
+def read_existing_invoices(client, docs) -> dict[str, list[dict]]:
+    """Fresh bounded reads, including complete lines/customer evidence for completed work."""
+    docs = sorted(set(docs))
+    found = {d: [] for d in docs}
+    for start in range(0, len(docs), 20):
+        chunk = docs[start:start + 20]
+        quoted = ",".join("'" + d.replace("'", "\\'") + "'" for d in chunk)
+        for inv in client.query_all(f"select * from Invoice where DocNumber in ({quoted})", "Invoice"):
+            if inv.get("DocNumber") not in chunk or not inv.get("Id"):
+                raise ValueError("unexpected or incomplete invoice query result")
+            found[inv["DocNumber"]].append(inv)
+    return found
+
+
+def line_signature(lines) -> list:
+    out = []
+    for line in lines or []:
+        detail = line.get("SalesItemLineDetail")
+        if detail is None:
+            continue
+        out.append((str((detail.get("ItemRef") or {}).get("value") or ""),
+                    str(Decimal(str(detail.get("Qty", 0))).normalize()), money(line.get("Amount")),
+                    money(detail.get("UnitPrice")), str((detail.get("TaxCodeRef") or {}).get("value") or ""),
+                    money(detail.get("TaxInclusiveAmt"))))
+    return sorted(out)
+
+
+def verify_invoice(matches, *, day, customer_id, lines, gross):
+    if len(matches) != 1:
+        raise ValueError(f"expected one invoice, found {len(matches)}")
+    inv = matches[0]
+    if abs(money(inv.get("TotalAmt")) - gross) > Decimal("1"):
+        raise ValueError("existing invoice total differs from EPOS credit sales")
+    if str(inv.get("TxnDate") or "") != day:
+        raise ValueError("existing invoice date differs from source date")
+    if str((inv.get("CustomerRef") or {}).get("value") or "") != str(customer_id):
+        raise ValueError("existing invoice customer differs from the approved customer")
+    if line_signature(inv.get("Line")) != line_signature(lines):
+        raise ValueError("existing invoice item quantities, amounts or tax differ from source")
+    return inv
 
 
 def run(out: Path, *, business_day: str, client, write_client=None, dry_run: bool = False, env=None,
@@ -208,6 +269,23 @@ def run(out: Path, *, business_day: str, client, write_client=None, dry_run: boo
     mpath = mapping_path(state_root)
     mapping = load_mapping(mpath)
     limit = cap(env)
+    work = WorkState(mpath.parent / "work.sqlite3")
+    source_frames, docs = {}, []
+    mapping_file = getattr(config, "product_conversion_file", None)
+    mapping_sha = sha256_text(Path(mapping_file).read_text()) if mapping_file and Path(mapping_file).exists() else ""
+    for day in days:
+        raw_path = credit_sales.day_dir(day, state_root) / "credit_raw.csv"
+        if not raw_path.exists():
+            continue
+        frame = pd.read_csv(raw_path, dtype=str, keep_default_na=False)
+        frame["_key"] = [customer_key(r) for r in frame.to_dict("records")]
+        source_frames[day] = frame
+        for key in frame["_key"].unique():
+            docs.append(doc_number(day, key))
+            if not key.startswith(("NOID-", GOLDPLATES_QBO)):
+                docs.append(doc_number(day, key + ".0"))
+    existing_by_doc = read_existing_invoices(client, docs)
+    res["reused_prepared"] = 0
     for day in days:
         folder = credit_sales.day_dir(day, state_root)
         mixed = folder / "mixed_raw.csv"
@@ -216,31 +294,40 @@ def run(out: Path, *, business_day: str, client, write_client=None, dry_run: boo
             res["mixed"].append({"day": day, "rows": len(m), "total": str(money(
                 pd.to_numeric(m["TOTAL Sales"], errors="coerce").fillna(0).sum())),
                 "customers": sorted({n.strip() for n in m.get("Customer Full Name", []) if n.strip()})})
-        raw_path = folder / "credit_raw.csv"
-        if not raw_path.exists():
+        raw = source_frames.get(day)
+        if raw is None:
             continue
-        raw = pd.read_csv(raw_path, dtype=str, keep_default_na=False)
-        raw["_key"] = [customer_key(r) for r in raw.to_dict("records")]
         for key, rows in raw.groupby("_key", sort=True):
             names = sorted({n.strip() for n in rows["Customer Full Name"] if n.strip()})
             doc = doc_number(day, key)
             inv = {"day": day, "doc": doc, "customer_key": key, "epos_names": names, "status": PLANNED,
                    "sales": len(set(rows["Date/Time"])), "times": sorted({t[-8:-3] for t in rows["Date/Time"]})}
             try:
-                existing = client.query_all(f"select Id, TotalAmt from Invoice where DocNumber = '{doc}'", "Invoice")
-                if not existing and not key.startswith(("NOID-", GOLDPLATES_QBO)):  # posted under the float id spelling
-                    existing = client.query_all(f"select Id, TotalAmt from Invoice where DocNumber = '{doc_number(day, key + '.0')}'",
-                                                "Invoice")
-                lines, gross = invoice_lines(rows.drop(columns=["_key"]), day, config, registry)
+                existing = list(existing_by_doc.get(doc, []))
+                if not key.startswith(("NOID-", GOLDPLATES_QBO)):
+                    existing += existing_by_doc.get(doc_number(day, key + ".0"), [])
+                source_sha = digest({"rows": rows.to_dict("records"), "mapping": mapping_sha,
+                                     "tax_rate": str(config.tax_rate), "tax_code": str(config.tax_code_id)})
+                saved = work.get("credit", doc)
+                if mapping_sha and saved and saved["source_sha"] == source_sha and saved["status"] == "verified":
+                    lines, gross = saved["evidence"]["lines"], money(saved["evidence"]["gross"])
+                    res["reused_prepared"] += 1
+                else:
+                    lines, gross = invoice_lines(rows.drop(columns=["_key"]), day, config, registry)
                 epos_total = money(pd.to_numeric(rows["TOTAL Sales"], errors="coerce").fillna(0).sum())
                 inv.update(total=str(gross), lines=len(lines))
                 if abs(gross - epos_total) > Decimal("1"):
                     raise ValueError(f"invoice total N{gross} differs from EPOS N{epos_total}")
+                cust = resolve_customer(key, names[0] if names else "", customers, mapping)
                 if existing:
-                    inv.update(status=EXISTS, invoice_id=str(existing[0]["Id"]))
+                    if not cust.get("id"):
+                        raise ValueError("existing invoice customer cannot be verified: " + str(cust.get("hold") or "unmapped"))
+                    verified = verify_invoice(existing, day=day, customer_id=cust["id"], lines=lines, gross=gross)
+                    inv.update(status=EXISTS, invoice_id=str(verified["Id"]))
+                    if not dry_run:
+                        work.put("credit", doc, source_sha, "verified", {"invoice_id": verified["Id"], "lines": lines, "gross": str(gross)})
                     res["invoices"].append(inv)
                     continue
-                cust = resolve_customer(key, names[0] if names else "", customers, mapping)
                 inv["customer"] = cust.get("name") or cust.get("create") or ""
                 if "hold" in cust:
                     inv.update(status=HELD, reason=cust["hold"])
@@ -269,16 +356,29 @@ def run(out: Path, *, business_day: str, client, write_client=None, dry_run: boo
                 note = (f"EPOS credit sales {day}: {', '.join(names)} ({inv['sales']} sale(s) at {', '.join(inv['times'])}) "
                         f"| {doc} | auto by daily_run credit")
                 payload = invoice_payload(day, doc, cust["id"], lines, gross, note, config)
+                work.put("credit", doc, source_sha, "sending", {"payload_sha": digest(payload), "lines": lines, "gross": str(gross)})
                 resp = write_client.post_json("/invoice", payload, requestid(doc))
-                live = client.query_all(f"select Id, TotalAmt from Invoice where DocNumber = '{doc}'", "Invoice")
-                if len(live) != 1 or abs(money(live[0].get("TotalAmt")) - gross) > Decimal("1"):
-                    raise ValueError(f"invoice not confirmed in QuickBooks (HTTP {getattr(resp, 'status_code', '?')}: "
-                                     f"{str(getattr(resp, 'text', ''))[:200]})")
-                inv.update(status=POSTED, invoice_id=str(live[0]["Id"]))
+                live = read_existing_invoices(client, [doc])[doc]
+                verified = verify_invoice(live, day=day, customer_id=cust["id"], lines=lines, gross=gross)
+                work.put("credit", doc, source_sha, "verified", {"invoice_id": verified["Id"], "lines": lines, "gross": str(gross)})
+                inv.update(status=POSTED, invoice_id=str(verified["Id"]))
                 res["invoices"].append(inv)
             except Exception as exc:  # noqa: BLE001 - one customer's problem never stops the others
                 inv.update(status=HELD, reason=f"{type(exc).__name__}: {exc}"[:300])
                 res["invoices"].append(inv)
                 res["failed"].append({"doc": doc, "reason": inv["reason"]})
+                if not dry_run:
+                    prior = work.get("credit", doc)
+                    work.put("credit", doc, prior["source_sha"] if prior else "", "review",
+                             {"reason": inv["reason"], "owner": "OIAT", "previous": prior["evidence"] if prior else {}})
+    if not dry_run:
+        finished = done_days(state_root)
+        for day in days:
+            day_invoices = [i for i in res["invoices"] if i["day"] == day]
+            if day_invoices and all(i["status"] in (EXISTS, POSTED) for i in day_invoices) or \
+                    (not day_invoices and day not in source_frames):  # a mixed-only day: reported once, nothing to post
+                finished[day] = {"at": datetime.now(ZoneInfo("Africa/Lagos")).isoformat(timespec="seconds"),
+                                 "invoices": [i.get("invoice_id") for i in day_invoices]}
+        dump_json(done_path(state_root), finished)
     dump_json(out / "credit_invoices.json", res)
     return res

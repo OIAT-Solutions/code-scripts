@@ -294,9 +294,20 @@ def receipts_from_po_capture(po_list_path, po_details_path, ids) -> dict[str, li
     return receipts_from_orders(orders, details, ids)
 
 
+def receipt_candidate(order: dict) -> bool:
+    """Cancelled with no received date/value cannot explain delivered stock.
+
+    Keep any contradictory/nonzero received evidence for review, regardless of the label.
+    """
+    return not (clean(order.get("StatusName")).casefold() in {"cancelled", "canceled"}
+                and not order.get("DateReceived")
+                and w7.D(order.get("TotalValueReceived"), Decimal(0)) == 0)
+
+
 def receipts_from_orders(orders: list[dict], details: dict, ids) -> dict[str, list[dict]]:
     """``details`` keyed by OrderRef (as text)."""
     ids = set(ids)
+    orders = [o for o in orders if receipt_candidate(o)]
     out = defaultdict(list)
     for o in orders:
         d = details.get(str(o.get("OrderRef")))
@@ -368,7 +379,7 @@ class LiveEpos:
 
         ev = self.out / "epos_pos"
         ev.mkdir(parents=True, exist_ok=True)
-        orders, details = capture_epos(ev, order_from=INV_START, order_to=business_today(), want=lambda o: True,
+        orders, details = capture_epos(ev, order_from=INV_START, order_to=business_today(), want=receipt_candidate,
                                        cacheable=received_order_cacheable, cache_path=state_dir(TOOL) / PO_CACHE,
                                        fallback_cache_paths=(state_dir("bills_sync") / PO_CACHE,))
         return receipts_from_orders(orders, details, ids)

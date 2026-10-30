@@ -1,11 +1,74 @@
 # Agent plan: Akponora (Company A) — 1 Oct 2026 Inventory go-live
 
+## Claude, 26 Oct 2026 — credit repayments from EPOS + review fixes (read this first)
+
+Built on top of Codex's `e425272`, same private branch `codex/nora-process-hardening` (owner: "you both should be
+on the same page"). Commits after `e425272`: credit repayments (`credit_repayments.py`, banking + payments-sheet
+integration, corrections for already-banked days) and five review fixes. Full notes:
+[`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) section "Claude — 26 October".
+Fast-forward to the latest branch head before editing; do not rewrite these commits. Keep it private (no public push).
+
+**Read EPOS once (owner, 26 Oct):** EPOS is never re-read for days already read. Products are fetched page by
+page directly; stock changes are read since the last clean capture (`stock_movements/cursor.json`, no Sunday wide
+audit — completed stock takes are view-only in EPOS); a credit-sale day whose invoices are all in QBO is finished
+(`credit_days_done.json`); credit repayments are read since the last good read (`credit_repayments/seen.json`).
+Whether a bill/invoice was paid comes from the Google Sheets, not EPOS.
+One EPOS login per daily run (`code_scripts/epos_session.py`, `OIAT_EPOS_SESSION_REUSE=1` set by daily_run only; cookies in `<state>/epos_session/company_a.json`, 0600, 30 min, deleted at run end). Empty stock takes (no item grid in the page) are accepted from the HTML read instead of a slow browser fallback.
+
+## Active branch work — 24 Oct 2026 whole-process hardening
+
+Read [`docs/NORA_PROCESS_HARDENING_20261024.md`](docs/NORA_PROCESS_HARDENING_20261024.md) first.
+Owner requests a single follow-up branch, production validation/run on that branch, and review before merge.
+Branch `codex/nora-process-hardening`; do not merge to master during implementation.
+Owner said keep today's 17:00 UTC run; it finished 17:19:53 UTC in 19m52s (prior PR #64).
+Private runtime repair `1b1b731` is rebuilt, validated and deployed to web/scheduler on this branch.
+508 core tests and 26 portal tests pass on Mac and isolated server image; 16 live runtime hashes/HTTP/single worker pass.
+Owner said KEEP THE REPAIR PRIVATE: do not push 3ffef33/1b1b731/75f8ce9/follow-up notes to public GitHub without later approval.
+Production received the exact private commit via SSH Git bundle. PR #65 does not include it; keep PR unmerged.
+25 Oct full run failed: Sunday requested 25 days but the collector accepts at most seven.
+Stock-only repair/recovery is authorized by owner chat on 25 Oct; keep PR #65 unmerged.
+Recovery job `dd6cf1b9-d1fd-41c8-9004-88942f45c907` hit the 20-minute read timeout; no stock adjustment ran.
+Its first three sections are complete; timeout scaling and explicit safe stock-only resume are now deployed.
+Resumed job f86bbdb8… was stopped at read-only PO lookup before stock posting; no adjustment ran.
+Final job `bc326c91-0eb2-4781-9bbc-3f6fa500d221` finished with review at 23:22:53 UTC in 7m54s; no failed steps.
+420 stock events: 373 already posted, 47 held, ZERO new adjustments. No recovery rerun is needed.
+All four audit sections/PO coverage are complete, zero missing; local encrypted restore verifies 2,642 files.
+This resumed historical sections: full fresh Sunday collector work is still ~24m28s; no full-run speed claim.
+Stock-only follow-up now requires explicit zero missing PO details. Browser row lookup is bulk, with exact PO identity checks.
+Freshly read recent stock; only complete historical observations under two hours old can resume. Preserve failed evidence.
+Sales and bills already posted: never replay the full financial day for this recovery.
+Encrypted local backup/isolated restore pass; offsite destination and separate key custody remain pending.
+Stock editability (26 Oct, Claude): completed stock takes are view-only in EPOS (details page: Back/Export/Print only), so a Received detail is reused from `stock_movements/received_details.jsonl` when its list row is unique and matches; everything else is read fresh.
+
+25 Oct Toronto supplier follow-up is authorized: create Moses Bapivavy, A+ Company and Kay Jay Zenith Limited;
+apply six owner-confirmed supplier aliases; continue demonstrated routine repeat purchases.
+Suppliers 343/344/345 are created and verified; all six links are installed. Deal Radical IDs 124/15
+are recorded as one reporting identity, preserving original bills/payment targets; no QBO merge.
+Private runtime release 75f8ce9 is deployed and verified: 523 core + 47 portal tests pass on Mac/server;
+18 runtime source hashes match both services. All 33 approved bills (N1,861,500) are posted and verified;
+all 33 are visible unpaid in the refreshed payment Sheet (136 open bill choices). Portal: 82 -> 40 cards.
+Encrypted local restore verifies 2,676 files. NO recovery rerun is needed. Do not replay these bills, sales,
+stock or payments. Four large bills and five supplier/unit/cost holds still need review; CWAY needs its seller.
+SSH builds use docker/code-update.Dockerfile to preserve the validated runtime dependencies.
+
+26 Oct owner screenshot confirms SEKI ABIMBOLA KOLAWOLE, active QBO vendor 221, for future Seki purchases.
+Production supplier mapping repaired SEKI ABIBOLA (missing 339 -> 221), added SEKI ABIMBOLA;
+both existing full-name aliases remain 221. Web/scheduler verify the same mapping. No financial writes.
+Owner then explicitly approved egg PO 4017 as a genuine frequent purchase: posted/verified unpaid
+Bill 81284, N336,000, vendor 221, source date 8 Oct. One-PO repeat_ok only; no supplier-wide bypass.
+Payment Sheet shows it unpaid (137 open bill choices), staff entries unchanged. Portal now 39 cards,
+eight bills; PO 4017 is cleared. Do not replay it. No BillPayment or InventoryAdjustment was posted.
+Private evidence: /data/ops/company_a/supplier_review/20261026/seki/applied.json and
+/data/ops/company_a/supplier_review/20261026/seki_bill_4017/final_acceptance.json.
+
 ## Deployed work — 24 Oct 2026 runtime efficiency
+
+Historical release: the active branch and no-merge instructions above take precedence.
 
 Read [`docs/NORA_RUNTIME_EFFICIENCY_20261024.md`](docs/NORA_RUNTIME_EFFICIENCY_20261024.md) before continuing this work.
 Implemented from master `7d3bf5b` on `codex/nora-run-efficiency`; PR #64 merged as `8632c76`.
-Mac and production checkouts are back on master; web/scheduler run the validated implementation.
-The first full scheduled run at 17:00 UTC is still pending: check the checkpoint before claiming total runtime gains.
+That release was validated on master before the follow-up branch above.
+Its first scheduled run completed in 19m52s with review and no failed steps; do not attribute that duration to the newer branch.
 Owner authorized implementation on the Mac and validation on the production host before the 17:00 UTC run;
 merge/return production to master only after validation. Preserve all existing financial approval gates.
 No EPOS API. Received POs are immutable; later deliveries use new POs (owner confirmed).

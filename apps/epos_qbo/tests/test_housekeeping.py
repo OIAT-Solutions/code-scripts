@@ -4,8 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from django.test import SimpleTestCase
@@ -24,14 +23,15 @@ class HousekeepingTests(SimpleTestCase):
         p = self.root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("x")
-        t = time.time() - days_old * 86400
+        # age from the test's own TODAY (noon), not the real clock: the fixed date drifted as time passed
+        t = datetime.combine(TODAY, datetime.min.time()).timestamp() + 12 * 3600 - days_old * 86400
         os.utime(p, (t, t))
         return p
 
     def test_keeps_a_month_of_working_files_and_three_months_of_evidence(self):
         old_day = self.make("code_scripts/Uploaded/2026-08-01/raw.csv")
         new_day = self.make("code_scripts/Uploaded/2026-09-20/raw.csv")
-        old_log = self.make("code_scripts/logs/pipeline_old.log", days_old=45)  # well past the 31-day cutoff at any hour
+        old_log = self.make("code_scripts/logs/pipeline_old.log", days_old=40)
         new_log = self.make("code_scripts/logs/runs/new.log", days_old=5)
         lock = self.make("code_scripts/logs/.oiat_global_run.lock", days_old=400)
         old_spill = self.make("code_scripts/uploads/spill_raw/Co/2026-08-01.csv", days_old=60)
